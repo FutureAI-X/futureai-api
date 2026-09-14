@@ -1,9 +1,16 @@
 package middleware
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/FutureAI/token-hub/common"
+	"github.com/gin-gonic/gin"
+)
 
 // SecurityHeaders 为所有响应添加基础安全响应头。
-// 服务本身不提供静态文件托管，因此这里以「收紧浏览器行为」为主。
+//
+// 缓存策略只对 API 生效：静态资源由 webui 包自行下发 Cache-Control
+// （Vite 产物带内容哈希，必须长缓存），两者正好相反。
+// 原先这里对所有响应无条件写 no-store，服务只发 API 时没问题，
+// 一旦开始托管静态文件就会把 JS/CSS 的缓存全部打掉。
 func SecurityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.Writer.Header()
@@ -16,7 +23,7 @@ func SecurityHeaders() gin.HandlerFunc {
 		// API 服务不需要任何浏览器特性
 		h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		// API 响应不应被缓存（可能包含账户数据）
-		if c.GetHeader("Cache-Control") == "" {
+		if common.IsAPIPath(c.Request.URL.Path) {
 			h.Set("Cache-Control", "no-store")
 		}
 

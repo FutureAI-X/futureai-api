@@ -118,21 +118,36 @@ SECRET_KEY=
 go mod tidy
 ```
 
-### 4. 运行后端
+### 4. 构建前端
+
+```bash
+cd web && npm install && npm run build && cd ..
+```
+
+> ⚠️ **这一步不能跳过。** 后端通过 `//go:embed all:web/dist` 把前端产物编进二进制，
+> 该目录不存在或为空时 `go build` 会**直接编译失败**（是编译期错误，不是运行时提示）。
+> 也就是说，在干净的 clone 上，任何编译根包的命令都必须先构建前端。
+
+### 5. 运行后端
 
 ```bash
 go run main.go
 ```
 
-### 5. 运行前端（可选）
+访问 http://localhost:3001 即可 —— 前端页面与 API 现在由同一个进程提供，
+不需要额外的 Nginx。
+
+### 6. 运行前端开发服务器（可选）
+
+改前端时用这个，有热更新：
 
 ```bash
 cd web
-npm install
 npm run dev
 ```
 
-前端开发服务器将在 http://localhost:5173 启动，并自动代理 API 请求到后端。
+开发服务器在 http://localhost:5173 启动，并自动代理 API 请求到后端。
+此时后端提供的页面是上次 `npm run build` 的产物，改前端不必重新编译后端。
 
 ### 环境变量
 
@@ -243,21 +258,35 @@ GET /health
 ## 技术栈
 
 - **后端**: Go + Gin
-- **前端**: React + TypeScript + Vite
+- **前端**: React + TypeScript + Vite（产物经 `go:embed` 编入后端二进制）
 - **数据库**: PostgreSQL
 - **缓存**: 待定
+- **部署**: Docker / Docker Compose
 
 ## 项目结构
 
 ```
 token-hub/
-├── main.go              # 主入口文件
+├── main.go              # 主入口文件（含 go:embed 前端产物）
+├── Dockerfile           # 多阶段构建：前端 → 后端 → 运行时
+├── Makefile             # 常用命令（注意 web 是 build/test 的前置）
+├── .dockerignore
+├── deploy/              # 部署编排，见 deploy/README.md
+│   ├── gateway/         # Nginx 容器网关（全机唯一占用 80/443）
+│   ├── token-hub/       # 应用 + PostgreSQL 的 compose
+│   ├── new-api/         # 接入网关的说明
+│   └── sub2api/         # 接入网关的说明
+├── webui/               # 内嵌前端静态文件的托管与安全头
+│   ├── webui.go
+│   └── webui_test.go
 ├── common/              # 公共工具
 │   ├── database.go      # 数据库类型定义
 │   ├── env.go           # 环境变量工具
 │   ├── log.go           # 日志工具
 │   ├── crypto.go        # 密码加密工具
-│   └── jwt.go           # JWT Token 工具
+│   ├── jwt.go           # JWT Token 工具
+│   ├── paths.go         # API 与前端路由的分界判断
+│   └── trusted_proxy.go # TRUSTED_PROXIES 解析
 ├── router/              # 路由配置
 │   └── router.go
 ├── controller/          # 控制器
@@ -321,14 +350,14 @@ token-hub/
 
 ### 反向代理
 
-项目根目录提供了可直接使用的 [nginx.conf](nginx.conf)，它同时负责：
+**前端静态文件由 Go 服务自己提供**（`web/dist` 通过 `go:embed` 编进二进制，
+见 [webui/](webui/)），Nginx 不再需要托管静态文件。它只负责 TLS 终止、
+按域名分流、gzip、以及登录接口的限流。
 
-- 托管前端静态文件（`web/dist`）—— Go 服务本身不提供静态文件服务
-- 将 `/api`、`/v1`、`/health` 反向代理到 Go 服务
-- TLS 终止、安全响应头、gzip、上传体积放宽、登录接口限流
+完整的部署编排见 [deploy/README.md](deploy/README.md)：同一台服务器上
+token-hub、new-api、sub2api 三个服务共用一个 Nginx 容器网关，各自独立 compose。
 
-配置文件顶部列有**部署前必读**的四项，其中最容易漏掉的是
-`TRUSTED_PROXIES` —— 漏配会导致所有用户被登录限流视为同一来源。
+网关配置的唯一来源是 [deploy/gateway/](deploy/gateway/)。
 
 ### 凭证传递方式
 
@@ -341,11 +370,22 @@ token-hub/
 ## 测试
 
 ```bash
-go test ./...          # 运行全部单元测试
+make test              # 运行全部单元测试
 ```
 
 覆盖范围包括密钥强度校验、加解密往返、SSRF 目标拦截、
-文件名清洗与 multipart 头注入防护、认证凭证提取、限流令牌桶。
+文件名清洗与 multipart 头注入防护、认证凭证提取、限流令牌桶、
+客户端 IP 还原、以及前端静态服务的 SPA 回退与缓存策略。
+
+> **为什么不是 `go test ./...`**：根包 `main` 内嵌 `web/dist`，
+> 没构建前端时它编译不过，而 `go test ./...` 会把根包一起纳入编译，
+> 于是整条命令失败。`make test` 显式排除了根包。
+>
+> 这不损失覆盖率 —— 根包里**没有**任何测试文件，所有测试都在子包中
+> （`common` / `webui` / `middleware` / `controller` / `model`）。
+> 需要测试的逻辑一律下沉到子包，不要让根包重新长出 `_test.go`。
+>
+> 同样的道理，`go build ./...` 和 `go vet ./...` 也需要先构建前端。
 
 ## 开发计划
 

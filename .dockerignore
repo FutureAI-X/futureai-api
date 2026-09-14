@@ -1,0 +1,30 @@
+# 构建上下文排除项。原则：镜像里只放源码与构建产物，
+# 绝不把宿主机上的密钥、依赖目录、过期产物带进去。
+
+# 版本控制与 CI
+.git
+.gitignore
+.github
+
+# 环境变量文件。密钥绝不能进镜像层——即使后续删掉，
+# 镜像层里依然可以提取出来。
+.env
+.env.*
+!.env.example
+
+# 宿主机的前端产物。镜像里的 dist 由 Dockerfile 的 web 阶段重新构建，
+# 带进去的很可能是一个过期版本（本地 dist 常常落后于源码）。
+web/dist
+web/node_modules
+
+# 本机构建的二进制
+*.exe
+/token-hub
+/out
+
+# 部署编排与文档，运行时用不到
+deploy
+*.md
+
+# 首次启动时生成的初始密码文件
+root_initial_password.txt

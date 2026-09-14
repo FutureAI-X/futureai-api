@@ -1,0 +1,85 @@
+# Token Hub 应用 + 数据库
+#
+# 部署位置: /opt/stacks/token-hub/
+#
+# 前置（一次性，见 deploy/README.md）:
+#   docker network create --subnet 172.20.0.0/16 gateway-proxy
+#
+# 上线:
+#   cp .env.example .env && chmod 600 .env    # 填写密钥
+#   docker compose up -d
+#
+# 关键点：应用与数据库都不发布任何宿主机端口。
+# 应用只挂在共享网络 gateway-proxy 上，能被网关访问；
+# 数据库只挂在本项目的内部网络上，连网关都够不到。
+# 这顺带消除了「PostgreSQL 暴露到公网导致密码哈希与供应商密钥密文被直读」的风险。
+
+services:
+  token-hub:
+    image: token-hub:${TOKEN_HUB_TAG:-latest}
+    container_name: token-hub
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # ----------------------------------------------------------------------
+      # 下面几项刻意写在这里覆盖 .env —— 容器内的网络视图与宿主机不同，
+      # 照搬宿主机直跑时的值必定出错。
+      # ----------------------------------------------------------------------
+
+      # 必须监听所有网卡。绑 127.0.0.1 的话网关连不上它。
+      PORT: "3001"
+
+      # 容器内要用服务名 postgres，而不是 localhost。
+      SQL_DSN: >-
+        postgres://${POSTGRES_USER:-token_hub}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}@postgres:5432/${POSTGRES_DB:-token_hub}?sslmode=disable
+
+      # 网关容器在共享网络上的固定地址（见 deploy/gateway/docker-compose.yml）。
+      #
+      # ⚠️ 变量名刻意取成 GATEWAY_IP 而不是复用 TRUSTED_PROXIES：
+      #    compose 会用项目目录下的 .env 做插值，而那一份里的 TRUSTED_PROXIES
+      #    是宿主机直跑时的形态（127.0.0.1/32），照抄进来会让应用把网关 IP
+      #    当成唯一来源，登录限流会把全体用户视为同一人。
+      TRUSTED_PROXIES: ${GATEWAY_IP:-172.20.0.2}/32
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - internal   # 用它连数据库
+      - proxy      # 用它被网关访问
+
+  postgres:
+    image: postgres:15
+    container_name: token-hub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-token_hub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}
+      POSTGRES_DB: ${POSTGRES_DB:-token_hub}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      # 应用启动时会跑 AutoMigrate，数据库没就绪就启动会直接失败，
+      # 因此这里必须让 depends_on 真正等到可连接。
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-token_hub} -d ${POSTGRES_DB:-token_hub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      # 刻意不接 gateway-proxy：数据库不该出现在网关能到达的网段上。
+      - internal
+
+volumes:
+  pg_data:
+
+networks:
+  internal:
+  proxy:
+    external: true
+    name: gateway-proxy

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"log"
 	"os"
 	"strconv"
@@ -11,9 +12,25 @@ import (
 	"github.com/FutureAI/token-hub/middleware"
 	"github.com/FutureAI/token-hub/model"
 	"github.com/FutureAI/token-hub/router"
+	"github.com/FutureAI/token-hub/webui"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
+
+// webDist 内嵌前端构建产物，使一个二进制同时提供前端页面与 API。
+//
+// ⚠️ 该指令要求 web/dist 目录存在且非空，否则**编译失败**（不是运行时报错）。
+// 因此在干净的 clone 上必须先构建前端：
+//
+//	make web    # 等价于 cd web && npm ci && npm run build
+//
+// 这也意味着根包无法在未构建前端的树上编译，`go test ./...` 会连带失败——
+// 根包内因此不放任何测试，需要测试的逻辑一律下沉到子包，详见 Makefile。
+//
+// all: 前缀用于把以 . 或 _ 开头的文件也纳入，避免将来产物里出现这类文件时被静默漏掉。
+//
+//go:embed all:web/dist
+var webDist embed.FS
 
 func main() {
 	// 加载 .env 文件
@@ -50,7 +67,7 @@ func main() {
 	// gin 默认信任所有代理（0.0.0.0/0），导致 c.ClientIP() 无条件采信客户端自带的
 	// X-Forwarded-For，登录限流可被伪造 IP 绕过。因此默认不信任任何代理头，
 	// 仅在显式配置 TRUSTED_PROXIES 时才信任指定 CIDR。
-	trustedProxies := parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
+	trustedProxies := common.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
 	if err := server.SetTrustedProxies(trustedProxies); err != nil {
 		common.FatalLog("TRUSTED_PROXIES 配置无效: " + err.Error())
 	}
@@ -84,6 +101,12 @@ func main() {
 	// 设置路由
 	router.SetRouter(server)
 
+	// 挂载内嵌的前端。必须在 SetRouter 之后：webui 通过 NoRoute 接管
+	// 所有未匹配的路径，也就是「API 路由优先，剩下的才可能是前端页面」。
+	if err := webui.Register(server, webDist, "web/dist"); err != nil {
+		common.FatalLog("挂载前端静态资源失败: " + err.Error())
+	}
+
 	// 获取端口
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -100,21 +123,4 @@ func main() {
 	if err := server.Run(":" + port); err != nil {
 		common.FatalLog("failed to start server: " + err.Error())
 	}
-}
-
-// parseTrustedProxies 解析 TRUSTED_PROXIES（逗号分隔的 IP 或 CIDR）。
-// 返回空切片表示不信任任何代理头，此时 gin 使用 TCP 对端地址。
-func parseTrustedProxies(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return []string{}
-	}
-	parts := strings.Split(raw, ",")
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
 }

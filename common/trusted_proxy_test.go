@@ -1,4 +1,4 @@
-package main
+package common
 
 import (
 	"net/http/httptest"
@@ -7,13 +7,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// 本文件原先位于根包的 main_test.go。根包内嵌 web/dist 后无法在
+// 未构建前端的树上编译，导致这些测试永远不会运行，因此随
+// ParseTrustedProxies 一起挪进了 common 包。
+//
+// 下面几条断言覆盖的是本项目的关键安全边界：客户端 IP 的还原。
+
 // clientIPVia 构造一个最小 gin 引擎，返回它在给定配置与请求下解析出的客户端 IP。
 func clientIPVia(t *testing.T, trustedProxies string, remoteAddr string, xff string) string {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	engine := gin.New()
-	if err := engine.SetTrustedProxies(parseTrustedProxies(trustedProxies)); err != nil {
+	if err := engine.SetTrustedProxies(ParseTrustedProxies(trustedProxies)); err != nil {
 		t.Fatalf("SetTrustedProxies(%q) 失败: %v", trustedProxies, err)
 	}
 
@@ -77,6 +83,20 @@ func TestUntrustedSourceCannotSpoofEvenWhenProxiesConfigured(t *testing.T) {
 	}
 }
 
+// TestProxyNetworksAreNotTreatedAsPublicSource 容器网关部署时配置的固定网段，
+// 同理必须能从 XFF 还原真实 IP；而该网段之外的直连仍不可伪造。
+func TestProxyNetworksAreNotTreatedAsPublicSource(t *testing.T) {
+	got := clientIPVia(t, "172.20.0.2/32", "172.20.0.2:40000", "203.0.113.7")
+	if got != "203.0.113.7" {
+		t.Errorf("网关来源应还原真实 IP：got %q, want %q", got, "203.0.113.7")
+	}
+
+	got = clientIPVia(t, "172.20.0.2/32", "203.0.113.99:12345", "1.2.3.4")
+	if got != "203.0.113.99" {
+		t.Errorf("网段外来源不得采信 XFF：got %q, want %q", got, "203.0.113.99")
+	}
+}
+
 // TestParseTrustedProxies 校验环境变量解析
 func TestParseTrustedProxies(t *testing.T) {
 	cases := []struct {
@@ -92,14 +112,14 @@ func TestParseTrustedProxies(t *testing.T) {
 		{"127.0.0.1/32,,10.0.0.0/8,", []string{"127.0.0.1/32", "10.0.0.0/8"}},
 	}
 	for _, tc := range cases {
-		got := parseTrustedProxies(tc.in)
+		got := ParseTrustedProxies(tc.in)
 		if len(got) != len(tc.want) {
-			t.Errorf("parseTrustedProxies(%q) = %v, want %v", tc.in, got, tc.want)
+			t.Errorf("ParseTrustedProxies(%q) = %v, want %v", tc.in, got, tc.want)
 			continue
 		}
 		for i := range got {
 			if got[i] != tc.want[i] {
-				t.Errorf("parseTrustedProxies(%q)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
+				t.Errorf("ParseTrustedProxies(%q)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
 			}
 		}
 	}
@@ -111,8 +131,32 @@ func TestInvalidTrustedProxiesIsRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	for _, bad := range []string{"not-an-ip", "999.999.999.999", "10.0.0.0/99"} {
-		if err := engine.SetTrustedProxies(parseTrustedProxies(bad)); err == nil {
+		if err := engine.SetTrustedProxies(ParseTrustedProxies(bad)); err == nil {
 			t.Errorf("非法网段 %q 应被拒绝", bad)
+		}
+	}
+}
+
+// TestIsAPIPath 覆盖 API 与前端路由的分界，webui 的 404 行为依赖它。
+func TestIsAPIPath(t *testing.T) {
+	cases := map[string]bool{
+		"/health":            true,
+		"/api":               true,
+		"/api/auth/login":    true,
+		"/api/user/info":     true,
+		"/v1":                true,
+		"/v1/models":         true,
+		"/v1/uploads/images": true,
+		"/":                  false,
+		"/dashboard":         false,
+		"/admin/users":       false,
+		"/apifoo":            false,
+		"/v1foo":             false,
+		"/healthz":           false,
+	}
+	for path, want := range cases {
+		if got := IsAPIPath(path); got != want {
+			t.Errorf("IsAPIPath(%q) = %v, want %v", path, got, want)
 		}
 	}
 }

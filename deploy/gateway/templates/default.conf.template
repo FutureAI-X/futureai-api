@@ -1,0 +1,229 @@
+# ============================================================================
+# 边缘网关配置
+# ============================================================================
+#
+# 本文件由官方 nginx 镜像的入口脚本渲染：
+#   /etc/nginx/templates/*.template  ->  /etc/nginx/conf.d/*.conf
+# 代换范围被 NGINX_ENVSUBST_FILTER 限制在下面三个域名变量上（见 compose 文件），
+# 因此 nginx 自身的 $uri、$host 等变量不会被误伤。
+#
+# 架构:
+#
+#     浏览器 ──HTTPS──> 网关 (443) ──HTTP──> 各服务容器
+#                          │
+#                          └──> 80: ACME 校验 + 跳转 HTTPS
+#
+# 网关只做四件事：TLS 终止、按域名分流、gzip、登录接口限流。
+# 静态文件由各服务自己提供（前端产物已内嵌进各自的二进制），
+# 所以这里没有 root / try_files，安全响应头也由各服务自行下发。
+#
+# 本文件位于 conf.d 下，已被主配置 include 进 http{} 块，
+# 因此下面出现的 limit_req_zone / log_format / resolver 都是合法的 http 级指令。
+# ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# 登录接口限流（纵深防御）
+# ---------------------------------------------------------------------------
+#
+# 为什么要在网关层再做一层:
+#   应用自身的登录限流每次都要先走到后端，而登录校验使用 bcrypt
+#   （故意设计成计算昂贵，防暴力破解）。凭证填充攻击即使全部失败，
+#   也会先把 CPU 打满。在网关层拦掉明显的洪泛，成本几乎为零。
+#
+# 粒度是真实客户端 IP（网关是边缘节点，$binary_remote_addr 即真实 IP）。
+# 阈值刻意取得比应用宽松（应用是 5 次失败 / 5 分钟），网关只负责挡住
+# 明显的机器人洪泛，精细策略仍由应用负责，避免误伤 NAT 后的正常用户。
+limit_req_zone $binary_remote_addr zone=token_hub_login:10m rate=30r/m;
+
+
+# ---------------------------------------------------------------------------
+# 日志
+# ---------------------------------------------------------------------------
+#
+# 刻意使用 $uri 而非 $request：
+# $request 形如 "GET /v1/models?foo=bar"，会把查询串写进日志。
+# Token Hub 已不接受 URL 中的凭证，但查询串仍可能含业务参数，
+# 不应落入日志或流向日志聚合平台。
+log_format edge '$remote_addr - $remote_user [$time_local] '
+                '"$request_method $uri $server_protocol" '
+                '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+                'rt=$request_time urt=$upstream_response_time';
+
+
+# ---------------------------------------------------------------------------
+# 其他
+# ---------------------------------------------------------------------------
+
+# 放行带下划线的请求头。nginx 默认会静默丢弃这类头，
+# sub2api 搭配 Codex CLI 时请求头里就带下划线（如 session_id），
+# 症状是下游认证莫名失败。
+underscores_in_headers on;
+
+# 上游地址用变量 + resolver 解析，而不是 upstream 块。
+#
+# 原因：nginx 对 upstream 块里的主机名只在启动时解析一次，容器重建换了 IP
+# 之后，网关会一直把请求打到旧地址，表现为持续 502，直到 nginx 重启。
+# 而这三个服务都会各自独立升级重建，踩中的概率很高。
+#
+# resolver 指向 Docker 内置 DNS，valid=10s 让 IP 变化在 10 秒内生效。
+#
+# 代价是失去了 upstream keepalive，每个请求都要新建一条到同机容器的连接。
+# 在同一个 docker 网络里这个开销可以忽略，换来的是升级后不需要碰网关。
+resolver 127.0.0.11 valid=10s ipv6=off;
+resolver_timeout 5s;
+
+
+# ============================================================================
+# HTTP —— ACME 校验 + 跳转 HTTPS
+# ============================================================================
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${TOKEN_HUB_DOMAIN} ${NEW_API_DOMAIN} ${SUB2API_DOMAIN};
+
+    access_log /var/log/nginx/http.access.log edge;
+
+    # Let's Encrypt 续期校验放行（certbot --webroot 模式需要）
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+
+# ============================================================================
+# 未匹配任何域名的请求：直接拒绝握手
+# ============================================================================
+#
+# 直连 IP 的扫描器会走到这里。不返回任何证书，连接在 TLS 阶段就被丢弃。
+# ssl_reject_handshake 允许这个 server 块不配置证书。
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+
+    ssl_reject_handshake on;
+}
+
+
+# ============================================================================
+# token-hub
+# ============================================================================
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    server_name ${TOKEN_HUB_DOMAIN};
+    access_log /var/log/nginx/token-hub.access.log edge;
+
+    include /etc/nginx/snippets/tls.conf;
+    include /etc/nginx/snippets/proxy-common.conf;
+
+    # token-hub 是 deploy/token-hub/docker-compose.yml 里的服务名，
+    # 在共享网络上由 Docker 内置 DNS 解析。
+    set $token_hub_up "token-hub:3001";
+
+    # 登录接口叠加网关层限流。精确匹配的优先级高于下面的前缀匹配。
+    location = /api/auth/login {
+        limit_req zone=token_hub_login burst=10 nodelay;
+        limit_req_status 429;   # 与应用返回的 429 保持一致，便于客户端统一处理
+        proxy_pass http://$token_hub_up;
+    }
+
+    # 健康检查不记日志，避免每几秒一条污染访问日志
+    location = /health {
+        access_log off;
+        proxy_pass http://$token_hub_up;
+    }
+
+    # OpenAI 兼容接口。
+    # 图像生成是「提交任务」语义，应用侧调用上游供应商的超时是 30s，
+    # 这里留足余量，避免网关先于应用超时断开，让用户看到 504 而非应用的真实错误。
+    location /v1/ {
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+        proxy_pass http://$token_hub_up;
+    }
+
+    # 其余全部交给 token-hub，前端页面也由它提供。
+    location / {
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_pass http://$token_hub_up;
+    }
+}
+
+
+# ============================================================================
+# new-api
+# ============================================================================
+#
+# ⚠️ 下面这个块按 new-api 的默认值写的（镜像 calciumion/new-api，默认端口 3000，
+#     compose 里的服务名按 new-api 官方示例取 new-api）。它的官方 compose
+#    需要把服务接进 gateway-proxy 网络，见 deploy/new-api/README.md。
+#    如果实际端口或服务名不同，改下面的 set 一行即可。
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    server_name ${NEW_API_DOMAIN};
+    access_log /var/log/nginx/new-api.access.log edge;
+
+    include /etc/nginx/snippets/tls.conf;
+    include /etc/nginx/snippets/proxy-common.conf;
+
+    set $new_api_up "new-api:3000";
+
+    location / {
+        # ★ 这一块是 new-api 与 token-hub 最大的差别。
+        # 它的中转接口是流式的，一次补全可能持续好几分钟。网关默认 60s 的
+        # 读超时会把长回答从中间切断，前端表现为「回答到一半卡住」，
+        # 而且日志里看不出是超时——因为客户端连接是正常断开的。
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+
+        # 关闭缓冲，让 token 逐个流到浏览器。
+        # 开着缓冲的话 nginx 会攒满 buffer 才下发，流式的意义就没了。
+        proxy_buffering off;
+        proxy_cache off;
+
+        proxy_pass http://$new_api_up;
+    }
+}
+
+
+# ============================================================================
+# sub2api
+# ============================================================================
+#
+# ⚠️ 同样按官方默认值写的（镜像 weishaw/sub2api，默认端口 8080，
+#    服务名 sub2api）。接入方式见 deploy/sub2api/README.md。
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    server_name ${SUB2API_DOMAIN};
+    access_log /var/log/nginx/sub2api.access.log edge;
+
+    include /etc/nginx/snippets/tls.conf;
+    include /etc/nginx/snippets/proxy-common.conf;
+
+    set $sub2api_up "sub2api:8080";
+
+    location / {
+        # 同上：sub2api 转发的是订阅制模型的长回答，同样需要长超时与流式透传。
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+        proxy_cache off;
+
+        proxy_pass http://$sub2api_up;
+    }
+}
