@@ -2,152 +2,49 @@
 
 下一代LLM网关和AI资产管理系统
 
-## PostgreSQL 管理
+## 本地开发数据库
 
-### 配置文件
-
-`docker-compose.yml`：
-
-```yaml
-services:
-  postgres:
-    image: postgres:15
-    container_name: token-hub-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-token_hub}
-      # 密码从环境变量读取，不在仓库中硬编码
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}
-      POSTGRES_DB: ${POSTGRES_DB:-token_hub}
-    ports:
-      # 仅绑定回环地址，切勿暴露到公网
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-
-volumes:
-  pg_data:
-```
-
-### 常用命令
+`docker-compose.yml` 提供本地开发用的 PostgreSQL，只绑定 `127.0.0.1:5432`，不对外：
 
 ```bash
-# 启动（后台运行）
-docker-compose up -d
-
-# 停止
-docker-compose down
-
-# 停止并删除数据卷（慎用，会清除所有数据）
-docker-compose down -v
-
-# 查看运行状态
-docker-compose ps
-
-# 查看日志
-docker-compose logs postgres
-
-# 实时跟踪日志
-docker-compose logs -f postgres
-
-# 重启
-docker-compose restart postgres
+docker compose up -d              # 启动
+docker compose down               # 停止，数据保留在卷里
+docker compose down -v            # 连数据一起删，慎用
+docker compose logs -f postgres   # 看日志
 ```
 
-### 连接信息
+密码在 `.env` 的 `POSTGRES_PASSWORD`，连接串在 `SQL_DSN`。
 
-| 项目 | 值 |
-|------|-----|
-| 主机 | `localhost` |
-| 端口 | `5432` |
-| 用户名 | `token_hub` |
-| 密码 | `token_hub_123` |
-| 数据库 | `token_hub` |
-| 连接字符串 | `postgres://token_hub:token_hub_123@localhost:5432/token_hub?sslmode=disable` |
-
-### 数据持久化
-
-- 数据存储在 Docker 卷 `pg_data` 中
-- 执行 `docker-compose down` 不会丢失数据
-- 只有执行 `docker-compose down -v` 才会删除数据
-
-### 使用 pgAdmin 管理（可选）
-
-如需图形化管理工具，可在 `docker-compose.yml` 中添加：
-
-```yaml
-services:
-  # ... postgres 配置 ...
-
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: token-hub-pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
-```
-
-访问 http://localhost:5050 即可使用 pgAdmin。
+> 这是**开发用**的库。生产环境用的那一份在 [deploy/token-hub/](deploy/token-hub/)，
+> 它刻意不发布任何端口 —— 两者目录名相同但项目名不同，不会互相干扰。
 
 ## 快速开始
 
-### 1. 启动 PostgreSQL
-
 ```bash
-docker-compose up -d
+# 1. 本地数据库
+docker compose up -d
+
+# 2. 环境变量：复制模板后填三个值
+cp .env.example .env
+openssl rand -hex 32      # -> JWT_SECRET
+openssl rand -hex 32      # -> SECRET_KEY
+openssl rand -hex 24      # -> POSTGRES_PASSWORD（同时替换 SQL_DSN 里的 CHANGE_ME）
+
+# 3. 构建前端
+make web                  # 等价于 cd web && npm ci && npm run build
+
+# 4. 启动
+make run                  # 等价于 go run main.go
 ```
 
-### 2. 配置环境变量
+访问 http://localhost:3001 —— 前端页面与 API 由同一个进程提供，不需要额外的 Nginx。
 
-创建 `.env` 文件：
-
-```bash
-SQL_DSN=postgres://token_hub:token_hub_123@localhost:5432/token_hub?sslmode=disable
-PORT=3001
-GIN_MODE=release
-
-# 必填！至少 32 字符，否则服务拒绝启动。生成: openssl rand -hex 32
-JWT_SECRET=
-SECRET_KEY=
-```
-
-### 3. 安装依赖
-
-```bash
-go mod tidy
-```
-
-### 4. 构建前端
-
-```bash
-cd web && npm install && npm run build && cd ..
-```
-
-> ⚠️ **这一步不能跳过。** 后端通过 `//go:embed all:web/dist` 把前端产物编进二进制，
+> ⚠️ **第 3 步不能跳过。** 后端通过 `//go:embed all:web/dist` 把前端产物编进二进制，
 > 该目录不存在或为空时 `go build` 会**直接编译失败**（是编译期错误，不是运行时提示）。
-> 也就是说，在干净的 clone 上，任何编译根包的命令都必须先构建前端。
+> 干净的 clone 上，任何编译根包的命令都必须先构建前端。
 
-### 5. 运行后端
-
-```bash
-go run main.go
-```
-
-访问 http://localhost:3001 即可 —— 前端页面与 API 现在由同一个进程提供，
-不需要额外的 Nginx。
-
-### 6. 运行前端开发服务器（可选）
-
-改前端时用这个，有热更新：
-
-```bash
-cd web
-npm run dev
-```
-
-开发服务器在 http://localhost:5173 启动，并自动代理 API 请求到后端。
-此时后端提供的页面是上次 `npm run build` 的产物，改前端不必重新编译后端。
+改前端时用热更新：`cd web && npm run dev`（:5173，自动代理 API 到后端）。
+此时后端提供的仍是上次构建的产物，改前端不必重新编译后端。
 
 ### 环境变量
 
@@ -169,91 +66,21 @@ npm run dev
 
 ## API 接口
 
-### 用户登录
+完整参考见 [docs/API.md](docs/API.md)。速览：
 
-```bash
-POST /api/auth/login
-```
+| 前缀 | 凭证 | 内容 |
+|---|---|---|
+| `/health` | 无 | 健康检查 |
+| `/api/auth`、`/api/pricing` | 无 | 登录、计费规则 |
+| `/api/user` | JWT | 用户信息、API Key、积分流水、任务记录 |
+| `/api/admin` | JWT + role 100 | 用户/供应商/模型/端点/计费规则管理 |
+| `/v1` | `sk-` API Key | OpenAI 兼容：模型列表、图像生成、图片上传、任务查询 |
 
-请求体：
+所有凭证**仅**通过 `Authorization: Bearer <...>` 请求头传递，不支持查询参数。
 
-```json
-{
-  "username": "root",
-  "password": "<首次启动时生成，见下方说明>"
-}
-```
-
-首次启动且 `users` 表为空时会自动创建 `root` 用户，其初始密码：
-
-- 若设置了 `INITIAL_ROOT_PASSWORD` 环境变量，则使用该值；
-- 否则随机生成并写入 `./root_initial_password.txt`（权限 `0600`）。
-
-该密码**不会**写入日志。请登录后立即通过 `PUT /api/user/password` 修改，并删除密码文件。
-
-响应示例：
-
-```json
-{
-  "success": true,
-  "message": "登录成功",
-  "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "user": {
-      "id": 1,
-      "username": "root",
-      "display_name": "Root User",
-      "role": 100,
-      "status": 1,
-      "email": "",
-      "credits": 100000000,
-      "used_credits": 0
-    }
-  }
-}
-```
-
-### 获取用户信息（需要登录）
-
-```bash
-GET /api/user/info
-Authorization: Bearer <token>
-```
-
-### 获取模型列表
-
-```bash
-GET /v1/models
-```
-
-响应示例：
-
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "deepseek-v4-flash",
-      "object": "model",
-      "owned_by": "token-hub"
-    }
-  ]
-}
-```
-
-### 健康检查
-
-```bash
-GET /health
-```
-
-响应示例：
-
-```json
-{
-  "status": "ok"
-}
-```
+首次启动且 `users` 表为空时会自动创建 `root` 用户：密码取 `INITIAL_ROOT_PASSWORD`，
+未设置则随机生成并写入 `./root_initial_password.txt`（权限 `0600`，不写日志）。
+**登录后立即改密。**
 
 ## 技术栈
 
@@ -271,11 +98,14 @@ token-hub/
 ├── Dockerfile           # 多阶段构建：前端 → 后端 → 运行时
 ├── Makefile             # 常用命令（注意 web 是 build/test 的前置）
 ├── .dockerignore
-├── deploy/              # 部署编排，见 deploy/README.md
+├── deploy/              # 部署编排
+│   ├── README.md        # 照这个顺序敲
+│   ├── NOTES.md         # 为什么这么设计 / 排查 / 升级备份
+│   ├── build-image.sh   # 本机构建镜像并导出，收平台参数
 │   ├── gateway/         # Nginx 容器网关（全机唯一占用 80/443）
-│   ├── token-hub/       # 应用 + PostgreSQL 的 compose
-│   ├── new-api/         # 接入网关的说明
-│   └── sub2api/         # 接入网关的说明
+│   └── token-hub/       # 应用 + PostgreSQL 的 compose
+├── docs/
+│   └── API.md           # 接口参考
 ├── webui/               # 内嵌前端静态文件的托管与安全头
 │   ├── webui.go
 │   └── webui_test.go
@@ -314,50 +144,17 @@ token-hub/
 └── go.sum               # 依赖校验文件
 ```
 
-## 主页功能
+## 部署
 
-现代化的主页 UI，参考 New API 项目设计：
-
-- ✅ 顶部导航栏（毛玻璃效果、响应式）
-- ✅ Hero 区域（渐变背景、网格图案、动画效果）
-- ✅ 终端演示（实时显示 API 响应）
-- ✅ 功能特性展示（Bento 网格布局）
-- ✅ 模型列表（卡片式设计、悬停效果）
-- ✅ 快速开始代码示例
-- ✅ 暗色模式支持（跟随系统）
-- ✅ 响应式设计（支持移动端）
-- ✅ 流畅动画（淡入效果）
-
-## 上线安全清单
-
-部署到公网前请逐项确认：
-
-- [ ] `JWT_SECRET` 与 `SECRET_KEY` 均设置为至少 32 字符的随机值（`openssl rand -hex 32`）。
-      服务在两者缺失或过短时会**拒绝启动**，不会回落到默认值。
-      ⚠️ `SECRET_KEY` 一旦用于加密数据后不可更改，否则已存的供应商密钥将无法解密。
-- [ ] `GIN_MODE=release`、`DEBUG=false`。
-- [ ] PostgreSQL 端口**不要**暴露到公网（`docker-compose.yml` 已默认绑定 `127.0.0.1`），
-      并使用强密码。
-- [ ] 服务置于 HTTPS 反向代理之后，由代理下发 `Strict-Transport-Security`。
-- [ ] 若部署在反向代理/CDN 之后，设置 `TRUSTED_PROXIES` 为代理网段，
-      否则所有请求的客户端 IP 都会是代理地址，登录限流会把全部用户视为同一来源。
-      反之，若服务直接对外，**不要**设置该变量（默认不信任任何代理头，可防 `X-Forwarded-For` 伪造）。
-- [ ] 按业务规模调整 `API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST`。
-- [ ] 确认每个启用中的模型都配置了计费规则：未配置规则的模型会返回
-      「该模型未配置计费规则，暂不可用」，而不是静默免费。
-- [ ] 登录后立即修改 root 密码，并删除 `root_initial_password.txt`。
-- [ ] 配置日志轮转（访问日志已开启 `SkipQueryString`，不会记录查询串）。
-
-### 反向代理
+完整编排见 [deploy/README.md](deploy/README.md)：同一台服务器上 token-hub、
+new-api、sub2api 三个服务共用一个 Nginx 容器网关，各自独立 compose。
+网关配置的唯一来源是 [deploy/gateway/](deploy/gateway/)。
 
 **前端静态文件由 Go 服务自己提供**（`web/dist` 通过 `go:embed` 编进二进制，
-见 [webui/](webui/)），Nginx 不再需要托管静态文件。它只负责 TLS 终止、
-按域名分流、gzip、以及登录接口的限流。
+见 [webui/](webui/)），Nginx 不再托管静态文件 —— 只负责 TLS 终止、
+按域名分流、gzip 和登录接口限流。
 
-完整的部署编排见 [deploy/README.md](deploy/README.md)：同一台服务器上
-token-hub、new-api、sub2api 三个服务共用一个 Nginx 容器网关，各自独立 compose。
-
-网关配置的唯一来源是 [deploy/gateway/](deploy/gateway/)。
+上线前的安全自检清单、升级/回滚/备份流程、排查表都在 [deploy/NOTES.md](deploy/NOTES.md)。
 
 ### 凭证传递方式
 
