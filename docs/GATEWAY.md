@@ -47,10 +47,11 @@ docker network connect gateway-proxy token-hub
 ## 5. 访问
 
 ```bash
-R="--resolve token.example.com:443:127.0.0.1"
+curl -k --resolve token.example.com:443:127.0.0.1 https://token.example.com/health
+# {"status":"ok"}
 
-curl -k $R https://token.example.com/health        # {"status":"ok"}
-curl -k -s $R https://token.example.com/ | head -3 # HTML 页面
+curl -k -s --resolve token.example.com:443:127.0.0.1 https://token.example.com/ | head -3
+# HTML 页面（<script src="/assets/index-xxx.js"> 开头）
 ```
 
 > **必须用 `--resolve`，不能用 `-H "Host: ..."`。** curl 连接 IP 地址时不发 SNI，
