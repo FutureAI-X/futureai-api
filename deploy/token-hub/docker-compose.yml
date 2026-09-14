@@ -14,6 +14,14 @@
 # 数据库只挂在本项目的内部网络上，连网关都够不到。
 # 这顺带消除了「PostgreSQL 暴露到公网导致密码哈希与供应商密钥密文被直读」的风险。
 
+# ⚠️ 项目名必须和开发用的那一份（仓库根目录的 docker-compose.yml）区分开。
+#
+# 项目名默认取目录名，而两边的目录名都是 token-hub —— 于是容器名和数据卷名
+# 会完全撞上。如果在同一台机器上同时跑过这两份（比如买服务器之前先在本机
+# 试跑一遍生产配置），生产库会与开发库共用同一个数据卷，
+# 症状是用开发库的密码去开生产库，报一个与密码无关的认证错误，极难排查。
+name: token-hub-prod
+
 services:
   token-hub:
     image: token-hub:${TOKEN_HUB_TAG:-latest}
@@ -55,7 +63,9 @@ services:
 
   postgres:
     image: postgres:15
-    container_name: token-hub-postgres
+    # 不能叫 token-hub-postgres：那是开发用的 compose 里的名字，
+    # 容器名在同一个 Docker 守护进程上是全局唯一的，重名会直接启动失败。
+    container_name: token-hub-pg
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-token_hub}
