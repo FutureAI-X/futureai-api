@@ -50,33 +50,41 @@ upstream backend { server token-hub:3001; }
 ## 为什么必须先有自签证书
 
 nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启动失败** ——
-不是某个域名 502，而是整个网关起不来。
+不是某个域名 502，而是整个网关起不来。所以正式证书签发之前，必须先跑一次
+`scripts/self-signed.sh` 放一对证书占位。（这正是 [README 第 2 步](README.md#2-服务器--起网关)那条注意事项。）
 
-所以在正式证书签发之前，必须先跑一次 `scripts/self-signed.sh` 放一对证书占位。
-域名解析生效后再换成正式证书。
+浏览器在自签阶段会报 `ERR_CERT_AUTHORITY_INVALID`。**这不是配错了**，而恰恰说明前面的环节都对：
 
-浏览器在自签阶段会报警告，这是预期的，用 `curl -k` 绕过。
+| 错误码 | 含义 |
+|---|---|
+| `ERR_CERT_AUTHORITY_INVALID` | 域名匹配成功，只是签发者（它自己）不在系统信任列表里 ← 自签阶段就该是这个 |
+| `ERR_CERT_COMMON_NAME_INVALID` | 域名对不上，说明证书的 SAN 或 SNI 分流有问题 |
+
+所以看到第一种可以直接点「继续前往」，或用 `curl -k`。看到第二种才是真有问题。
 
 ---
 
-## TRUSTED_PROXIES 怎么确认真的生效了
+## TRUSTED_PROXIES 为什么这么配
 
-这是最容易漏、后果最严重的一项。**部署完必须验证一次。**
+**验证方法在 [README 第 4 步](README.md#4-服务器--验证)**，这里只讲背后的取舍。
 
-漏配的症状：应用把所有请求的来源都看成网关 IP `172.20.0.2`，
-登录限流会把全体用户当成同一来源 —— 任意几次失败就能锁死所有人。
+`X-Forwarded-For` 的可信度完全取决于「谁写的这条头」。网关用
+`$proxy_add_x_forwarded_for` 把真实客户端 IP **追加**到链尾，而 Gin 从右往左
+找到第一个不在信任列表里的 IP —— 前提是应用知道网关是可信的。
 
-```bash
-# 从外部 IP 连续登录失败几次
-docker compose -f /opt/stacks/token-hub/docker-compose.yml logs token-hub | grep -i login
-```
+因此这个值要卡在两头之间：
 
-- 看到的是**你自己的公网 IP** → 正确
-- 看到的是 `172.20.0.2` → 没生效。检查 `deploy/token-hub/.env` 的 `GATEWAY_IP`
-  与 `deploy/gateway/docker-compose.yml` 里的 `ipv4_address` 是否一致。
+| 填什么 | 后果 |
+|---|---|
+| `172.20.0.2/32`（网关容器固定 IP） | 正确。只有网关追加的 IP 会被采信 |
+| 留空 | 所有请求的来源都变成网关 IP，全体用户被登录限流当成同一人 |
+| `0.0.0.0/0` | **等于信任一切**，客户端自带的伪造 XFF 被采信，限流彻底失效 |
 
-反向的坑同样要避免：**绝不能填 `0.0.0.0/0`**，那等于信任一切，
-`X-Forwarded-For` 重新变得可伪造，限流再次失效。
+第三个是最危险的，因为它**看起来像是"配好了"** —— 应用日志里能看到真实 IP，
+一切正常，只是这个 IP 是攻击者自己填的。任何情况下都不要为了"先跑通"而填它。
+
+同理，网关上 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`
+也不要改成 `$http_x_forwarded_for`（那会直接透传客户端伪造的值）。
 
 ---
 
