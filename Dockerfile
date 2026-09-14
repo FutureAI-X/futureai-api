@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ============================================================================
 # Token Hub — 生产镜像
 #
@@ -11,6 +9,11 @@
 #   两个构建阶段都固定在 $BUILDPLATFORM 上执行。前端产物是纯静态文件，
 #   与目标架构无关；Go 用 GOARCH 原生交叉编译。因此在 x86 开发机上构建
 #   arm64 镜像时，不会有任何指令模拟开销。
+#
+# 刻意不写 `# syntax=docker/dockerfile:1`：
+# 那行会让构建额外去 Docker Hub 拉一个 frontend 镜像，而本文件没有用到
+# 任何它独有的特性（$BUILDPLATFORM、TARGETARCH、多阶段 COPY 都是内置语法）。
+# 少一个网络依赖，在网络受限的环境里少一个失败点。
 #
 # 构建（推荐用脚本，它会顺带导出镜像文件）：
 #   ./deploy/build-image.sh linux/amd64

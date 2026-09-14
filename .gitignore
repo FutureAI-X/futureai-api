@@ -27,6 +27,16 @@ go.work.sum
 # env file
 .env
 
+# 首次启动时生成的 root 初始密码。程序在 users 表为空时写入，
+# 权限虽然是 0600，但误提交到仓库就等于把管理员密码公开了。
+root_initial_password.txt
+
+# 镜像导出包（deploy/build-image.sh 的产物，落在仓库根目录）
+*.tar.gz
+# 开头的斜杠是必须的：不带斜杠的 "token-hub" 会匹配任意层级，
+# 把 deploy/token-hub/ 也一并忽略掉。
+/token-hub
+
 # Editor/IDE
 # .idea/
 # .vscode/

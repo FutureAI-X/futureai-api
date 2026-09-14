@@ -1,7 +1,12 @@
-# 本地开发用 PostgreSQL
-# 启动: docker-compose up -d
-# 停止: docker-compose down
-# 删除数据: docker-compose down -v
+# 本地开发栈：PostgreSQL + 应用容器
+#
+# 启动: docker-compose up -d          页面在 http://localhost:8080
+# 只起数据库: docker compose up -d postgres
+# 停止: docker compose down
+# 删除数据: docker compose down -v    ← 会清空开发库
+#
+# 生产环境的编排在 deploy/token-hub/ 下，两者刻意分开：
+# 那一份不发布任何端口，数据库也不在网关可达的网段上。
 #
 # 安全提示：
 #   - 端口仅绑定 127.0.0.1，避免数据库暴露到公网。
@@ -23,6 +28,44 @@ services:
       - pg_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-token_hub} -d ${POSTGRES_DB:-token_hub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # 应用容器。
+  #
+  # 它和上面的 postgres 用同一个默认网络，因此 SQL_DSN 里写服务名 postgres 即可——
+  # 容器之间不走宿主机的那条 127.0.0.1:5432 映射。
+  #
+  # 本地开发有两条路，按需要选一条：
+  #   1) 容器跑：docker compose up -d          -> 页面在 http://localhost:8080
+  #   2) 本机跑：go run main.go                -> 页面在 http://localhost:3001
+  # 两条可以同时开着，端口不冲突（容器映射到 8080，本机占 3001），
+  # 而且连的是同一个数据库。
+  token-hub:
+    image: token-hub:${TOKEN_HUB_TAG:-latest}
+    build: .
+    container_name: token-hub
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3001"
+      SQL_DSN: >-
+        postgres://${POSTGRES_USER:-token_hub}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}@postgres:5432/${POSTGRES_DB:-token_hub}?sslmode=disable
+      # 本地直连，前面没有任何反向代理，因此不信任任何代理头。
+      # 留着 .env 里的 127.0.0.1/32 也不会出错，但把 X-Forwarded-For 交给
+      # 一个本不存在的代理去解释，没有意义。
+      TRUSTED_PROXIES: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # 刻意用 8080 而不是 3001：本机 go run 时占的是 3001，
+      # 错开之后容器和本机两种跑法可以同时存在。
+      - "8080:3001"
 
 volumes:
   pg_data:
