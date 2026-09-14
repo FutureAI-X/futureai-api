@@ -4,18 +4,18 @@
 #
 # 本文件由官方 nginx 镜像的入口脚本渲染：
 #   /etc/nginx/templates/*.template  ->  /etc/nginx/conf.d/*.conf
-# 代换范围被 NGINX_ENVSUBST_FILTER 限制在下面三个域名变量上（见 compose 文件），
+# 代换范围被 NGINX_ENVSUBST_FILTER 限制在域名变量上（见 compose 文件），
 # 因此 nginx 自身的 $uri、$host 等变量不会被误伤。
 #
 # 架构:
 #
-#     浏览器 ──HTTPS──> 网关 (443) ──HTTP──> 各服务容器
+#     浏览器 ──HTTPS──> 网关 (443) ──HTTP──> token-hub:3001
 #                          │
 #                          └──> 80: ACME 校验 + 跳转 HTTPS
 #
 # 网关只做四件事：TLS 终止、按域名分流、gzip、登录接口限流。
-# 静态文件由各服务自己提供（前端产物已内嵌进各自的二进制），
-# 所以这里没有 root / try_files，安全响应头也由各服务自行下发。
+# 静态文件由应用自己提供（前端产物已内嵌进二进制），所以这里没有
+# root / try_files，安全响应头也由应用自行下发。
 #
 # 本文件位于 conf.d 下，已被主配置 include 进 http{} 块，
 # 因此下面出现的 limit_req_zone / log_format / resolver 都是合法的 http 级指令。
@@ -55,16 +55,17 @@ log_format edge '$remote_addr - $remote_user [$time_local] '
 # 其他
 # ---------------------------------------------------------------------------
 
-# 放行带下划线的请求头。nginx 默认会静默丢弃这类头，
-# sub2api 搭配 Codex CLI 时请求头里就带下划线（如 session_id），
-# 症状是下游认证莫名失败。
+# 放行带下划线的请求头。nginx 默认会**静默丢弃**这类头，不报错，
+# 只是下游认证莫名失败 —— 排查起来极费时间。当前的服务用不到，
+# 但以后接入的服务很可能用（比如 Codex CLI 会发 session_id），
+# 所以现在就开着，成本为零。
 underscores_in_headers on;
 
 # 上游地址用变量 + resolver 解析，而不是 upstream 块。
 #
 # 原因：nginx 对 upstream 块里的主机名只在启动时解析一次，容器重建换了 IP
 # 之后，网关会一直把请求打到旧地址，表现为持续 502，直到 nginx 重启。
-# 而这三个服务都会各自独立升级重建，踩中的概率很高。
+# 而服务每次升级都会重建容器，踩中的概率很高。
 #
 # resolver 指向 Docker 内置 DNS，valid=10s 让 IP 变化在 10 秒内生效。
 #
@@ -80,7 +81,7 @@ resolver_timeout 5s;
 server {
     listen 80;
     listen [::]:80;
-    server_name ${TOKEN_HUB_DOMAIN} ${NEW_API_DOMAIN} ${SUB2API_DOMAIN};
+    server_name ${TOKEN_HUB_DOMAIN};
 
     access_log /var/log/nginx/http.access.log edge;
 
@@ -160,70 +161,23 @@ server {
 
 
 # ============================================================================
-# new-api
+# 以后要再加一个服务（比如 new-api）
 # ============================================================================
 #
-# ⚠️ 下面这个块按 new-api 的默认值写的（镜像 calciumion/new-api，默认端口 3000，
-#     compose 里的服务名按 new-api 官方示例取 new-api）。它的官方 compose
-#    需要把服务接进 gateway-proxy 网络，见 deploy/new-api/README.md。
-#    如果实际端口或服务名不同，改下面的 set 一行即可。
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-
-    server_name ${NEW_API_DOMAIN};
-    access_log /var/log/nginx/new-api.access.log edge;
-
-    include /etc/nginx/snippets/tls.conf;
-    include /etc/nginx/snippets/proxy-common.conf;
-
-    set $new_api_up "new-api:3000";
-
-    location / {
-        # ★ 这一块是 new-api 与 token-hub 最大的差别。
-        # 它的中转接口是流式的，一次补全可能持续好几分钟。网关默认 60s 的
-        # 读超时会把长回答从中间切断，前端表现为「回答到一半卡住」，
-        # 而且日志里看不出是超时——因为客户端连接是正常断开的。
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-
-        # 关闭缓冲，让 token 逐个流到浏览器。
-        # 开着缓冲的话 nginx 会攒满 buffer 才下发，流式的意义就没了。
-        proxy_buffering off;
-        proxy_cache off;
-
-        proxy_pass http://$new_api_up;
-    }
-}
-
-
-# ============================================================================
-# sub2api
-# ============================================================================
+# 复制上面 token-hub 那个 server 块，改四处：
 #
-# ⚠️ 同样按官方默认值写的（镜像 weishaw/sub2api，默认端口 8080，
-#    服务名 sub2api）。接入方式见 deploy/sub2api/README.md。
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-
-    server_name ${SUB2API_DOMAIN};
-    access_log /var/log/nginx/sub2api.access.log edge;
-
-    include /etc/nginx/snippets/tls.conf;
-    include /etc/nginx/snippets/proxy-common.conf;
-
-    set $sub2api_up "sub2api:8080";
-
-    location / {
-        # 同上：sub2api 转发的是订阅制模型的长回答，同样需要长超时与流式透传。
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_buffering off;
-        proxy_cache off;
-
-        proxy_pass http://$sub2api_up;
-    }
-}
+#   1. server_name        —— 换成新域名，并在 deploy/gateway/.env 里加一个变量
+#   2. access_log         —— 换个日志文件名
+#   3. set $xxx_up        —— 换成 "服务名:端口"（服务名 = 那个 compose 里的服务名）
+#   4. 如果那个服务是**流式**返回的（一次回答持续几十秒到几分钟），
+#      必须额外加这三行，否则长回答会在中途被静默截断：
+#
+#          proxy_read_timeout 600s;
+#          proxy_send_timeout 600s;
+#          proxy_buffering off;
+#
+# 另外记得：
+#   - deploy/gateway/docker-compose.yml 的 NGINX_ENVSUBST_FILTER 要加上新变量名，
+#     否则模板里的 ${NEW_DOMAIN} 不会被替换
+#   - 那个服务的 compose 要接进 gateway-proxy 网络
+#   - 证书要重新签（SAN 里得有新域名）

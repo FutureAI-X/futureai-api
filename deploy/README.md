@@ -1,19 +1,19 @@
 # 部署
 
-同一台服务器上跑三个服务：**token-hub**、**new-api**、**sub2api**。
-一个 Nginx 容器网关按域名分流，三个服务各自独立 compose、独立升级。
+部署 **token-hub**：一个 Nginx 容器网关做 TLS 终止和域名分流，应用跑在它后面。
 
 > 📖 **遇到不认识的词先查 [GLOSSARY.md](GLOSSARY.md)** ——
 > 镜像/容器、反向代理、证书与 CA、Let's Encrypt、A 记录、SNI、cron 都有简短说明。
 > 不用提前读，卡住了再查。
 
 ```
-公网 ──80/443──> 网关(nginx) ──┬──> token-hub:3001  ──> postgres
-                               ├──> new-api:3000    ──> 自带 db/redis
-                               └──> sub2api:8080    ──> 自带 db/redis
+公网 ──80/443──> 网关(nginx) ──> token-hub:3001 ──> postgres
 ```
 
-三个服务都不发布宿主机端口；数据库同理。
+应用和数据库都不发布宿主机端口 —— 只有网关能访问它们。
+
+> 这台机器以后还要放别的服务（同样接进网关）。做法见文末
+> [以后要再加一个服务](#以后要再加一个服务)。
 
 > **为什么这么设计**、**出问题怎么办**、**上线自检清单**、**升级/回滚/备份** —— 都在
 > [NOTES.md](NOTES.md)。本文只讲照着敲的步骤。
@@ -39,7 +39,7 @@
 ## 0. 服务器 · 一次性准备
 
 **这一步在做什么**：查清服务器的 CPU 架构（后面构建镜像要用），
-建一个专门给这三个服务互相通信用的网络。
+建一个给网关和应用互相通信用的网络。
 
 ```bash
 uname -m
@@ -52,8 +52,8 @@ mkdir -p /opt/stacks
 docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
 ```
 
-- `mkdir` 建一个目录，三个服务的文件都放这儿
-- `docker network create` 建一个叫 `gateway-proxy` 的虚拟网络，网关和各服务靠它互相访问
+- `mkdir` 建一个目录，后面网关和应用的配置文件都放这儿
+- `docker network create` 建一个叫 `gateway-proxy` 的虚拟网络，网关靠它访问应用
 
 > `--ip-range` 不能省。它保证网关的固定 IP `172.20.0.2` 不会被别的容器抢走 ——
 > 网关停机时其他容器如果占了这个地址，网关就再也起不来了。
@@ -101,12 +101,10 @@ cp .env.example .env
 vi .env
 ```
 
-`vi` 会打开一个编辑器。要改的是这几行：
+`vi` 会打开一个编辑器。要改的是这两行：
 
 ```
 TOKEN_HUB_DOMAIN=token.example.com      ← 改成你自己的域名
-NEW_API_DOMAIN=newapi.example.com       ← 同上
-SUB2API_DOMAIN=sub2api.example.com      ← 同上
 ACME_EMAIL=admin@example.com            ← 改成你的邮箱（证书到期提醒会发这里）
 ```
 
@@ -125,7 +123,7 @@ chmod +x scripts/*.sh
 **为什么必须先生成**：nginx 的证书文件不存在时**会直接启动失败** ——
 不是某个域名不可用，是整个网关起不来。所以正式证书签发之前必须先放一张占位的。
 
-**预期看到**：脚本自己会做检查，最后打印出证书的 `subject` 和三个 `DNS:` 域名。
+**预期看到**：脚本自己会做检查，最后打印出证书的 `subject` 和 `DNS:` 域名。
 如果只看到报错或者没打印这些，说明没生成成功，别往下走。
 
 ```bash
@@ -263,20 +261,18 @@ docker compose logs token-hub | grep -i login
 
 ### 前置条件
 
-**1. 三个域名都加了 A 记录，指向服务器公网 IP**
+**1. 域名加了 A 记录，指向服务器公网 IP**
 
 去你买域名的服务商控制台（阿里云、Cloudflare、Namecheap 等），找到 DNS 解析设置，
-加三条记录：
+加一条记录：
 
 | 类型 | 主机记录 | 值 |
 |---|---|---|
 | A | token | 你的服务器公网 IP |
-| A | newapi | 同上 |
-| A | sub2api | 同上 |
 
 "A 记录"就是"这个域名指向哪个 IP"。上面的 `token` 对应 `token.example.com`。
 
-⚠️ 这里填的三个域名要和 `deploy/gateway/.env` 里**完全一致**，否则证书验证会失败。
+⚠️ 这里填的域名要和 `deploy/gateway/.env` 里**完全一致**，否则证书验证会失败。
 
 **2. 解析已生效**
 
@@ -299,7 +295,7 @@ cd /opt/stacks/gateway
 ```
 
 **它做了什么**：启动一个 certbot 容器，向 Let's Encrypt 申请证书。
-Let's Encrypt 必须先确认"这三个域名确实指向你这台机器"，
+Let's Encrypt 必须先确认"这个域名确实指向你这台机器"，
 办法是它去访问 `http://你的域名/.well-known/acme-challenge/xxx`，
 网关返回它要的内容。验证通过后证书下发，脚本自动复制到 `certs/` 并重载网关。
 
@@ -357,18 +353,18 @@ cd /opt/stacks/gateway && ./scripts/certbot.sh renew   # 手动跑一次，不�
 
 ---
 
-## new-api 与 sub2api
+## 以后要再加一个服务
 
-用官方 compose 部署，只需**两处改动**：
+当前只部署了 token-hub。这台机器以后还要放别的服务，做法是**四处改动**：
 
-**1. 服务接进共享网络**（保留默认网络用来连它自己的库）：
+**1. 那个服务的 compose 接进共享网络**（保留它自己的默认网络用来连数据库）：
 
 ```yaml
 services:
   <服务名>:
     networks:
-      - default
-      - proxy
+      - default    # 连它自己的数据库/Redis
+      - proxy      # 被网关访问
 
 networks:
   proxy:
@@ -376,14 +372,33 @@ networks:
     name: gateway-proxy
 ```
 
-**2. 删掉所有 `ports:`。** 网关通过共享网络直连容器，发布到宿主机反而让服务能被绕过网关访问。
+**2. 删掉它的 `ports:`** —— 网关通过共享网络直连容器，发布到宿主机反而让它能被绕过网关访问。
 
-服务名必须是网关配置里写的那两个：**`new-api`**（端口 3000）、**`sub2api`**（端口 8080）。
-对不上的话，改 `deploy/gateway/templates/default.conf.template` 里对应的 `set $xxx_up` 一行。
+**3. 网关加一个 server 块** —— 复制 [deploy/gateway/templates/default.conf.template](gateway/templates/default.conf.template)
+里 token-hub 那个块，改四处：`server_name`、`access_log` 文件名、`set $xxx_up`（`服务名:端口`）、
+以及流式服务需要的超时设置。**模板文件末尾有逐条说明**。
 
-> ⚠️ 这两个服务都是**流式转发**。网关侧已经为它们配好了 `proxy_read_timeout 600s`
-> 和 `proxy_buffering off` —— 漏了这两项，长回答会在中途被**静默截断**，
-> 日志里看不出任何异常。
+**4. `deploy/gateway/.env` 加域名，并同步改 `docker-compose.yml` 里的 `NGINX_ENVSUBST_FILTER`** ——
+漏了后者的话，模板里新写的 `${NEW_DOMAIN}` 不会被替换，nginx 会当成字面量。
+
+改完重新渲染并验证：
+
+```bash
+cd /opt/stacks/gateway
+docker compose up -d --force-recreate
+docker compose exec gateway nginx -t
+```
+
+> ⚠️ 如果那个服务是**流式**返回的（一次回答持续几十秒到几分钟），
+> 必须给它加这两行：
+>
+> ```nginx
+> proxy_read_timeout 600s;
+> proxy_buffering off;
+> ```
+>
+> 漏了的话长回答会在中途被**静默截断** —— 连接是正常断开的，日志里看不出任何异常，
+> 现象只是"回答到一半卡住"。另外证书要重新签（SAN 里得有新域名）。
 
 ---
 

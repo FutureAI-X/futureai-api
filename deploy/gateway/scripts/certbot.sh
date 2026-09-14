@@ -27,8 +27,6 @@ fi
 set -a && source .env && set +a
 
 : "${TOKEN_HUB_DOMAIN:?未设置 TOKEN_HUB_DOMAIN}"
-: "${NEW_API_DOMAIN:?未设置 NEW_API_DOMAIN}"
-: "${SUB2API_DOMAIN:?未设置 SUB2API_DOMAIN}"
 : "${ACME_EMAIL:?未设置 ACME_EMAIL}"
 
 # 证书以第一个域名为名
@@ -64,11 +62,9 @@ deploy_certs() {
 
 case "${1:-}" in
   issue)
-    echo "==> 为三个域名申请证书: $TOKEN_HUB_DOMAIN, $NEW_API_DOMAIN, $SUB2API_DOMAIN"
+    echo "==> 为 $TOKEN_HUB_DOMAIN 申请证书"
     run_certbot certonly --webroot -w /var/www/certbot \
       -d "$TOKEN_HUB_DOMAIN" \
-      -d "$NEW_API_DOMAIN" \
-      -d "$SUB2API_DOMAIN" \
       --email "$ACME_EMAIL" \
       --agree-tos --no-eff-email
 

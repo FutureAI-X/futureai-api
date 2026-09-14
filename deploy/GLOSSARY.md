@@ -88,12 +88,12 @@ Nginx 收到请求后，替客户端去访问后端，再把结果返回。
 同时服务多个域名，靠请求里的域名决定转给谁：
 
 ```
-token.example.com    ──> token-hub:3001
-newapi.example.com   ──> new-api:3000
-sub2api.example.com  ──> sub2api:8080
+token.example.com     ──> token-hub:3001
+另一个域名.example.com  ──> 另一个服务:端口
 ```
 
-这就是"三个服务共用一个网关"。每个域名在 Nginx 配置里对应一个 `server` 块。
+每个域名在 Nginx 配置里对应一个 `server` 块。**当前只部署了一个服务**，
+所以配置里只有一个这样的块；以后加服务就是再复制一个块、改几行。
 
 ### TLS 终止
 

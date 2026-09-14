@@ -26,8 +26,6 @@ fi
 set -a && source .env && set +a
 
 : "${TOKEN_HUB_DOMAIN:?未设置 TOKEN_HUB_DOMAIN}"
-: "${NEW_API_DOMAIN:?未设置 NEW_API_DOMAIN}"
-: "${SUB2API_DOMAIN:?未设置 SUB2API_DOMAIN}"
 
 mkdir -p certs
 
@@ -72,8 +70,6 @@ subjectAltName   = @alt_names
 
 [alt_names]
 DNS.1 = ${TOKEN_HUB_DOMAIN}
-DNS.2 = ${NEW_API_DOMAIN}
-DNS.3 = ${SUB2API_DOMAIN}
 EOF
 
 
@@ -81,7 +77,7 @@ EOF
 # 的判断失效，也会让下一次失败看起来像是新问题。
 rm -f certs/fullchain.pem certs/privkey.pem
 
-echo "==> 生成自签证书（SAN: $TOKEN_HUB_DOMAIN, $NEW_API_DOMAIN, $SUB2API_DOMAIN）"
+echo "==> 生成自签证书（SAN: $TOKEN_HUB_DOMAIN）"
 
 openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
   -keyout certs/privkey.pem \

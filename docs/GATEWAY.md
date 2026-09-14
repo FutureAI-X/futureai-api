@@ -61,7 +61,7 @@ curl -k -s --resolve token.example.com:443:127.0.0.1 https://token.example.com/ 
 浏览器访问要先改 hosts（**管理员权限**）：
 
 ```powershell
-@("127.0.0.1 token.example.com","127.0.0.1 newapi.example.com","127.0.0.1 sub2api.example.com") | Add-Content "$env:SystemRoot\System32\drivers\etc\hosts"
+"127.0.0.1 token.example.com" | Add-Content "$env:SystemRoot\System32\drivers\etc\hosts"
 ipconfig /flushdns
 ```
 

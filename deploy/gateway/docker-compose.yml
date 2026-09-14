@@ -17,14 +17,17 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # 把 envsubst 的代换范围严格限制在这三个变量上。
+      # 把 envsubst 的代换范围严格限制在这个域名变量上。
       #
       # 官方镜像的入口脚本会对 /etc/nginx/templates/*.template 做 envsubst，
       # 默认替换「环境里存在的一切同名变量」。模板里写着大量 nginx 自身的
       # 变量（$uri、$host、$request_uri …），一旦某个环境变量恰好同名，
       # 就会被静默替换成别的东西，症状是配置看起来正常但行为诡异。
       # 加上这道过滤后，代换只可能发生在我们自己声明的变量上。
-      NGINX_ENVSUBST_FILTER: "^(TOKEN_HUB_DOMAIN|NEW_API_DOMAIN|SUB2API_DOMAIN)$"
+      #
+      # ⚠️ 以后在 .env 里加了新域名，记得同步加到这里，否则模板里
+      #    对应的 ${NEW_DOMAIN} 不会被替换。
+      NGINX_ENVSUBST_FILTER: "^TOKEN_HUB_DOMAIN$"
     volumes:
       # 模板目录。入口脚本会把它渲染到 /etc/nginx/conf.d/ 下。
       - ./templates:/etc/nginx/templates:ro
