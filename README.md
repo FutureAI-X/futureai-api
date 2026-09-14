@@ -12,6 +12,7 @@
 |---|---|
 | 本地跑起来、改代码 | **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** |
 | 打包成镜像、用 Docker 在本地跑 | **[docs/DOCKER.md](docs/DOCKER.md)** |
+| 在本地跑 Nginx 网关（验证部署架构） | [docs/GATEWAY.md](docs/GATEWAY.md) |
 | 部署到服务器 | [deploy/README.md](deploy/README.md) |
 | 部署出问题了 | [deploy/NOTES.md](deploy/NOTES.md) |
 | 查接口 | [docs/API.md](docs/API.md) |

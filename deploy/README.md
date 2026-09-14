@@ -35,7 +35,12 @@
 uname -m      # 记下来，第 1 步要用：x86_64 -> amd64    aarch64 -> arm64
 
 mkdir -p /opt/stacks
-docker network create --subnet 172.20.0.0/16 gateway-proxy
+
+# --ip-range 不能省：它把容器的动态分配限制在 172.20.128.0/17，
+# 这样网关的固定 IP 172.20.0.2 永远不会被别的容器抢占。
+# 不加的话，网关停机期间其他容器可能拿到 .2，之后网关就再也起不来了
+# （报 "Address already in use"）。
+docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
 ```
 
 防火墙和云安全组都只放行 **22 / 80 / 443**。
@@ -67,10 +72,15 @@ docker compose exec gateway nginx -t
 ```
 
 ```bash
-curl -k -I -H "Host: token.example.com" https://127.0.0.1/health
+curl -k --resolve token.example.com:443:127.0.0.1 https://token.example.com/health
 ```
 
 > 现在返回 **502 是对的** —— token-hub 还没起。
+>
+> **必须用 `--resolve`，不能用 `-H "Host: ..."`。** 原因是 curl 连接 IP 地址时
+> **不会发送 SNI**，nginx 于是落到 `default_server` 那个块，而它是
+> `ssl_reject_handshake on` —— 握手直接被拒，你会看到一个 TLS 错误而不是 502。
+> `--resolve` 同时把 SNI 和 Host 都设成目标域名，走的才是正常的域名分流那一条路。
 >
 > ⚠️ **`nginx -t` 别跳过。** 网关配置有 230 行，语法错误会让**整个网关**起不来
 > （不是某个域名 502）。之所以必须先自签证书再启动，也是同一个原因：
@@ -104,9 +114,11 @@ docker compose logs -f token-hub
 ## 4. 服务器 · 验证
 
 ```bash
-curl -k -H "Host: token.example.com" https://127.0.0.1/health         # {"status":"ok"}
-curl -k -s -H "Host: token.example.com" https://127.0.0.1/ | head -3  # HTML 页面
-curl -k -s -H "Host: token.example.com" https://127.0.0.1/api/nope    # JSON 404
+R="--resolve token.example.com:443:127.0.0.1"   # 见第 2 步的说明，不能用 -H Host
+
+curl -k $R https://token.example.com/health                   # {"status":"ok"}
+curl -k -s $R https://token.example.com/ | head -3            # HTML 页面
+curl -k -s $R https://token.example.com/api/nope              # JSON 404，不是 HTML
 ```
 
 然后**必须确认一次 `TRUSTED_PROXIES` 真的生效**。从外部 IP 连续登录失败几次：

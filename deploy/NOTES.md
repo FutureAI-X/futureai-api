@@ -198,6 +198,8 @@ docker compose -f /opt/stacks/token-hub/docker-compose.yml logs -f token-hub
 | 某个域名 502，另两个正常 | 那个服务没起来 / 服务名对不上 / 没接进 `gateway-proxy` 网络 |
 | 全部域名 502 | 网关没起来，`docker compose exec gateway nginx -t` 看配置 |
 | 网关容器起不来 | 证书文件缺失，跑一次 `./scripts/self-signed.sh` |
+| 网关报 `Address already in use` | 建网络时漏了 `--ip-range`，固定 IP `172.20.0.2` 被别的容器占了。让占用者 `docker network disconnect` 后重启网关 |
+| 分不清 429 是网关拦的还是应用拦的 | 看访问日志的 `urt` 字段：`urt=-` 是网关直接返回没转发，有数字是应用返回的 |
 | 登录失败几次后所有人都登不进 | `TRUSTED_PROXIES` 没配，所有人被当成同一来源 |
 | 上传 10MB 图片返回 413 | 网关 `client_max_body_size` 没生效（确认 `nginx -t` 加载了本目录的模板） |
 | 长回答到一半卡住 | 该服务的 `proxy_read_timeout` 太短 / `proxy_buffering` 没关 |
