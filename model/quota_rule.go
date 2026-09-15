@@ -1,10 +1,16 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+// DefaultRefImageParams 参考图参数名的内置默认值。
+// 各供应商对同一张参考图的字段名不同（image / image_urls / ref_images ...），
+// 这里只作为「管理员未显式配置」时的兜底。
+const DefaultRefImageParams = "image,images,image_url,image_urls,ref_images"
 
 // CreditRuleType 计费规则类型
 type CreditRuleType string
@@ -40,6 +46,15 @@ type CreditRule struct {
 	// 记录最后更新时间
 	UpdatedAt time.Time `json:"updated_at"`
 
+	// 参考图附加计费：每张参考图消耗的积分，0=不计费。
+	// 叠加在基础积分（或命中的参数组合积分）之上，不取代它们。
+	RefImageCredits float64 `json:"ref_image_credits" gorm:"not null;default:0"`
+
+	// 参考图参数名（逗号分隔），空串表示使用 DefaultRefImageParams。
+	// 刻意不加 not null：GORM 会生成无默认值的 ADD COLUMN ... NOT NULL，
+	// 在已有数据的表上直接失败，导致服务起不来。
+	RefImageParams string `json:"ref_image_params" gorm:"size:255"`
+
 	// 关联的参数组合积分映射
 	Items []CreditRuleItem `json:"items,omitempty" gorm:"foreignKey:RuleID"`
 }
@@ -47,6 +62,49 @@ type CreditRule struct {
 // TableName 指定表名（原为 quota_rules）
 func (CreditRule) TableName() string {
 	return "credit_rules"
+}
+
+// EffectiveRefImageParams 返回实际生效的参考图参数名列表。
+// 未配置时回落到内置默认值，保证存量规则升级后也能识别参考图。
+func (r *CreditRule) EffectiveRefImageParams() []string {
+	if r == nil {
+		return ParseRefImageParams(DefaultRefImageParams)
+	}
+	return ParseRefImageParams(r.RefImageParams)
+}
+
+// ParseRefImageParams 清洗参考图参数名配置：逗号切分、去空白、丢弃空项、去重。
+// 清洗后为空（空串、全空白，或只剩逗号如 ","）时回落到内置默认值——否则
+// 参考图永远识别不到，附加计费会静默失效。保留首次出现的顺序，
+// 便于把清洗结果原样回写到数据库时输出稳定。
+func ParseRefImageParams(raw string) []string {
+	result := parseRefImageParams(raw)
+
+	// 只剩分隔符的配置（如 ","）会被清洗成空列表，必须回落
+	if len(result) == 0 && raw != DefaultRefImageParams {
+		return parseRefImageParams(DefaultRefImageParams)
+	}
+	return result
+}
+
+// parseRefImageParams 纯粹的切分逻辑，不做默认值回落
+func parseRefImageParams(raw string) []string {
+	result := make([]string, 0, 4)
+	seen := make(map[string]bool)
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		result = append(result, name)
+	}
+	return result
+}
+
+// JoinRefImageParams 把参数名列表拼回逗号分隔的存储格式
+func JoinRefImageParams(names []string) string {
+	return strings.Join(names, ",")
 }
 
 // CreditRuleItem 参数组合积分映射项（一组条件的 AND 命中部请求时，使用该积分）

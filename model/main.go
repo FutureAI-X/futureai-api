@@ -137,6 +137,7 @@ var uniqueIndexPrechecks = []struct {
 	{"endpoints", "path", "端点路径"},
 	{"vendor_models", "vendor_id, model_id", "供应商-模型关联"},
 	{"model_endpoints", "model_id, endpoint_id", "模型-端点关联"},
+	{"credit_rules", "model_id", "模型积分规则"},
 }
 
 // precheckUniqueIndexes 在建立唯一索引前检测重复数据。
@@ -202,8 +203,57 @@ func migrateDB() error {
 		return err
 	}
 
+	// 修正历史库上建错的索引：必须放在 AutoMigrate 之后
+	if err := ensureUniqueCreditRuleIndex(); err != nil {
+		return err
+	}
+
 	// 添加表和字段注释
 	return addTableComments()
+}
+
+// creditRuleModelIndex 是 credit_rules.model_id 上唯一索引的名字，
+// 与 CreditRule.ModelID 的 gorm uniqueIndex tag 推导出的默认名一致
+const creditRuleModelIndex = "idx_credit_rules_model_id"
+
+// ensureUniqueCreditRuleIndex 把 credit_rules.model_id 上的索引升级为唯一索引。
+//
+// 为什么需要这个：GORM 的 AutoMigrate 只在索引「不存在」时才创建。历史库上该索引
+// 是按早期的非唯一 tag 建出来的，之后加上 uniqueIndex tag 并不会让它变成唯一索引——
+// AutoMigrate 看到同名索引已存在就直接跳过。于是 model_id 可以重复插入，
+// 而 GetCreditRuleByModelID 用 First() 只取其中一条，产生「管理员改了 A 行、
+// 实际生效的是 B 行」这类静默错配（DeleteCreditRuleByModelID 没有 status 过滤，
+// 更会删错行）。
+//
+// 重复数据由 precheckUniqueIndexes 在 AutoMigrate 之前拦截，这里只处理索引本身。
+func ensureUniqueCreditRuleIndex() error {
+	var uniqueFlags []bool
+	err := DB.Raw(`
+		SELECT i.indisunique
+		FROM pg_class c
+		JOIN pg_index i ON i.indexrelid = c.oid
+		WHERE c.relname = ?`, creditRuleModelIndex).Scan(&uniqueFlags).Error
+	if err != nil {
+		return err
+	}
+
+	// 索引不存在时 AutoMigrate 已按 uniqueIndex tag 建好，无需处理
+	if len(uniqueFlags) == 0 || uniqueFlags[0] {
+		return nil
+	}
+
+	common.SysLogf("[计费] %s 当前不是唯一索引，重建为唯一索引", creditRuleModelIndex)
+	if err := DB.Exec("DROP INDEX IF EXISTS " + creditRuleModelIndex).Error; err != nil {
+		return err
+	}
+	// 索引名来自常量，不涉及外部输入
+	if err := DB.Exec(
+		"CREATE UNIQUE INDEX " + creditRuleModelIndex + " ON credit_rules (model_id)",
+	).Error; err != nil {
+		return err
+	}
+	common.SysLogf("[计费] %s 已重建为唯一索引", creditRuleModelIndex)
+	return nil
 }
 
 // addTableComments 为 PostgreSQL 表和字段添加注释
@@ -262,6 +312,8 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_rules.base_credits IS '基础积分（每次请求扣除的积分数量）'`,
 		`COMMENT ON COLUMN credit_rules.description IS '规则描述'`,
 		`COMMENT ON COLUMN credit_rules.status IS '规则状态：1=启用, 2=禁用'`,
+		`COMMENT ON COLUMN credit_rules.ref_image_credits IS '每张参考图消耗的积分，0=不计费'`,
+		`COMMENT ON COLUMN credit_rules.ref_image_params IS '参考图参数名（逗号分隔），空串使用内置默认值'`,
 		`COMMENT ON COLUMN credit_rules.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN credit_rules.updated_at IS '记录最后更新时间'`,
 

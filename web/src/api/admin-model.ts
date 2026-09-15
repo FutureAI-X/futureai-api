@@ -114,6 +114,10 @@ export interface CreditRule {
   base_credits: number
   description?: string
   status: number
+  /** 每张参考图消耗的积分，0 = 不计费。叠加在基础积分之上 */
+  ref_image_credits?: number
+  /** 参考图参数名（逗号分隔），空串表示使用后端内置默认值 */
+  ref_image_params?: string
   created_at: string
   updated_at: string
   items?: CreditRuleItem[]
@@ -127,6 +131,8 @@ export function saveCreditRule(modelId: number, data: {
   rule_type: string
   base_credits: number
   description?: string
+  ref_image_credits?: number
+  ref_image_params?: string
   items?: CreditRuleItem[]
 }) {
   return request<{ success: boolean; message: string }>(`${BASE}/models/${modelId}/credit-rule`, {

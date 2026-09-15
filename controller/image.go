@@ -3,6 +3,8 @@ package controller
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"time"
 
@@ -109,11 +111,15 @@ func ImageGenerate(c *gin.Context) {
 	// 7. 计算积分消耗。
 	// 必须在覆盖 reqBody["model"] 之前计算：差异化计费规则可能以 model 作为条件，
 	// 此处应匹配调用方传入的模型名，而不是供应商侧的模型 ID。
-	creditsAmount, err := resolveCredits(m.ID, reqBody)
+	credits, err := resolveCredits(m.ID, reqBody, endpoint.Path)
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 计费规则解析失败: model=%s, err=%v", modelName, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费规则，暂不可用"})
 		return
+	}
+	if credits.RefImageCount > 0 {
+		common.SysLogf("[ImageGenerate] 含参考图附加计费: model=%s, 参考图=%d张, 基础=%.2f, 合计=%.2f",
+			modelName, credits.RefImageCount, credits.Base, credits.Total)
 	}
 
 	// 8. 先扣费、后调用上游。
@@ -126,12 +132,12 @@ func ImageGenerate(c *gin.Context) {
 		ModelID:    m.ID,
 		EndpointID: endpoint.ID,
 		Status:     "pending", // 尚未提交上游
-		Credits:    creditsAmount,
+		Credits:    credits.Total,
 	}
 
-	if err := model.CreateTaskAndDeduct(&task, creditsAmount, "图像生成任务"); err != nil {
+	if err := model.CreateTaskAndDeduct(&task, credits.Total, credits.Remark()); err != nil {
 		if errors.Is(err, model.ErrInsufficientCredits) {
-			common.SysErrorf("[ImageGenerate] 积分不足: userID=%d, amount=%.6f", userID, creditsAmount)
+			common.SysErrorf("[ImageGenerate] 积分不足: userID=%d, amount=%.6f", userID, credits.Total)
 			c.JSON(http.StatusPaymentRequired, gin.H{"code": "fail", "message": "积分不足"})
 		} else {
 			common.SysErrorf("[ImageGenerate] 任务创建失败: %v", err)
@@ -189,18 +195,62 @@ func ImageGenerate(c *gin.Context) {
 	})
 }
 
+// maxRefImagesPerRequest 单次请求计入计费的参考图张数上限。
+// 请求体目前没有大小限制，若不封顶，一个上万元素的数组会产生荒谬的扣费
+// （并让调用方必然 402）。超出部分不再计费，仅记日志告警。
+const maxRefImagesPerRequest = 100
+
+// refImageEndpoints 支持参考图附加计费的端点白名单。
+// 刻意用白名单而非「非对话端点」的反向判断：将来若有多模态对话端点复用
+// resolveCredits，其请求体同样会带 images / image_urls 这类字段，白名单能防止误加价。
+var refImageEndpoints = map[string]bool{
+	"/v1/images/generations": true,
+	"/v1/images/edits":       true,
+}
+
+// isRefImageEndpoint 判断端点是否支持参考图附加计费。
+// 新增图片类端点时记得在上面的白名单里登记。
+func isRefImageEndpoint(path string) bool {
+	return refImageEndpoints[path]
+}
+
+// creditResolution 一次请求的计费结果
+type creditResolution struct {
+	// Total 本次应扣的总积分
+	Total float64
+
+	// Base 其中的基础部分（基础积分或命中的参数组合积分），不含参考图
+	Base float64
+
+	// RefImageCount 计入的参考图张数
+	RefImageCount int
+}
+
+// Remark 生成扣费备注。CreditLog.Remark 是 varchar(255)，超长在 Postgres 上是
+// 硬报错而非截断，所以格式固定且短；张数已封顶 100，长度可控。
+func (r creditResolution) Remark() string {
+	if r.RefImageCount <= 0 {
+		return "图像生成任务"
+	}
+	return fmt.Sprintf("图像生成任务(基础%.2f+参考图%d张)", r.Base, r.RefImageCount)
+}
+
 // resolveCredits 按模型的计费规则计算本次请求应扣积分。
 // 未配置规则时返回错误（fail-closed）：否则模型漏配规则会变成对所有人免费，
 // 而这是运维上极易发生、且不会被察觉的资损。如需免费模型，请显式配置一条 0 积分的规则。
-func resolveCredits(modelID int, reqBody map[string]interface{}) (float64, error) {
+//
+// 计费公式：基础积分（或命中的参数组合积分）+ 参考图张数 × 每张参考图积分。
+// 参考图部分是叠加而非取代，且只对 endpointPath 命中白名单的图片端点生效。
+func resolveCredits(modelID int, reqBody map[string]interface{}, endpointPath string) (creditResolution, error) {
 	creditRule, err := model.GetCreditRuleByModelID(modelID)
 	if err != nil || creditRule == nil {
-		return 0, errors.New("模型未配置计费规则")
+		return creditResolution{}, errors.New("模型未配置计费规则")
 	}
 
 	creditsAmount := creditRule.BaseCredits
 
-	// 参数组合差异化定价：某组合的所有条件都命中时使用该组合的积分
+	// 参数组合差异化定价：某组合的所有条件都命中时使用该组合的积分。
+	// 注意条件只支持字符串值的顶层参数，数组值（如参考图）永远匹配不上。
 	for _, item := range creditRule.Items {
 		matched := len(item.Conditions) > 0
 		for _, cond := range item.Conditions {
@@ -215,10 +265,93 @@ func resolveCredits(modelID int, reqBody map[string]interface{}) (float64, error
 		}
 	}
 
-	if creditsAmount < 0 {
-		return 0, errors.New("计费规则中的积分为负数")
+	baseAmount := creditsAmount
+
+	// 参考图附加计费。必须放在下面的负数守卫之前——否则一条被改成负数的单价
+	// 会绕过校验，变成反向给用户送积分。
+	refImageCount := 0
+	if creditRule.RefImageCredits > 0 && isRefImageEndpoint(endpointPath) {
+		refImageCount = countRefImages(reqBody, creditRule.EffectiveRefImageParams())
+		creditsAmount += float64(refImageCount) * creditRule.RefImageCredits
 	}
-	return creditsAmount, nil
+
+	if creditsAmount < 0 {
+		return creditResolution{}, errors.New("计费规则中的积分为负数")
+	}
+
+	// 收敛到 2 位小数：0.01*3 这类累加会产出 0.030000000000000002。
+	// 写库虽是 numeric(20,6) 会被四舍五入，但内存值会与实际扣费不一致。
+	return creditResolution{
+		Total:         math.Round(creditsAmount*100) / 100,
+		Base:          math.Round(baseAmount*100) / 100,
+		RefImageCount: refImageCount,
+	}, nil
+}
+
+// countRefImages 统计请求体中携带的参考图张数。
+// 按「去重后的图片值」计数：默认参数名里的 image / image_url / image_urls 是
+// 同一张图的不同 SDK 写法，若按参数名累加，会把一张图扣上 2~3 次。
+func countRefImages(reqBody map[string]interface{}, params []string) int {
+	seen := make(map[string]bool)
+	for _, name := range params {
+		raw, ok := reqBody[name]
+		if !ok || raw == nil {
+			continue
+		}
+		for _, v := range refImageValues(raw, name) {
+			seen[v] = true
+		}
+	}
+
+	if len(seen) > maxRefImagesPerRequest {
+		common.SysErrorf("[countRefImages] 参考图张数 %d 超过上限 %d，超出部分不计费", len(seen), maxRefImagesPerRequest)
+		return maxRefImagesPerRequest
+	}
+	return len(seen)
+}
+
+// refImageValues 把某个参数名的取值归一化成图片值列表（用于去重计数）。
+// 未知类型保守按 1 张计并告警：漏计费是资损，多计费只是一次可解释的争议。
+func refImageValues(raw interface{}, name string) []string {
+	switch v := raw.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+
+	case []interface{}:
+		values := make([]string, 0, len(v))
+		for _, elem := range v {
+			if s, ok := elem.(string); ok {
+				// 空串是「占位但没填」，不算一张图
+				if s != "" {
+					values = append(values, s)
+				}
+				continue
+			}
+			// 元素非字符串（0 / false / {} / null）：只有非 nil 才当作一张图。
+			// 朴素的 s != "" 判断会把 0 和 false 误判成有效图片。
+			if elem != nil {
+				common.SysErrorf("[countRefImages] 参数 %s 的数组元素类型为 %T，按 1 张计入", name, elem)
+				values = append(values, fmt.Sprintf("%v", elem))
+			}
+		}
+		return values
+
+	case []string:
+		values := make([]string, 0, len(v))
+		for _, s := range v {
+			if s != "" {
+				values = append(values, s)
+			}
+		}
+		return values
+
+	default:
+		common.SysErrorf("[countRefImages] 参数 %s 的类型为 %T，无法识别，按 1 张计入", name, raw)
+		return []string{fmt.Sprintf("%v", raw)}
+	}
 }
 
 // GetTask 查询任务状态

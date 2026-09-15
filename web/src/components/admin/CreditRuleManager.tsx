@@ -7,6 +7,7 @@ import {
   Coins,
   Settings,
   CheckCircle2,
+  Image as ImageIcon,
 } from 'lucide-react'
 import {
   getCreditRule,
@@ -19,6 +20,9 @@ import { ConfirmDialog } from './ConfirmDialog'
 const RULE_TYPE_OPTIONS = [
   { value: 'per_request', label: '按次计费' },
 ]
+
+// 与后端 model.DefaultRefImageParams 保持一致
+const DEFAULT_REF_IMAGE_PARAMS = 'image,images,image_url,image_urls,ref_images'
 
 // 表单项接口（credits 用字符串处理输入）
 interface FormCreditCondition {
@@ -48,6 +52,8 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
   const [formRuleType, setFormRuleType] = useState('per_request')
   const [formBaseCredits, setFormBaseCredits] = useState('')
   const [formDesc, setFormDesc] = useState('')
+  const [formRefImageCredits, setFormRefImageCredits] = useState('')
+  const [formRefImageParams, setFormRefImageParams] = useState('')
   const [formItems, setFormItems] = useState<FormCreditItem[]>([])
   const [formError, setFormError] = useState('')
   const [formSaving, setFormSaving] = useState(false)
@@ -58,6 +64,18 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
     return credits.toFixed(2)
   }
 
+  // 清空表单。所有「加载失败 / 无规则 / 删除成功」的分支都必须走这里，
+  // 否则上一个模型的价格会串到下一个模型上。
+  const resetForm = useCallback(() => {
+    setRule(null)
+    setFormRuleType('per_request')
+    setFormBaseCredits('')
+    setFormDesc('')
+    setFormRefImageCredits('')
+    setFormRefImageParams('')
+    setFormItems([])
+  }, [])
+
   const loadRule = useCallback(async () => {
     setLoading(true)
     try {
@@ -67,6 +85,9 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
         setFormRuleType(res.data.rule_type)
         setFormBaseCredits(formatCredits(res.data.base_credits))
         setFormDesc(res.data.description || '')
+        // 老规则没有这两个字段，用 ?? 兜底避免 formatCredits(undefined) 崩溃
+        setFormRefImageCredits(formatCredits(res.data.ref_image_credits ?? 0))
+        setFormRefImageParams(res.data.ref_image_params || DEFAULT_REF_IMAGE_PARAMS)
         // 将后端数据转换为表单格式
         setFormItems((res.data.items || []).map(item => ({
           credits: formatCredits(item.credits),
@@ -76,18 +97,14 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
           })),
         })))
       } else {
-        setRule(null)
-        setFormRuleType('per_request')
-        setFormBaseCredits('')
-        setFormDesc('')
-        setFormItems([])
+        resetForm()
       }
     } catch {
-      setRule(null)
+      resetForm()
     } finally {
       setLoading(false)
     }
-  }, [modelId])
+  }, [modelId, resetForm])
 
   useEffect(() => {
     if (open) loadRule()
@@ -157,6 +174,17 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
       return
     }
 
+    // 参考图积分允许为 0（表示不计费），空值按 0 处理
+    const refImageCredits = formRefImageCredits.trim() === '' ? 0 : parseFloat(formRefImageCredits)
+    if (isNaN(refImageCredits) || refImageCredits < 0) {
+      setFormError('每张参考图积分不能为负数')
+      return
+    }
+    if (!validateDecimalPlaces(refImageCredits)) {
+      setFormError('每张参考图积分最多支持2位小数')
+      return
+    }
+
     // 验证参数组合映射
     for (let i = 0; i < formItems.length; i++) {
       const item = formItems[i]
@@ -188,6 +216,10 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
         rule_type: formRuleType,
         base_credits: parseFloat(formBaseCredits),
         description: formDesc || undefined,
+        ref_image_credits: refImageCredits,
+        // 显式发送（可能为空串）：后端把空串规范化为内置默认值，
+        // 这样「清空输入框」才能真的恢复默认，而不是变成一个静默的空操作
+        ref_image_params: formRefImageParams.trim(),
         items: formItems.length > 0 ? formItems.map(item => ({
           credits: parseFloat(item.credits),
           conditions: item.conditions.map(c => ({
@@ -216,11 +248,7 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
     try {
       await deleteModelCreditRule(modelId)
       setDeleteOpen(false)
-      setRule(null)
-      setFormRuleType('per_request')
-      setFormBaseCredits('')
-      setFormDesc('')
-      setFormItems([])
+      resetForm()
     } catch { /* ignore */ }
     finally { setActionLoading(false) }
   }
@@ -322,7 +350,9 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                 </div>
 
                 <p className='text-muted-foreground mb-4 text-xs'>
-                  为不同的参数组合设置差异化积分，当请求的所有条件都命中时使用该组合的积分，否则使用基础积分
+                  为不同的参数组合设置差异化积分，当请求的所有条件都命中时使用该组合的积分，否则使用基础积分。
+                  条件仅支持顶层参数且值必须为<strong className='font-medium text-foreground'>字符串</strong>，
+                  数组类型的参数（如参考图）不会命中——参考图请用下方的「参考图附加计费」。
                 </p>
 
                 {formItems.length === 0 ? (
@@ -407,6 +437,53 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* 参考图附加计费 */}
+              <div className='rounded-lg border border-border/60 p-5'>
+                <div className='mb-4 flex items-center gap-2'>
+                  <ImageIcon className='size-4 text-muted-foreground' />
+                  <h3 className='text-sm font-medium'>参考图附加计费 <span className='text-muted-foreground font-normal'>（可选）</span></h3>
+                </div>
+
+                <p className='text-muted-foreground mb-4 text-xs'>
+                  在基础积分之上<strong className='font-medium text-foreground'>叠加</strong>：图片生成时按请求中携带的参考图张数计费，
+                  留空或填 0 表示不计费。同一张图重复出现在多个参数名下只计一次。
+                </p>
+
+                <div className='grid grid-cols-2 gap-6'>
+                  <div className='space-y-2'>
+                    <label className='text-sm font-medium'>每张参考图积分</label>
+                    <div className='flex items-center gap-2'>
+                      <input
+                        type='text'
+                        inputMode='decimal'
+                        value={formRefImageCredits}
+                        onChange={(e) => setFormRefImageCredits(e.target.value)}
+                        placeholder='0 表示不计费'
+                        className='border-border/60 bg-background focus-visible:ring-ring flex h-9 flex-1 rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                      />
+                      <span className='text-muted-foreground text-sm whitespace-nowrap'>积分/张</span>
+                    </div>
+                    <p className='text-muted-foreground text-xs'>
+                      例如基础积分 2.00、此处填 1.00，则带 3 张参考图共扣 5.00
+                    </p>
+                  </div>
+
+                  <div className='space-y-2'>
+                    <label className='text-sm font-medium'>参考图参数名</label>
+                    <input
+                      type='text'
+                      value={formRefImageParams}
+                      onChange={(e) => setFormRefImageParams(e.target.value)}
+                      placeholder={DEFAULT_REF_IMAGE_PARAMS}
+                      className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                    />
+                    <p className='text-muted-foreground text-xs'>
+                      逗号分隔，留空使用默认值。只填实际会用到的参数名
+                    </p>
+                  </div>
+                </div>
               </div>
 
               {/* 错误提示 */}
