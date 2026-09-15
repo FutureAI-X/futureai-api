@@ -159,10 +159,31 @@ func (CreditRuleCondition) TableName() string {
 	return "credit_rule_conditions"
 }
 
+// PreloadRuleItems 预加载规则的参数组合及其条件，并固定两者的顺序。
+//
+// 排序不是可有可无的：计费时 resolveCredits 取「第一个全部条件命中的组合」
+// （controller/image.go），若 Items 顺序不确定，同一个请求可能命中不同组合、
+// 扣掉不同的积分；前端弹框里展示的顺序也会与实际生效顺序不一致。
+//
+// 用 id 升序而非创建时间：ReplaceCreditRuleItems 每次保存都是先删后建，
+// 因此 id 顺序就等于管理端表单里的顺序。条件的顺序同理，它决定
+// 「resolution=1k & quality=high」里各段的先后。
+//
+// 三个查询点共用本函数，避免只改一处导致顺序在不同接口间不一致。
+func PreloadRuleItems(db *gorm.DB) *gorm.DB {
+	return db.
+		Preload("Items", func(tx *gorm.DB) *gorm.DB {
+			return tx.Order("credit_rule_items.id ASC")
+		}).
+		Preload("Items.Conditions", func(tx *gorm.DB) *gorm.DB {
+			return tx.Order("credit_rule_conditions.id ASC")
+		})
+}
+
 // GetCreditRuleByModelID 获取指定模型的积分规则（含参数组合映射）
 func GetCreditRuleByModelID(modelID int) (*CreditRule, error) {
 	var rule CreditRule
-	err := DB.Preload("Items.Conditions").Where("model_id = ? AND status = ?", modelID, 1).First(&rule).Error
+	err := PreloadRuleItems(DB).Where("model_id = ? AND status = ?", modelID, 1).First(&rule).Error
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +193,7 @@ func GetCreditRuleByModelID(modelID int) (*CreditRule, error) {
 // GetCreditRuleByID 根据 ID 获取积分规则
 func GetCreditRuleByID(id int) (*CreditRule, error) {
 	var rule CreditRule
-	err := DB.Preload("Items.Conditions").Where("id = ?", id).First(&rule).Error
+	err := PreloadRuleItems(DB).Where("id = ?", id).First(&rule).Error
 	if err != nil {
 		return nil, err
 	}

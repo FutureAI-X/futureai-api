@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Search, LayoutGrid, List, Image as ImageIcon } from 'lucide-react'
+import { Search, LayoutGrid, List, ChevronRight } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Header } from '../components/Header'
 import { PricingSidebar } from '../components/PricingSidebar'
@@ -27,7 +27,13 @@ function ModelCard({
   const tags = parseTags(model.tags)
   const initial = model.name?.charAt(0).toUpperCase() || '?'
   const creditRule = model.credit_rule
-  const refCredits = creditRule?.ref_image_credits ?? 0
+
+  // 卡片上标「起」，所以这里必须是真实下限：某个参数组合可能比基础积分更便宜，
+  // 直接拿 base_credits 加「起」会说谎。items 为空时 Math.min 只有 base 一项。
+  // Math.min() 不带参数会返回 Infinity，所以 base 必须始终参与比较。
+  const minCredits = creditRule
+    ? Math.min(creditRule.base_credits, ...(creditRule.items ?? []).map((i) => i.credits))
+    : 0
 
   // 点击处理器挂在卡片本身，而不是标题按钮的拉伸伪元素上。
   //
@@ -61,17 +67,8 @@ function ModelCard({
               </span>
             </div>
             <div className='min-w-0'>
-              {/* 无障碍名称就是模型名的可聚焦入口：键盘 Tab 到它按 Enter/Space
-                  会派发 click 并冒泡到卡片，因此不必重复挂 onClick。
-                  卡片本身是 div，不给它 role="button"——里面嵌着复制按钮，
-                  那样会构成 nested-interactive 违规，无障碍名称也会被拼成一整段。 */}
-              <h3 className='text-foreground min-w-0 font-mono text-sm font-bold sm:text-[15px]'>
-                <button
-                  type='button'
-                  className='focus-visible:ring-ring block max-w-full truncate rounded text-left focus-visible:ring-2 focus-visible:outline-none'
-                >
-                  {model.name}
-                </button>
+              <h3 className='text-foreground min-w-0 truncate font-mono text-sm font-bold sm:text-[15px]'>
+                {model.name}
               </h3>
               <p className='text-muted-foreground mt-0.5 text-xs'>
                 {model.owner}
@@ -108,50 +105,34 @@ function ModelCard({
         )}
       </div>
 
-      {/* 积分消耗 */}
+      {/* 积分消耗：卡片上只给一个「起」价，完整规则点开详情看 */}
       {creditRule && (
         <div className='px-4 pb-3 sm:px-5 sm:pb-4'>
           <div className='flex items-center justify-between'>
             <div className='flex items-baseline gap-1'>
               <span className='text-xl font-bold tracking-tight sm:text-2xl'>
-                {creditRule.base_credits.toFixed(2)}
+                {minCredits.toFixed(2)}
               </span>
-              <span className='text-muted-foreground text-xs'>积分/次</span>
+              <span className='text-muted-foreground text-xs'>积分起</span>
             </div>
             <span className='bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-[11px] font-medium'>
               按次计费
             </span>
           </div>
-          {creditRule.items && creditRule.items.length > 0 && (
-            <div className='mt-2 flex flex-wrap gap-1.5'>
-              {creditRule.items.slice(0, 3).map((item) => (
-                <span
-                  key={item.id}
-                  className='inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px]'
-                >
-                  <span className='text-muted-foreground'>
-                    {(item.conditions || []).map(c => `${c.param_path}=${c.param_value}`).join(' & ')}
-                  </span>
-                  <span className='font-medium'>{item.credits.toFixed(2)}</span>
-                </span>
-              ))}
-              {creditRule.items.length > 3 && (
-                <span className='text-muted-foreground text-[11px] underline underline-offset-2'>
-                  点击查看全部 {creditRule.items.length} 条
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* 参考图附加计费：单独一行，绝不累加进上面的基础积分大数字 */}
-          {refCredits > 0 && (
-            <div className='text-muted-foreground mt-2 flex items-center gap-1 text-[11px]'>
-              <ImageIcon className='size-3 shrink-0' />
-              参考图 {refCredits.toFixed(2)} 积分/张
-            </div>
-          )}
         </div>
       )}
+
+      {/* 明确的入口按钮：只靠整卡热区，用户根本看不出卡片可以点 */}
+      <div className='px-4 pb-4 sm:px-5 sm:pb-5'>
+        <button
+          type='button'
+          onClick={handleOpen}
+          className='border-border/60 text-foreground hover:bg-muted focus-visible:ring-ring inline-flex h-9 w-full items-center justify-center gap-1 rounded-lg border text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none'
+        >
+          查看计费详情
+          <ChevronRight className='size-3.5' />
+        </button>
+      </div>
     </div>
   )
 }
