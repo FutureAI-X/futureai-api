@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Search, Copy, LayoutGrid, List } from 'lucide-react'
+import { Search, LayoutGrid, List, Image as ImageIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Header } from '../components/Header'
 import { PricingSidebar } from '../components/PricingSidebar'
+import { CopyButton } from '../components/CopyButton'
+import { ModelDetailDialog } from '../components/ModelDetailDialog'
 import type { PricingModel, PricingData } from '../types/pricing'
 
 // ── 筛选常量 ──
@@ -14,31 +16,40 @@ function parseTags(tags?: string): string[] {
   return tags.split(',').map((t) => t.trim()).filter(Boolean)
 }
 
-// ── 复制到剪贴板 ──
-function useCopyToClipboard() {
-  const [copied, setCopied] = useState(false)
-  const copy = useCallback((text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }, [])
-  return { copied, copy }
-}
-
 // ── 模型卡片 ──
 function ModelCard({
   model,
+  onOpen,
 }: {
   model: PricingModel
+  onOpen: (model: PricingModel) => void
 }) {
-  const { copy } = useCopyToClipboard()
   const tags = parseTags(model.tags)
   const initial = model.name?.charAt(0).toUpperCase() || '?'
   const creditRule = model.credit_rule
+  const refCredits = creditRule?.ref_image_credits ?? 0
+
+  // 点击处理器挂在卡片本身，而不是标题按钮的拉伸伪元素上。
+  //
+  // 曾经的写法是给标题按钮加 `after:absolute after:inset-0` 把热区铺满整卡——
+  // 真实点击会失效，因为 index.css 有一条全局规则
+  // `button:not(:disabled):active { transform: scale(0.98) }`：
+  // transform 会让按钮成为其绝对定位后代的包含块，于是鼠标按下的瞬间
+  // `::after` 从「整张卡片」塌缩成「按钮自己那一小块」，mouseup 落到别的元素上，
+  // click 最终派发给两者的共同祖先（即本卡片），按钮的 onClick 永远不触发，
+  // 且没有任何报错。挂在卡片上就没有这个问题——click 无论落在卡片的哪个后代，
+  // 都会冒泡到这里。
+  const handleOpen = () => {
+    // 划选卡片里的文字松手时同样会派发 click，不拦掉会误弹
+    if (window.getSelection()?.toString()) return
+    onOpen(model)
+  }
 
   return (
-    <div className='group relative flex flex-col overflow-hidden rounded-xl border transition-all hover:border-foreground/20 hover:shadow-lg'>
+    <div
+      onClick={handleOpen}
+      className='group relative flex cursor-pointer flex-col overflow-hidden rounded-xl border transition-all hover:border-foreground/20 hover:shadow-lg'
+    >
       {/* 主内容区 */}
       <div className='flex flex-1 flex-col p-4 sm:p-5'>
         {/* 头部：图标 + 名称 + 操作 */}
@@ -50,8 +61,17 @@ function ModelCard({
               </span>
             </div>
             <div className='min-w-0'>
-              <h3 className='text-foreground truncate font-mono text-sm font-bold sm:text-[15px]'>
-                {model.name}
+              {/* 无障碍名称就是模型名的可聚焦入口：键盘 Tab 到它按 Enter/Space
+                  会派发 click 并冒泡到卡片，因此不必重复挂 onClick。
+                  卡片本身是 div，不给它 role="button"——里面嵌着复制按钮，
+                  那样会构成 nested-interactive 违规，无障碍名称也会被拼成一整段。 */}
+              <h3 className='text-foreground min-w-0 font-mono text-sm font-bold sm:text-[15px]'>
+                <button
+                  type='button'
+                  className='focus-visible:ring-ring block max-w-full truncate rounded text-left focus-visible:ring-2 focus-visible:outline-none'
+                >
+                  {model.name}
+                </button>
               </h3>
               <p className='text-muted-foreground mt-0.5 text-xs'>
                 {model.owner}
@@ -59,14 +79,10 @@ function ModelCard({
             </div>
           </div>
 
-          <button
-            type='button'
-            onClick={() => copy(model.name)}
-            className='text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg p-1.5 transition-colors'
-            title='复制模型名称'
-          >
-            <Copy className='size-3.5' />
-          </button>
+          {/* 点复制不应连带打开详情 */}
+          <div onClick={(e) => e.stopPropagation()}>
+            <CopyButton text={model.name} />
+          </div>
         </div>
 
         {/* 描述 */}
@@ -120,8 +136,18 @@ function ModelCard({
                 </span>
               ))}
               {creditRule.items.length > 3 && (
-                <span className='text-muted-foreground text-[11px]'>+{creditRule.items.length - 3}</span>
+                <span className='text-muted-foreground text-[11px] underline underline-offset-2'>
+                  点击查看全部 {creditRule.items.length} 条
+                </span>
               )}
+            </div>
+          )}
+
+          {/* 参考图附加计费：单独一行，绝不累加进上面的基础积分大数字 */}
+          {refCredits > 0 && (
+            <div className='text-muted-foreground mt-2 flex items-center gap-1 text-[11px]'>
+              <ImageIcon className='size-3 shrink-0' />
+              参考图 {refCredits.toFixed(2)} 积分/张
             </div>
           )}
         </div>
@@ -138,6 +164,10 @@ export function Pricing() {
   const [search, setSearch] = useState('')
   const [tagFilter, setTagFilter] = useState(FILTER_ALL)
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card')
+  const [detail, setDetail] = useState<PricingModel | null>(null)
+
+  // 必须是稳定引用：ModelDetailDialog 的 Escape 监听以 onClose 为依赖
+  const closeDetail = useCallback(() => setDetail(null), [])
 
   // 获取定价数据
   useEffect(() => {
@@ -227,6 +257,9 @@ export function Pricing() {
     )
   }
 
+  // 注意根节点的 overflow-x-clip：overflow: clip 不会为 fixed 后代创建包含块，
+  // 所以 ModelDetailDialog 能正常逃逸。但若今后给这个根节点或中间层加上
+  // transform / filter / will-change / contain，弹框会被静默困在裁剪区域内。
   return (
     <div className='bg-background text-foreground relative min-h-svh overflow-x-clip'>
       <Header />
@@ -363,6 +396,7 @@ export function Pricing() {
                     <ModelCard
                       key={model.id}
                       model={model}
+                      onOpen={setDetail}
                     />
                   ))}
                 </div>
@@ -374,14 +408,22 @@ export function Pricing() {
                         <th className='px-4 py-3 text-left text-xs font-medium'>模型</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>开发者</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>描述</th>
+                        <th className='px-4 py-3 text-left text-xs font-medium'>基础积分</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>标签</th>
+                        <th className='px-4 py-3 text-right text-xs font-medium'>操作</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredModels.map((model) => (
                         <tr
                           key={model.id}
-                          className='border-border/20 hover:bg-muted/20 border-b transition-colors'
+                          onClick={() => {
+                            // 划选描述文字松手时浏览器同样会派发 click，
+                            // 不拦掉的话每次复制表格里的文字都会弹出详情
+                            if (window.getSelection()?.toString()) return
+                            setDetail(model)
+                          }}
+                          className='border-border/20 hover:bg-muted/20 cursor-pointer border-b transition-colors'
                         >
                           <td className='px-4 py-3'>
                             <span className='font-mono text-sm font-medium'>{model.name}</span>
@@ -391,6 +433,17 @@ export function Pricing() {
                           </td>
                           <td className='text-muted-foreground px-4 py-3 text-sm max-w-xs truncate'>
                             {model.description || '-'}
+                          </td>
+                          <td className='px-4 py-3 text-sm'>
+                            {model.credit_rule ? (
+                              <>
+                                <span className='font-medium'>{model.credit_rule.base_credits.toFixed(2)}</span>
+                                <span className='text-muted-foreground text-xs'> 积分/次</span>
+                              </>
+                            ) : (
+                              // 无计费规则的模型也要占位，否则这一列会错位
+                              <span className='text-muted-foreground'>-</span>
+                            )}
                           </td>
                           <td className='px-4 py-3'>
                             <div className='flex flex-wrap gap-1'>
@@ -405,6 +458,20 @@ export function Pricing() {
                                   </span>
                                 ))}
                             </div>
+                          </td>
+                          <td className='px-4 py-3 text-right'>
+                            {/* 显式按钮 = 键盘可达入口；tr 上刻意不加 role，
+                                否则会覆盖 role="row" 破坏表格语义 */}
+                            <button
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setDetail(model)
+                              }}
+                              className='text-primary hover:bg-primary/10 inline-flex h-8 items-center rounded-lg px-2.5 text-xs font-medium transition-colors'
+                            >
+                              详情
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -428,6 +495,8 @@ export function Pricing() {
           <p className='text-muted-foreground/60 text-xs'>© 2026 Token Hub. 基于 Go + Gin + React 构建</p>
         </div>
       </footer>
+
+      <ModelDetailDialog model={detail} onClose={closeDetail} />
     </div>
   )
 }

@@ -221,6 +221,11 @@
 }
 
 /* ── Micro-interactions ── */
+/* 注意：按下时的 transform 会让按钮成为其绝对/固定定位后代的包含块。
+   因此不要给按钮挂「拉伸层」式热区（after:absolute + after:inset-0）：
+   鼠标按下的瞬间伪元素会从父容器塌缩回按钮自身，mouseup 落到别的元素上，
+   click 最终派发给两者的共同祖先，按钮的 onClick 静默失效且无任何报错。
+   若确实需要整卡/整行可点，把 onClick 挂到外层容器上。 */
 @media (prefers-reduced-motion: no-preference) {
   button:not(:disabled):active,
   [role='button']:not(:disabled):active {

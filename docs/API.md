@@ -76,6 +76,38 @@ GET /api/pricing
 
 该接口对未登录用户开放，因此响应里**不应包含任何 `api_key` 字段**。
 
+响应结构：
+
+```json
+{
+  "success": true,
+  "data": {
+    "models": [
+      {
+        "id": 3,
+        "name": "gpt-image-2",
+        "owner": "FutureAI",
+        "description": "...",
+        "tags": "...",
+        "status": 1,
+        "credit_rule": {
+          "rule_type": "per_request",
+          "base_credits": 1.0,
+          "ref_image_credits": 2.0,
+          "ref_image_params": "image,images,image_url,image_urls,ref_images",
+          "items": [
+            { "credits": 0.1, "conditions": [{ "param_path": "resolution", "param_value": "2k" }] }
+          ]
+        }
+      }
+    ]
+  }
+}
+```
+
+`credit_rule` 在模型未配置（或规则被禁用）时**不出现**，调用方需要判空。
+模型广场的详情弹框消费的就是这个字段。
+
 单个模型的积分规则由管理端配置，计算公式为：
 
 ```

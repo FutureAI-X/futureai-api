@@ -47,28 +47,6 @@ func GetVendors() ([]Vendor, error) {
 	return vendors, err
 }
 
-// PublicVendor 供应商公开信息。
-// 用于 /api/pricing 这类无需认证的接口——刻意不包含 APIKey / BaseURL，
-// 避免向匿名调用方泄露上游凭据与供应商基础设施地址。
-type PublicVendor struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Status      int    `json:"status"`
-}
-
-// GetPublicVendors 获取所有启用供应商的公开信息（绝不包含密钥字段）。
-// 使用显式 Select 白名单，即使未来 Vendor 增加敏感字段也不会连带泄露。
-func GetPublicVendors() ([]PublicVendor, error) {
-	var vendors []PublicVendor
-	err := DB.Model(&Vendor{}).
-		Select("id", "name", "description", "status").
-		Where("status = ?", VendorStatusEnabled).
-		Order("id ASC").
-		Find(&vendors).Error
-	return vendors, err
-}
-
 // GetVendorMap 获取供应商名称到对象的映射
 func GetVendorMap() (map[string]Vendor, error) {
 	var vendors []Vendor

@@ -33,33 +33,6 @@ func TestVendorJSONNeverContainsAPIKey(t *testing.T) {
 	}
 }
 
-// TestPublicVendorHasNoSecretFields 校验对外 DTO 的字段白名单
-func TestPublicVendorHasNoSecretFields(t *testing.T) {
-	pv := PublicVendor{
-		ID:          1,
-		Name:        "APIMart",
-		Description: "test",
-		Status:      1,
-	}
-
-	encoded, err := json.Marshal(pv)
-	if err != nil {
-		t.Fatalf("序列化失败: %v", err)
-	}
-	out := string(encoded)
-
-	for _, forbidden := range []string{"api_key", "base_url", "secret", "token"} {
-		if strings.Contains(out, forbidden) {
-			t.Errorf("PublicVendor 不应包含 %q 字段: %s", forbidden, out)
-		}
-	}
-}
-
-// TestPublicVendorOmitsEmptyDescription 空描述不应产生噪音字段
-func TestPublicVendorOmitsEmptyDescription(t *testing.T) {
-	pv := PublicVendor{ID: 1, Name: "APIMart", Status: 1}
-	encoded, _ := json.Marshal(pv)
-	if strings.Contains(string(encoded), "description") {
-		t.Errorf("空 description 应被省略: %s", encoded)
-	}
-}
+// 说明：随 /api/pricing 移除 vendors 字段，PublicVendor DTO 及其两个字段白名单测试
+// 已一并删除。上面 TestVendorJSONNeverContainsAPIKey 才是 C1 的回归测试——它锁定的是
+// Vendor 自身的 APIKey 带 json:"-"，与 DTO 存废无关，必须保留。
