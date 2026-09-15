@@ -130,6 +130,7 @@ export interface AdminTaskLog {
   status: string
   credits: number
   credits_refunded: boolean
+  request_body?: string
   query_response?: string
   created_at: string
   updated_at: string

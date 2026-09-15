@@ -20,13 +20,16 @@ func ListModels(c *gin.Context) {
 		return
 	}
 
-	// 转换为 OpenAI 兼容格式
+	// 转换为 OpenAI 兼容格式。
+	// type 是 OpenAI 规范外的附加字段：调用方需要据此区分图像/视频/文本模型，
+	// 纯增量字段，标准客户端会直接忽略。
 	data := make([]gin.H, len(models))
 	for i, m := range models {
 		data[i] = gin.H{
 			"id":       m.Name,
 			"object":   "model",
 			"owned_by": m.Owner,
+			"type":     m.Type,
 		}
 	}
 

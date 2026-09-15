@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/FutureAI/token-hub/model"
 )
@@ -156,6 +159,65 @@ func TestIsRefImageModel(t *testing.T) {
 				t.Errorf("isRefImageModel(%q) = %v, want %v", tc.typ, got, tc.want)
 			}
 		})
+	}
+}
+
+// ── marshalRequestBody：回溯用请求体快照 ──
+
+func TestMarshalRequestBodyKeepsNormalBody(t *testing.T) {
+	body := map[string]interface{}{"model": "gpt-image-1", "prompt": "a cat"}
+	got := marshalRequestBody(body)
+
+	// 用 json.Marshal 的结果做期望值，避免依赖 map 键序
+	want, _ := json.Marshal(body)
+	if got != string(want) {
+		t.Errorf("未超长时不应改动内容: got %q, want %q", got, want)
+	}
+}
+
+// 参考图 base64 内联会让请求体到数 MB，必须截断，否则 tasks 表会被撑爆。
+func TestMarshalRequestBodyTruncatesOversizedBody(t *testing.T) {
+	body := map[string]interface{}{"prompt": strings.Repeat("a", maxStoredRequestBody+1024)}
+	got := marshalRequestBody(body)
+
+	if len(got) > maxStoredRequestBody+len(requestBodyTruncatedMarker) {
+		t.Errorf("截断后长度 %d 超出预期上限", len(got))
+	}
+	if !strings.HasSuffix(got, requestBodyTruncatedMarker) {
+		t.Errorf("截断后应带标记，实际长度 %d，结尾: %q", len(got), got[len(got)-32:])
+	}
+	if !utf8.ValidString(got) {
+		t.Error("截断后必须是合法 UTF-8，否则 Postgres 拒绝写入")
+	}
+}
+
+// 截断点落在多字节字符中间时，按 rune 边界回退而不是硬切字节
+func TestMarshalRequestBodyTruncationOnRuneBoundary(t *testing.T) {
+	// 每个汉字 3 字节，截断点必然落在字符内部
+	body := map[string]interface{}{"prompt": strings.Repeat("汉", maxStoredRequestBody)}
+	got := marshalRequestBody(body)
+
+	if !utf8.ValidString(got) {
+		t.Error("截断点应回退到 rune 边界，避免写入无效 UTF-8")
+	}
+	if !strings.HasSuffix(got, requestBodyTruncatedMarker) {
+		t.Error("截断后应带标记")
+	}
+}
+
+// 恰好等于上限时不应截断（边界值，off-by-one 的常见位置）
+func TestMarshalRequestBodyAtMaxBoundary(t *testing.T) {
+	// 先构造固定内容，再用 padding 顶到恰好 maxStoredRequestBody 字节
+	payload := map[string]interface{}{"prompt": ""}
+	raw, _ := json.Marshal(payload)
+	payload["prompt"] = strings.Repeat("a", maxStoredRequestBody-len(raw))
+	raw, _ = json.Marshal(payload)
+
+	if len(raw) != maxStoredRequestBody {
+		t.Fatalf("用例构造有误: 期望恰好 %d 字节，实际 %d", maxStoredRequestBody, len(raw))
+	}
+	if got := marshalRequestBody(payload); got != string(raw) {
+		t.Error("恰好等于上限时不应截断")
 	}
 }
 

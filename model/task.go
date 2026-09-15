@@ -22,6 +22,7 @@ type Task struct {
 	CreditsRefunded bool           `json:"credits_refunded" gorm:"default:false"`              // 积分是否已退还
 	VendorResponse  string         `json:"vendor_response" gorm:"type:text"`                   // 供应商任务提交响应 JSON
 	QueryResponse   string         `json:"query_response" gorm:"type:text"`                    // 供应商任务查询响应 JSON
+	RequestBody     string         `json:"request_body" gorm:"type:text"`                      // 调用方原始请求体 JSON（超长会截断），用于问题回溯
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`

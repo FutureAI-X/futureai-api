@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/FutureAI/token-hub/common"
 	"github.com/FutureAI/token-hub/model"
@@ -133,6 +134,9 @@ func ImageGenerate(c *gin.Context) {
 		EndpointID: endpoint.ID,
 		Status:     "pending", // 尚未提交上游
 		Credits:    credits.Total,
+		// 必须在下面覆盖 reqBody["model"] 之前取快照，否则落库的是供应商侧模型 ID，
+		// 回溯时看不到调用方实际传入的模型名，也无法复现计费规则的匹配过程。
+		RequestBody: marshalRequestBody(reqBody),
 	}
 
 	if err := model.CreateTaskAndDeduct(&task, credits.Total, credits.Remark()); err != nil {
@@ -193,6 +197,40 @@ func ImageGenerate(c *gin.Context) {
 		"code":   "success",
 		"taskId": task.TaskID,
 	})
+}
+
+// maxStoredRequestBody 落库的请求体长度上限（字节）。
+//
+// 定在 1MB 而不是更小的值：调用方基本以 URL 传参考图，正常请求体只有几 KB，
+// 这个上限在常规流量下永远不触发，截断只是兜底——万一有人改成 base64 内联，
+// tasks 又是留存量最大的表，不封顶会把库撑爆。
+const maxStoredRequestBody = 1 << 20
+
+// requestBodyTruncatedMarker 附在截断后的请求体末尾，提示内容不完整
+const requestBodyTruncatedMarker = "...[truncated]"
+
+// marshalRequestBody 把请求体序列化成可落库的字符串。
+//
+// 只用于回溯，因此任何失败都必须降级为「记不下就不记」，绝不能让它影响一次已经扣过费的调用。
+func marshalRequestBody(reqBody map[string]interface{}) string {
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		common.SysErrorf("[ImageGenerate] 请求体序列化失败，本次不记录: %v", err)
+		return ""
+	}
+	if len(data) <= maxStoredRequestBody {
+		return string(data)
+	}
+
+	common.SysErrorf("[ImageGenerate] 请求体 %d 字节超过上限 %d，落库时截断", len(data), maxStoredRequestBody)
+
+	// 直接切字节可能劈开多字节字符，落库后是无效 UTF-8；
+	// 这个索引一定在范围内（len(data) > maxStoredRequestBody），回退必然终止。
+	cut := maxStoredRequestBody
+	for cut > 0 && !utf8.RuneStart(data[cut]) {
+		cut--
+	}
+	return string(data[:cut]) + requestBodyTruncatedMarker
 }
 
 // maxRefImagesPerRequest 单次请求计入计费的参考图张数上限。

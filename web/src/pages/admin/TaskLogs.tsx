@@ -275,6 +275,15 @@ export function AdminTaskLogs() {
                     </div>
                   </div>
 
+                  {detailTask.request_body && (
+                    <div>
+                      <label className='text-muted-foreground text-xs font-medium'>请求体</label>
+                      <pre className='bg-muted/50 mt-1 max-h-40 overflow-auto rounded-lg p-3 text-xs break-all whitespace-pre-wrap'>
+                        {detailTask.request_body}
+                      </pre>
+                    </div>
+                  )}
+
                   {detailTask.query_response && (
                     <div>
                       <label className='text-muted-foreground text-xs font-medium'>查询响应</label>

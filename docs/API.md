@@ -173,10 +173,13 @@ GET /v1/models
 {
   "object": "list",
   "data": [
-    { "id": "deepseek-v4-flash", "object": "model", "owned_by": "token-hub" }
+    { "id": "deepseek-v4-flash", "object": "model", "owned_by": "token-hub", "type": "text" }
   ]
 }
 ```
+
+`type` 是 OpenAI 规范外的附加字段（`image` / `video` / `text` / `music` / `other`），
+供调用方区分模型能力，标准客户端会忽略它。
 
 上传为 `multipart/form-data`，字段名 `file`。超过 10MB 返回 413。
 注意网关侧的 `client_max_body_size` 是 12m，小于此值的话请求会在到达应用之前就被拒绝。
