@@ -5,6 +5,10 @@
 # 用法:
 #   ./deploy/build-image.sh                  # 默认 linux/amd64
 #   ./deploy/build-image.sh linux/arm64      # 交叉编译到 arm64，无需 QEMU
+#   TAG=v1.2.3 ./deploy/build-image.sh       # 指定标签，不用构建时刻
+#
+# 标签默认取构建时刻（20260915225600），每打一次包就是一个新标签。
+# 服务器上的历史镜像因此不会被覆盖，回滚只是改 .env 里的 TOKEN_HUB_TAG。
 #
 # 服务器买好后先确认架构:
 #   ssh <server> uname -m
@@ -17,7 +21,7 @@ set -euo pipefail
 
 PLATFORM="${1:-linux/amd64}"
 IMAGE="${IMAGE:-token-hub}"
-TAG="${TAG:-latest}"
+TAG="${TAG:-$(date +%Y%m%d%H%M%S)}"
 
 case "$PLATFORM" in
   linux/amd64 | linux/arm64) ;;
@@ -39,20 +43,33 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+# 除了时间戳标签，再打一个 latest：服务器上的 .env 若还停在默认值也能直接跑起来。
+# 两个标签指向同一个镜像，docker save / load 都不会多出体积。
+REFS=("$IMAGE:$TAG")
+[ "$TAG" = latest ] || REFS+=("$IMAGE:latest")
+
+TAGS=()
+for ref in "${REFS[@]}"; do TAGS+=(-t "$ref"); done
+
 echo "==> 构建 $IMAGE:$TAG ($PLATFORM)"
-docker buildx build --platform "$PLATFORM" -t "$IMAGE:$TAG" --load .
+docker buildx build --platform "$PLATFORM" "${TAGS[@]}" --load .
 
 echo "==> 导出 $ARCHIVE"
-docker save "$IMAGE:$TAG" | gzip >"$ARCHIVE"
+docker save "${REFS[@]}" | gzip >"$ARCHIVE"
 
 SIZE="$(du -h "$ARCHIVE" | cut -f1)"
 
 cat <<EOF
 
-完成，镜像包 $SIZE。
+完成，镜像包 $SIZE，标签 $TAG。
 
 传到服务器并加载:
   scp "$IMAGE-$TAG-$ARCH.tar.gz" <user>@<server>:/tmp/
   ssh <user>@<server> 'gunzip -c /tmp/$IMAGE-$TAG-$ARCH.tar.gz | docker load'
+
+然后在服务器上把 .env 指向这个标签并重启:
+  cd /opt/stacks/token-hub
+  sed -i 's/^TOKEN_HUB_TAG=.*/TOKEN_HUB_TAG=$TAG/' .env
+  docker compose up -d
 
 EOF

@@ -135,13 +135,16 @@ curl -m 3 telnet://<服务器IP>:5432
 ## 升级
 
 ```bash
-# 本机
+# 本机 —— 脚本会打印出本次的标签，形如 20260915225600
 ./deploy/build-image.sh linux/amd64
-scp token-hub-latest-amd64.tar.gz <user>@<server>:/tmp/
+scp token-hub-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
 
 # 服务器
-gunzip -c /tmp/token-hub-latest-amd64.tar.gz | docker load
-cd /opt/stacks/token-hub && docker compose up -d
+TAG=20260915225600
+gunzip -c /tmp/token-hub-$TAG-amd64.tar.gz | docker load
+cd /opt/stacks/token-hub
+sed -i "s/^TOKEN_HUB_TAG=.*/TOKEN_HUB_TAG=$TAG/" .env
+docker compose up -d
 ```
 
 应用启动时会自动跑 `AutoMigrate`，不需要单独的迁移步骤。
@@ -158,15 +161,21 @@ cd /opt/stacks/token-hub && docker compose up -d
 
 ```bash
 cd /opt/stacks/token-hub
+docker image ls token-hub          # 先看还有哪些版本
 sed -i 's/^TOKEN_HUB_TAG=.*/TOKEN_HUB_TAG=<上一个版本>/' .env
 docker compose up -d
 ```
 
-所以打镜像时建议带版本号而不是一律 `latest`：
+打镜像默认就用构建时刻当标签（`20260915225600`），每次都是一个新版本，
+旧镜像留在服务器上不会被覆盖。想用更直观的版本号就自己指定：
 
 ```bash
 TAG=v1.2.3 ./deploy/build-image.sh linux/amd64
 ```
+
+> 脚本同时会打一个 `latest` 标签指向同一个镜像，方便 `.env` 还是默认值的机器
+> 直接跑起来。**但回滚时不要把 `.env` 改回 `latest`** —— 它只代表最后一次
+> `docker load` 进来的那个版本，说不清是哪一个。
 
 ---
 

@@ -73,13 +73,17 @@ docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-
 ./deploy/build-image.sh linux/amd64          # 用第 0 步查到的架构
 ```
 
-**预期看到**：最后打印 `完成，镜像包 14M`，并在仓库根目录生成
-`token-hub-latest-amd64.tar.gz`。
+**预期看到**：最后打印 `完成，镜像包 14M，标签 20260915225600`，并在仓库根目录生成
+`token-hub-20260915225600-amd64.tar.gz`。
+
+标签默认取构建时刻（年月日时分秒），所以**你实际打印出来的数字和这里不会一样**。
+本手册后面统一拿 `20260915225600` 当占位符，出现这串数字的地方都换成你的那一个。
+第 3 步在服务器上还要用它，**先记下来** —— 换了机器就翻不回这一步了。
 
 ```bash
-# 把两个配置目录和镜像都传上去
+# 把两个配置目录和镜像都传上去（文件名里的 20260915225600 换成你的标签）
 scp -r deploy/gateway deploy/token-hub <user>@<server>:/opt/stacks/
-scp token-hub-latest-amd64.tar.gz <user>@<server>:/tmp/
+scp token-hub-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
 ```
 
 **预期看到**：`scp` 会打印传输进度，没有报错就是成功。
@@ -154,10 +158,12 @@ curl -k --resolve token.example.com:443:127.0.0.1 https://token.example.com/heal
 **这一步在做什么**：把镜像加载进来，配好密钥，启动应用和它的数据库。
 
 ```bash
-gunzip -c /tmp/token-hub-latest-amd64.tar.gz | docker load
+# 20260915225600 换成第 1 步记下的那个标签
+gunzip -c /tmp/token-hub-20260915225600-amd64.tar.gz | docker load
 ```
 
-**预期看到**：`Loaded image: token-hub:latest`。
+**预期看到**：`Loaded image: token-hub:20260915225600` 与 `Loaded image: token-hub:latest`
+—— 上面这条命令 load 进来的镜像带这两个标签，数字仍是第 1 步那个。
 
 ```bash
 cd /opt/stacks/token-hub
@@ -177,14 +183,20 @@ openssl rand -hex 24      # 复制这行输出 -> 填到 POSTGRES_PASSWORD
 vi .env
 ```
 
-要填的四个地方：
+要填的五个地方：
 
 ```
 POSTGRES_PASSWORD=        ← 粘上面第三个
 JWT_SECRET=               ← 粘上面第一个
 SECRET_KEY=               ← 粘上面第二个
 INITIAL_ROOT_PASSWORD=    ← 自己设一个管理员初始密码，登录时用
+TOKEN_HUB_TAG=            ← 第 1 步打镜像时打印的标签，形如 20260915225600
 ```
+
+> **`TOKEN_HUB_TAG` 填错会起不来**：它决定跑哪个版本的镜像，要和第 1 步打印的标签
+> **一字不差**，否则 `docker compose up -d` 会报 `image "token-hub:xxx" not found`。
+> 第一次部署想先跑通流程，也可以填 `latest`（打镜像时顺带打了这个标签）；
+> 但升级和回滚要填具体标签，理由见本机仓库的 [NOTES.md](NOTES.md) —— 它不在服务器上。
 
 > ⚠️ **`SECRET_KEY` 另外抄一份存到别处，并且以后永远不要改。**
 > 它用来加密数据库里的供应商 API Key，改了之后已存的密钥就全部解不开、无法恢复。
