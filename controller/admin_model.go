@@ -24,6 +24,7 @@ func AdminGetModels(c *gin.Context) {
 		Description string `json:"description"`
 		Tags        string `json:"tags"`
 		Status      int    `json:"status"`
+		Type        string `json:"type"`
 		CreatedAt   string `json:"created_at"`
 	}
 
@@ -36,6 +37,7 @@ func AdminGetModels(c *gin.Context) {
 			Description: m.Description,
 			Tags:        m.Tags,
 			Status:      m.Status,
+			Type:        string(m.Type),
 			CreatedAt:   m.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
 	}
@@ -49,6 +51,9 @@ type AdminCreateModelRequest struct {
 	Owner       string `json:"owner" binding:"required"`
 	Description string `json:"description"`
 	Tags        string `json:"tags"`
+	// 类型必填：它在数据库层有默认值（给存量回填用的 image），
+	// 不在这里强制显式选择的话，漏选会静默变成图像模型。
+	Type string `json:"type" binding:"required"`
 }
 
 // AdminCreateModel 创建模型
@@ -59,11 +64,17 @@ func AdminCreateModel(c *gin.Context) {
 		return
 	}
 
+	if !model.IsValidModelType(model.ModelType(req.Type)) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "模型类型无效"})
+		return
+	}
+
 	m := model.Model{
 		Name:        req.Name,
 		Owner:       req.Owner,
 		Description: req.Description,
 		Tags:        req.Tags,
+		Type:        model.ModelType(req.Type),
 		Status:      1,
 	}
 
@@ -76,12 +87,14 @@ func AdminCreateModel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "模型创建成功"})
 }
 
-// AdminUpdateModelRequest 更新模型请求
+// AdminUpdateModelRequest 更新模型请求（部分更新，空值表示不修改）
 type AdminUpdateModelRequest struct {
 	Name        string `json:"name"`
 	Owner       string `json:"owner"`
 	Description string `json:"description"`
 	Tags        string `json:"tags"`
+	// 这里不需要指针：类型永不为空串，所以下面的 `!= ""` 正好表达「本次不修改」
+	Type string `json:"type"`
 }
 
 // AdminUpdateModel 更新模型
@@ -98,12 +111,22 @@ func AdminUpdateModel(c *gin.Context) {
 		return
 	}
 
+	// 类型先校验再进 updates：它是参考图加价的判定依据，写进非法值会让扣费静默偏离
+	if req.Type != "" && !model.IsValidModelType(model.ModelType(req.Type)) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "模型类型无效"})
+		return
+	}
+
 	updates := map[string]interface{}{}
 	if req.Name != "" {
 		updates["name"] = req.Name
 	}
 	if req.Owner != "" {
 		updates["owner"] = req.Owner
+	}
+	if req.Type != "" {
+		// UpdateModel 收的是 map，GORM 用 key 当列名，所以 key 必须是 "type"
+		updates["type"] = req.Type
 	}
 	if req.Description != "" {
 		updates["description"] = req.Description

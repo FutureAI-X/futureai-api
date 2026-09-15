@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Search, LayoutGrid, List, ChevronRight } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { modelTypeLabel } from '../lib/model-type'
 import { Header } from '../components/Header'
 import { PricingSidebar } from '../components/PricingSidebar'
 import { CopyButton } from '../components/CopyButton'
 import { ModelDetailDialog } from '../components/ModelDetailDialog'
+import { OwnerAvatar } from '../components/OwnerAvatar'
 import type { PricingModel, PricingData } from '../types/pricing'
 
 // ── 筛选常量 ──
@@ -25,7 +27,6 @@ function ModelCard({
   onOpen: (model: PricingModel) => void
 }) {
   const tags = parseTags(model.tags)
-  const initial = model.name?.charAt(0).toUpperCase() || '?'
   const creditRule = model.credit_rule
 
   // 卡片上标「起」，所以这里必须是真实下限：某个参数组合可能比基础积分更便宜，
@@ -61,18 +62,21 @@ function ModelCard({
         {/* 头部：图标 + 名称 + 操作 */}
         <div className='flex items-start justify-between gap-3'>
           <div className='flex min-w-0 items-start gap-3'>
-            <div className='bg-muted/40 flex size-10 shrink-0 items-center justify-center rounded-xl'>
-              <span className='text-lg font-bold text-muted-foreground'>
-                {initial}
-              </span>
-            </div>
+            <OwnerAvatar owner={model.owner} fallbackName={model.name} />
             <div className='min-w-0'>
               <h3 className='text-foreground min-w-0 truncate font-mono text-sm font-bold sm:text-[15px]'>
                 {model.name}
               </h3>
-              <p className='text-muted-foreground mt-0.5 text-xs'>
-                {model.owner}
-              </p>
+              <div className='mt-0.5 flex items-center gap-1.5'>
+                <p className='text-muted-foreground truncate text-xs'>
+                  {model.owner}
+                </p>
+                {model.type && (
+                  <span className='bg-muted/70 text-muted-foreground shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium'>
+                    {modelTypeLabel(model.type)}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -144,6 +148,7 @@ export function Pricing() {
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [tagFilter, setTagFilter] = useState(FILTER_ALL)
+  const [typeFilter, setTypeFilter] = useState(FILTER_ALL)
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card')
   const [detail, setDetail] = useState<PricingModel | null>(null)
 
@@ -170,6 +175,11 @@ export function Pricing() {
     if (!data?.models) return []
     let models = data.models
 
+    // 类型过滤
+    if (typeFilter !== FILTER_ALL) {
+      models = models.filter((m) => m.type === typeFilter)
+    }
+
     // 标签过滤
     if (tagFilter !== FILTER_ALL) {
       models = models.filter((m) =>
@@ -192,15 +202,16 @@ export function Pricing() {
     }
 
     return models
-  }, [data?.models, search, tagFilter])
+  }, [data?.models, search, tagFilter, typeFilter])
 
   // 清除所有筛选
   const clearFilters = useCallback(() => {
     setSearch('')
     setTagFilter(FILTER_ALL)
+    setTypeFilter(FILTER_ALL)
   }, [])
 
-  const hasActiveFilters = search !== '' || tagFilter !== FILTER_ALL
+  const hasActiveFilters = search !== '' || tagFilter !== FILTER_ALL || typeFilter !== FILTER_ALL
 
   // 加载状态
   if (loading) {
@@ -300,6 +311,8 @@ export function Pricing() {
           <div className='grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]'>
             {/* 侧边栏（桌面端显示） */}
             <PricingSidebar
+              typeFilter={typeFilter}
+              onTypeChange={setTypeFilter}
               tagFilter={tagFilter}
               onTagChange={setTagFilter}
               models={data?.models || []}
@@ -387,6 +400,7 @@ export function Pricing() {
                     <thead>
                       <tr className='bg-muted/30 border-border/40 border-b'>
                         <th className='px-4 py-3 text-left text-xs font-medium'>模型</th>
+                        <th className='px-4 py-3 text-left text-xs font-medium'>类型</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>开发者</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>描述</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>基础积分</th>
@@ -408,6 +422,16 @@ export function Pricing() {
                         >
                           <td className='px-4 py-3'>
                             <span className='font-mono text-sm font-medium'>{model.name}</span>
+                          </td>
+                          <td className='px-4 py-3'>
+                            {model.type ? (
+                              <span className='bg-muted/60 text-muted-foreground rounded-md px-2 py-0.5 text-xs font-medium'>
+                                {modelTypeLabel(model.type)}
+                              </span>
+                            ) : (
+                              // 老接口可能没有 type，占位避免列错位
+                              <span className='text-muted-foreground'>-</span>
+                            )}
                           </td>
                           <td className='text-muted-foreground px-4 py-3 text-sm'>
                             {model.owner || '-'}

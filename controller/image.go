@@ -111,7 +111,7 @@ func ImageGenerate(c *gin.Context) {
 	// 7. 计算积分消耗。
 	// 必须在覆盖 reqBody["model"] 之前计算：差异化计费规则可能以 model 作为条件，
 	// 此处应匹配调用方传入的模型名，而不是供应商侧的模型 ID。
-	credits, err := resolveCredits(m.ID, reqBody, endpoint.Path)
+	credits, err := resolveCredits(m.ID, m.Type, reqBody, endpoint.Path)
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 计费规则解析失败: model=%s, err=%v", modelName, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费规则，暂不可用"})
@@ -214,6 +214,14 @@ func isRefImageEndpoint(path string) bool {
 	return refImageEndpoints[path]
 }
 
+// isRefImageModel 判断模型是否属于会为参考图计费的类型。
+//
+// 空类型也算图像模型：该列有 not null 约束但可存空串，若被直接 SQL 改成空串，
+// 按「是图像模型」处理是 fail-closed 的方向——宁可多扣，不漏扣。
+func isRefImageModel(t model.ModelType) bool {
+	return t == model.ModelTypeImage || t == ""
+}
+
 // creditResolution 一次请求的计费结果
 type creditResolution struct {
 	// Total 本次应扣的总积分
@@ -240,8 +248,9 @@ func (r creditResolution) Remark() string {
 // 而这是运维上极易发生、且不会被察觉的资损。如需免费模型，请显式配置一条 0 积分的规则。
 //
 // 计费公式：基础积分（或命中的参数组合积分）+ 参考图张数 × 每张参考图积分。
-// 参考图部分是叠加而非取代，且只对 endpointPath 命中白名单的图片端点生效。
-func resolveCredits(modelID int, reqBody map[string]interface{}, endpointPath string) (creditResolution, error) {
+// 参考图部分是叠加而非取代，且需要同时满足两个条件：模型类型是图像生成、
+// 且 endpointPath 命中图片端点白名单。
+func resolveCredits(modelID int, modelType model.ModelType, reqBody map[string]interface{}, endpointPath string) (creditResolution, error) {
 	creditRule, err := model.GetCreditRuleByModelID(modelID)
 	if err != nil || creditRule == nil {
 		return creditResolution{}, errors.New("模型未配置计费规则")
@@ -269,10 +278,21 @@ func resolveCredits(modelID int, reqBody map[string]interface{}, endpointPath st
 
 	// 参考图附加计费。必须放在下面的负数守卫之前——否则一条被改成负数的单价
 	// 会绕过校验，变成反向给用户送积分。
+	//
+	// 闸门是「类型」与「端点」两者的与：只有图像模型 + 图片端点才加价。
+	// 保留端点条件不是冗余——它是纯放松的反面：若只按类型判定，一个配了参考图
+	// 计费、类型却是 text 的模型会静默不加价（没有报错、没有日志，只是扣得少），
+	// 而端点白名单同时挡住了「将来多模态对话端点复用本函数被误加价」。
 	refImageCount := 0
-	if creditRule.RefImageCredits > 0 && isRefImageEndpoint(endpointPath) {
-		refImageCount = countRefImages(reqBody, creditRule.EffectiveRefImageParams())
-		creditsAmount += float64(refImageCount) * creditRule.RefImageCredits
+	if creditRule.RefImageCredits > 0 && isRefImageModel(modelType) {
+		if isRefImageEndpoint(endpointPath) {
+			refImageCount = countRefImages(reqBody, creditRule.EffectiveRefImageParams())
+			creditsAmount += float64(refImageCount) * creditRule.RefImageCredits
+		} else {
+			// 配了参考图计费却收不到钱：这是误配，必须可见
+			common.SysErrorf("[resolveCredits] 模型类型为图像生成且已配置参考图计费，但端点 %s 不在白名单内，本次未计费: modelID=%d, 每张=%.2f",
+				endpointPath, modelID, creditRule.RefImageCredits)
+		}
 	}
 
 	if creditsAmount < 0 {

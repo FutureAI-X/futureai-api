@@ -451,6 +451,13 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                   留空或填 0 表示不计费。同一张图重复出现在多个参数名下只计一次。
                 </p>
 
+                {/* 这个依赖跨了两个界面（模型类型在「模型管理」里配），不写出来没人知道 */}
+                <p className='text-muted-foreground mb-4 rounded-md bg-muted/40 px-3 py-2 text-xs'>
+                  生效前提：该模型的<strong className='font-medium text-foreground'>类型必须是「图像生成」</strong>。
+                  其它类型（文本/视频/音乐/其他）即使这里配了单价也不会加价——
+                  如需修改，请到「模型管理」编辑该模型的类型。
+                </p>
+
                 <div className='grid grid-cols-2 gap-6'>
                   <div className='space-y-2'>
                     <label className='text-sm font-medium'>每张参考图积分</label>

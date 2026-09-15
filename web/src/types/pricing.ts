@@ -30,6 +30,8 @@ export interface PricingModel {
   tags?: string
   owner: string
   status: number
+  /** 模型类型：image / video / text / music / other。老接口可能没有，故可选 */
+  type?: string
   credit_rule?: CreditRule
 }
 

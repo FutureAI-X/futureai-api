@@ -5,6 +5,37 @@ import (
 )
 
 // Model 模型信息
+// ModelType 模型类型。
+// 存英文键、中文标签放前端——与 rule_type / status 的既有约定一致，改文案不动数据。
+type ModelType string
+
+const (
+	ModelTypeImage ModelType = "image" // 图像生成
+	ModelTypeVideo ModelType = "video" // 视频生成
+	ModelTypeText  ModelType = "text"  // 文本生成
+	ModelTypeMusic ModelType = "music" // 音乐生成
+	ModelTypeOther ModelType = "other" // 其他
+)
+
+// AllModelTypes 全部合法类型，供管理端校验使用（顺序与前端选项一致）
+var AllModelTypes = []ModelType{
+	ModelTypeImage,
+	ModelTypeVideo,
+	ModelTypeText,
+	ModelTypeMusic,
+	ModelTypeOther,
+}
+
+// IsValidModelType 判断类型是否在枚举内
+func IsValidModelType(t ModelType) bool {
+	for _, valid := range AllModelTypes {
+		if t == valid {
+			return true
+		}
+	}
+	return false
+}
+
 type Model struct {
 	// 唯一标识，自增主键
 	ID int `json:"id" gorm:"primaryKey"`
@@ -14,6 +45,15 @@ type Model struct {
 
 	// 名称，全局唯一，用于 API 调用
 	Name string `json:"name" gorm:"uniqueIndex;size:64;not null"`
+
+	// 类型：image=图像生成, video=视频生成, text=文本生成, music=音乐生成, other=其他
+	//
+	// default 是给存量表回填用的：ADD COLUMN ... NOT NULL DEFAULT 'image'
+	// 会让 PostgreSQL 把已有行一并填成 image。注意它不是「只用于回填」——
+	// GORM 在每次 INSERT 时也会带上它，零值会被替换成 image，
+	// 所以「新建模型忘了选类型」在数据库层会静默变成图像模型，
+	// 拦截点是管理端 API 的 binding:"required"。
+	Type ModelType `json:"type" gorm:"size:32;not null;default:image"`
 
 	// 标签，逗号分隔
 	Tags string `json:"tags,omitempty" gorm:"size:255"`
@@ -78,6 +118,7 @@ func GetPricingModels() ([]map[string]interface{}, error) {
 			"tags":        m.Tags,
 			"owner":       m.Owner,
 			"status":      m.Status,
+			"type":        m.Type,
 		}
 		if rule, ok := ruleMap[m.ID]; ok {
 			item["credit_rule"] = rule
@@ -134,24 +175,26 @@ func createDefaultModels() error {
 		return nil
 	}
 
-	// 创建默认模型
+	// 创建默认模型。
+	// 全部显式指定 Type：这些是对话/推理模型，而 type 列的默认值是 image
+	// （给存量回填写死的），不显式指定的话全新部署会把它们全标成「图像生成」。
 	defaultModels := []Model{
 		// DeepSeek
-		{Name: "deepseek-chat", Description: "DeepSeek V3 对话模型，擅长中文理解和代码生成", Tags: "对话,代码"},
-		{Name: "deepseek-reasoner", Description: "DeepSeek R1 推理模型，支持深度思考", Tags: "推理,思考"},
+		{Name: "deepseek-chat", Type: ModelTypeText, Description: "DeepSeek V3 对话模型，擅长中文理解和代码生成", Tags: "对话,代码"},
+		{Name: "deepseek-reasoner", Type: ModelTypeText, Description: "DeepSeek R1 推理模型，支持深度思考", Tags: "推理,思考"},
 
 		// OpenAI
-		{Name: "gpt-4o", Description: "OpenAI 多模态旗舰模型，支持文本和图像输入", Tags: "多模态,对话"},
-		{Name: "gpt-4o-mini", Description: "OpenAI 轻量模型，性价比极高", Tags: "轻量,快速"},
-		{Name: "o3-mini", Description: "OpenAI 推理模型，支持复杂推理任务", Tags: "推理"},
+		{Name: "gpt-4o", Type: ModelTypeText, Description: "OpenAI 多模态旗舰模型，支持文本和图像输入", Tags: "多模态,对话"},
+		{Name: "gpt-4o-mini", Type: ModelTypeText, Description: "OpenAI 轻量模型，性价比极高", Tags: "轻量,快速"},
+		{Name: "o3-mini", Type: ModelTypeText, Description: "OpenAI 推理模型，支持复杂推理任务", Tags: "推理"},
 
 		// Claude
-		{Name: "claude-sonnet-4-20250514", Description: "Anthropic Claude 4 Sonnet，平衡性能与速度", Tags: "对话,代码"},
-		{Name: "claude-haiku-3-5", Description: "Anthropic 轻量模型，响应极快", Tags: "快速,轻量"},
+		{Name: "claude-sonnet-4-20250514", Type: ModelTypeText, Description: "Anthropic Claude 4 Sonnet，平衡性能与速度", Tags: "对话,代码"},
+		{Name: "claude-haiku-3-5", Type: ModelTypeText, Description: "Anthropic 轻量模型，响应极快", Tags: "快速,轻量"},
 
 		// Gemini
-		{Name: "gemini-2.5-flash", Description: "Google Gemini 2.5 Flash，高速多模态模型", Tags: "快速,多模态"},
-		{Name: "gemini-2.5-pro", Description: "Google Gemini 2.5 Pro，最强推理能力", Tags: "推理,多模态"},
+		{Name: "gemini-2.5-flash", Type: ModelTypeText, Description: "Google Gemini 2.5 Flash，高速多模态模型", Tags: "快速,多模态"},
+		{Name: "gemini-2.5-pro", Type: ModelTypeText, Description: "Google Gemini 2.5 Pro，最强推理能力", Tags: "推理,多模态"},
 	}
 
 	for _, m := range defaultModels {

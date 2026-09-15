@@ -90,7 +90,46 @@ func InitDB() error {
 	// 启动时列出这些模型，便于上线前补齐。
 	warnModelsWithoutCreditRule()
 
+	// 模型类型参与参考图加价判定，值不合法会让扣费静默偏离预期
+	warnInvalidModelTypes()
+
 	return nil
+}
+
+// warnInvalidModelTypes 启动时列出类型为空或不在枚举内的模型。
+//
+// 类型不只是展示字段——参考图附加计费要看它是不是「图像生成」，所以一个非法值
+// 会直接改变扣费金额。列出来让运维能提前发现（例如有人直接用 SQL 改过）。
+func warnInvalidModelTypes() {
+	var models []Model
+	if err := DB.Find(&models).Error; err != nil {
+		common.SysError("failed to check model types: " + err.Error())
+		return
+	}
+
+	var invalid []string
+	for _, m := range models {
+		if !IsValidModelType(m.Type) {
+			invalid = append(invalid, fmt.Sprintf("%s(type=%q)", m.Name, m.Type))
+		}
+	}
+
+	if len(invalid) == 0 {
+		return
+	}
+
+	common.SysErrorf("[模型] 以下 %d 个模型的类型为空或不在枚举内，参考图计费判定可能异常: %s",
+		len(invalid), strings.Join(invalid, ", "))
+	common.SysErrorf("[模型] 合法类型: %s；请在管理后台重新选择模型类型", strings.Join(modelTypeKeys(), ", "))
+}
+
+// modelTypeKeys 把合法类型拼成可读列表，供告警文案使用
+func modelTypeKeys() []string {
+	keys := make([]string, len(AllModelTypes))
+	for i, t := range AllModelTypes {
+		keys[i] = string(t)
+	}
+	return keys
 }
 
 // warnModelsWithoutCreditRule 启动时列出缺少启用计费规则的启用模型。
@@ -301,6 +340,7 @@ func addTableComments() error {
 		`COMMENT ON COLUMN models.tags IS '模型标签，逗号分隔'`,
 		`COMMENT ON COLUMN models.owner IS '模型所有者/提供商'`,
 		`COMMENT ON COLUMN models.status IS '模型状态：1=启用, 2=禁用'`,
+		`COMMENT ON COLUMN models.type IS '模型类型：image=图像生成, video=视频生成, text=文本生成, music=音乐生成, other=其他'`,
 		`COMMENT ON COLUMN models.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN models.updated_at IS '记录最后更新时间'`,
 

@@ -90,6 +90,7 @@ GET /api/pricing
         "description": "...",
         "tags": "...",
         "status": 1,
+        "type": "image",
         "credit_rule": {
           "rule_type": "per_request",
           "base_credits": 1.0,
@@ -107,6 +108,9 @@ GET /api/pricing
 
 `credit_rule` 在模型未配置（或规则被禁用）时**不出现**，调用方需要判空。
 模型广场的详情弹框消费的就是这个字段。
+
+`type` 取值为 `image` / `video` / `text` / `music` / `other`（图像生成 / 视频生成 / 文本生成 / 音乐生成 / 其他）。
+它不只是展示字段——参考图附加计费只在**类型为 `image`** 且端点在图片白名单内时才生效。
 
 单个模型的积分规则由管理端配置，计算公式为：
 

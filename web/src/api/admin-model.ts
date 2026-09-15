@@ -26,6 +26,8 @@ export interface AdminModel {
   description: string
   tags: string
   status: number
+  /** 模型类型：image / video / text / music / other */
+  type: string
   created_at: string
 }
 
@@ -36,6 +38,8 @@ export function getModels() {
 export function createModel(data: {
   name: string
   owner: string
+  /** 必填：后端 binding:"required"，且类型参与参考图加价判定 */
+  type: string
   description?: string
   tags?: string
 }) {
@@ -50,6 +54,7 @@ export function updateModel(id: number, data: {
   owner?: string
   description?: string
   tags?: string
+  type?: string
 }) {
   return request<{ success: boolean; message: string }>(`${BASE}/models/${id}`, {
     method: 'PUT',

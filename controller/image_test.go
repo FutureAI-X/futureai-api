@@ -123,15 +123,39 @@ func TestCountRefImagesAtMaxBoundary(t *testing.T) {
 	}
 }
 
-// ── resolveCredits：端点白名单 ──
+// ── 参考图加价的两道闸门 ──
 
 // 多模态对话端点的请求体同样会带 images / image_urls，白名单能防止它们被误加价。
-func TestResolveCreditsOnlyChargesRefImagesOnImageEndpoints(t *testing.T) {
+func TestRefImageEndpointWhitelist(t *testing.T) {
 	if isRefImageEndpoint("/v1/chat/completions") {
 		t.Error("/v1/chat/completions 不应被当作图片端点")
 	}
 	if !isRefImageEndpoint("/v1/images/generations") {
 		t.Error("/v1/images/generations 应被当作图片端点")
+	}
+}
+
+// 加价要求模型类型是图像生成；空类型按图像处理（fail-closed，宁可多扣不漏扣）。
+func TestIsRefImageModel(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  model.ModelType
+		want bool
+	}{
+		{"图像生成", model.ModelTypeImage, true},
+		{"空类型按图像处理", "", true},
+		{"视频生成", model.ModelTypeVideo, false},
+		{"文本生成", model.ModelTypeText, false},
+		{"音乐生成", model.ModelTypeMusic, false},
+		{"其他", model.ModelTypeOther, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRefImageModel(tc.typ); got != tc.want {
+				t.Errorf("isRefImageModel(%q) = %v, want %v", tc.typ, got, tc.want)
+			}
+		})
 	}
 }
 

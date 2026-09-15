@@ -11,6 +11,7 @@ import {
   Link2,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { MODEL_TYPE_OPTIONS, modelTypeLabel } from '../../lib/model-type'
 import {
   getModels,
   createModel,
@@ -48,6 +49,7 @@ export function AdminModels() {
   const [formOwner, setFormOwner] = useState('')
   const [formDesc, setFormDesc] = useState('')
   const [formTags, setFormTags] = useState('')
+  const [formType, setFormType] = useState<string>(MODEL_TYPE_OPTIONS[0].value)
   const [formError, setFormError] = useState('')
   const [formSaving, setFormSaving] = useState(false)
 
@@ -66,6 +68,7 @@ export function AdminModels() {
     setEditRow(null)
     setFormName(''); setFormOwner('')
     setFormDesc(''); setFormTags('')
+    setFormType(MODEL_TYPE_OPTIONS[0].value)
     setFormError('')
     setDrawerOpen(true)
   }
@@ -74,6 +77,8 @@ export function AdminModels() {
     setEditRow(m)
     setFormName(m.name); setFormOwner(m.owner)
     setFormDesc(m.description); setFormTags(m.tags || '')
+    // 老数据 type 可能为空，回落到第一个选项，避免下拉框显示成空白
+    setFormType(m.type || MODEL_TYPE_OPTIONS[0].value)
     setFormError('')
     setDrawerOpen(true)
   }
@@ -81,6 +86,7 @@ export function AdminModels() {
   const handleSave = async () => {
     if (!formName.trim()) { setFormError('模型ID不能为空'); return }
     if (!formOwner.trim()) { setFormError('模型开发者不能为空'); return }
+    if (!formType) { setFormError('请选择模型类型'); return }
 
     setFormSaving(true); setFormError('')
     try {
@@ -90,12 +96,13 @@ export function AdminModels() {
         if (formOwner !== editRow.owner) data.owner = formOwner
         if (formDesc !== editRow.description) data.description = formDesc
         if (formTags !== (editRow.tags || '')) data.tags = formTags
+        if (formType !== (editRow.type || '')) data.type = formType
         const res = await updateModel(editRow.id, data)
         if (!res.success) { setFormError(res.message || '更新失败'); return }
       } else {
         const res = await createModel({
           name: formName, owner: formOwner,
-          description: formDesc, tags: formTags,
+          description: formDesc, tags: formTags, type: formType,
         })
         if (!res.success) { setFormError(res.message || '创建失败'); return }
       }
@@ -161,6 +168,7 @@ export function AdminModels() {
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>ID</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>模型开发者</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>模型ID</th>
+                <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>类型</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>标签</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>描述</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>状态</th>
@@ -169,9 +177,9 @@ export function AdminModels() {
             </thead>
             <tbody className='divide-border/40 divide-y'>
               {loading ? (
-                <tr><td colSpan={7} className='px-4 py-12 text-center'><Loader2 className='text-muted-foreground mx-auto size-6 animate-spin' /></td></tr>
+                <tr><td colSpan={8} className='px-4 py-12 text-center'><Loader2 className='text-muted-foreground mx-auto size-6 animate-spin' /></td></tr>
               ) : models.length === 0 ? (
-                <tr><td colSpan={7} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无模型</p></td></tr>
+                <tr><td colSpan={8} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无模型</p></td></tr>
               ) : models.map((m) => {
                 const statusConf = STATUS_CONFIG[m.status] || STATUS_CONFIG[1]
                 const tags = m.tags ? m.tags.split(',').map(t => t.trim()).filter(Boolean) : []
@@ -180,6 +188,11 @@ export function AdminModels() {
                     <td className='px-4 py-3'><span className='text-muted-foreground font-mono text-xs'>{m.id}</span></td>
                     <td className='px-4 py-3'><span className='text-sm'>{m.owner}</span></td>
                     <td className='px-4 py-3'><span className='font-medium'>{m.name}</span></td>
+                    <td className='px-4 py-3'>
+                      <span className='bg-muted/60 text-muted-foreground rounded-md px-2 py-0.5 text-xs font-medium'>
+                        {modelTypeLabel(m.type)}
+                      </span>
+                    </td>
                     <td className='px-4 py-3'>
                       <div className='flex flex-wrap gap-1'>
                         {tags.slice(0, 2).map((tag) => (
@@ -251,6 +264,22 @@ export function AdminModels() {
                 <label className='text-sm font-medium'>模型ID</label>
                 <input type='text' value={formName} onChange={(e) => setFormName(e.target.value)} placeholder='例如: gpt-4o'
                   className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none' />
+              </div>
+
+              <div className='space-y-2'>
+                <label className='text-sm font-medium'>类型</label>
+                <select
+                  value={formType}
+                  onChange={(e) => setFormType(e.target.value)}
+                  className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                >
+                  {MODEL_TYPE_OPTIONS.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+                <p className='text-muted-foreground text-xs'>
+                  决定参考图附加计费是否生效：「图像生成」类型的模型才会按参考图张数加价
+                </p>
               </div>
 
               <div className='space-y-2'>

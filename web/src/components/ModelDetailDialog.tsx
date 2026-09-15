@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react'
 import { X, Image as ImageIcon, Coins } from 'lucide-react'
 import type { PricingModel } from '../types/pricing'
+import { modelTypeLabel } from '../lib/model-type'
 import { CopyButton } from './CopyButton'
+import { OwnerAvatar } from './OwnerAvatar'
 
 // 规则类型标签。目前后端只有 per_request 一个值，回落到原始字符串以免新增类型时显示空白。
 // 用常量映射而非 enum：tsconfig 开了 erasableSyntaxOnly。
@@ -74,12 +76,12 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
 
   const rule = model.credit_rule
   const refCredits = rule?.ref_image_credits ?? 0
-  const hasRefPricing = refCredits > 0
+  // 加价要求模型类型是「图像生成」（后端同时还要端点命中白名单）。
+  // 只看 ref_image_credits > 0 的话，会给一个文本模型描述一笔永远不会发生的扣费。
+  // 老接口可能不带 type，此时保守地按不展示处理。
+  const hasRefPricing = refCredits > 0 && model.type === 'image'
   const items = rule?.items ?? []
 
-  // 参考图计价的前提是「该模型绑定了图片生成端点」。模型是否支持图片端点并不在
-  // /api/pricing 的返回里，前端无从判断，所以举例必须带上「图片生成时」这个前提，
-  // 否则对一个对话模型就是在陈述一句假话。
   const refExampleTotal = rule ? rule.base_credits + 2 * refCredits : 0
 
   const tags = (model.tags || '')
@@ -102,16 +104,19 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
         {/* 头部 */}
         <div className='flex items-start justify-between gap-3 border-b border-border/40 px-5 py-4 sm:px-6'>
           <div className='flex min-w-0 items-start gap-3'>
-            <div className='bg-muted/40 flex size-10 shrink-0 items-center justify-center rounded-xl'>
-              <span className='text-muted-foreground text-lg font-bold'>
-                {model.name?.charAt(0).toUpperCase() || '?'}
-              </span>
-            </div>
+            <OwnerAvatar owner={model.owner} fallbackName={model.name} />
             <div className='min-w-0'>
               <h2 id='model-detail-title' className='text-foreground truncate font-mono text-base font-bold'>
                 {model.name}
               </h2>
-              <p className='text-muted-foreground mt-0.5 text-xs'>{model.owner}</p>
+              <div className='mt-0.5 flex items-center gap-1.5'>
+                <p className='text-muted-foreground truncate text-xs'>{model.owner}</p>
+                {model.type && (
+                  <span className='bg-muted/70 text-muted-foreground shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium'>
+                    {modelTypeLabel(model.type)}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <div className='flex shrink-0 items-center gap-1'>

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, RotateCcw } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { modelTypeLabel } from '../lib/model-type'
 import type { PricingModel } from '../types/pricing'
 
 // ── 工具函数 ──
@@ -110,6 +111,8 @@ const FILTER_ALL = '__all__'
 
 // ── Props ──
 export interface PricingSidebarProps {
+  typeFilter: string
+  onTypeChange: (value: string) => void
   tagFilter: string
   onTagChange: (value: string) => void
   models: PricingModel[]
@@ -140,13 +143,31 @@ export function PricingSidebar(props: PricingSidebarProps) {
     })),
   ]
 
+  // 类型选项：只列出实际存在的类型，避免出现点了必定为空的筛选项
+  const presentTypes = Array.from(
+    new Set(props.models.map((m) => m.type).filter((t): t is string => !!t))
+  ).sort()
+
+  const typeOptions: FilterOption[] = [
+    {
+      value: FILTER_ALL,
+      label: '全部类型',
+      count: props.models.length,
+    },
+    ...presentTypes.map((type) => ({
+      value: type,
+      label: modelTypeLabel(type),
+      count: countBy(props.models, (model) => model.type === type),
+    })),
+  ]
+
   return (
     <aside className={cn('rounded-xl border p-3', props.className)}>
       <div className='mb-2.5 flex items-center justify-between gap-2'>
         <div>
           <h2 className='text-foreground text-sm font-bold'>筛选</h2>
           <p className='text-muted-foreground mt-1 text-xs'>
-            按标签筛选模型
+            按类型或标签筛选模型
           </p>
         </div>
         <button
@@ -172,6 +193,12 @@ export function PricingSidebar(props: PricingSidebarProps) {
       )}
 
       <div className='space-y-1'>
+        <FilterSection
+          title='模型类型'
+          value={props.typeFilter}
+          options={typeOptions}
+          onChange={props.onTypeChange}
+        />
         <FilterSection
           title='模型标签'
           value={props.tagFilter}
