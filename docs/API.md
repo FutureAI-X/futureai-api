@@ -95,7 +95,6 @@ GET /api/pricing
           "rule_type": "per_request",
           "base_credits": 1.0,
           "ref_image_credits": 2.0,
-          "ref_image_params": "image,images,image_url,image_urls,ref_images",
           "items": [
             { "credits": 0.1, "conditions": [{ "param_path": "resolution", "param_value": "2k" }] }
           ]
@@ -119,13 +118,15 @@ GET /api/pricing
 ```
 
 参考图附加计费只对图片生成类端点（`/v1/images/generations`、`/v1/images/edits`）生效，
-按请求体中携带的参考图张数叠加扣除；`每张参考图积分 = 0` 时等同于不开启。
-参考图的参数名由管理员配置（见 `ref_image_params`），默认为
-`image,images,image_url,image_urls,ref_images`；同一张图重复出现在多个参数名下只计一次，
-单次计费张数上限为 100。
+按请求体的标准字段 `image_urls` 数组中的图片张数叠加扣除；`每张参考图积分 = 0`
+时等同于不开启。数组里重复的 URL 只计一次，单次计费张数上限为 100。
 
-参数组合条件仅支持**顶层参数且值必须为字符串**，数组类型的参数不会命中，
+参数组合条件只能引用**标准请求字段**（`model`、`prompt`、`size`、`resolution`），
+且值必须为字符串。数组字段（`image_urls`）永远命中不了条件，
 因此不能用参数组合来做参考图计费。
+
+管理端保存规则时会校验 `param_path` 必须是上述字段之一，否则返回 400 并列出可选值——
+引用其他名字的条件永远匹配不上，只会在运行期静默退回基础积分计费，必须在保存时就挡住。
 
 ---
 
@@ -183,6 +184,40 @@ GET /v1/models
 
 上传为 `multipart/form-data`，字段名 `file`。超过 10MB 返回 413。
 注意网关侧的 `client_max_body_size` 是 12m，小于此值的话请求会在到达应用之前就被拒绝。
+
+### 图像生成的请求标准
+
+`POST /v1/images/generations` **只接受下面这些字段，请求体里的其他字段一律忽略**
+（不报错，也不透传给上游）。平台对各供应商的适配（参数改名、变体参数补全等）
+全部在这一层之下完成，调用方只需面向这一套字段。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `model` | string | 必填，平台模型名（不是供应商侧模型 ID） |
+| `prompt` | string | 提示词 |
+| `size` | string | 画幅比例，如 `16:9` / `1:1`，默认 `16:9` |
+| `resolution` | string | 分辨率档位，如 `1k` / `2k`，默认 `1k` |
+| `image_urls` | string[] | 参考图 URL 数组，同时决定参考图附加计费张数 |
+
+`size` 与 `resolution` 省略时按上表的默认值补齐，且**补齐发生在计费之前**——
+所以省略 `resolution` 的请求会按 `resolution=1k` 匹配计费条件，与实际生成的分辨率一致。
+调用方显式传的值原样保留。
+
+注意 `image_urls` 只接受字符串数组：单个字符串（如 `"image_urls": "https://..."`）
+会被判为类型错误返回 400，不是被忽略。
+需要参考图时报文里写上这个字段即可，不需要传任何供应商相关的参数。
+
+```bash
+POST /v1/images/generations
+```
+```json
+{
+  "model": "gpt-image-2.5-flare-ext",
+  "prompt": "a cat sitting on a windowsill",
+  "resolution": "2k",
+  "image_urls": ["https://example.com/ref.png"]
+}
+```
 
 ---
 

@@ -21,8 +21,9 @@ const RULE_TYPE_OPTIONS = [
   { value: 'per_request', label: '按次计费' },
 ]
 
-// 与后端 model.DefaultRefImageParams 保持一致
-const DEFAULT_REF_IMAGE_PARAMS = 'image,images,image_url,image_urls,ref_images'
+// 可参与参数组合计费的标准请求字段，与后端 supplier.CreditParamNames() 保持一致。
+// 之外的名字永远匹配不上（计费只认标准字段），后端保存时也会拒绝。
+const CREDIT_PARAM_NAMES = ['model', 'prompt', 'size', 'resolution']
 
 // 表单项接口（credits 用字符串处理输入）
 interface FormCreditCondition {
@@ -53,7 +54,6 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
   const [formBaseCredits, setFormBaseCredits] = useState('')
   const [formDesc, setFormDesc] = useState('')
   const [formRefImageCredits, setFormRefImageCredits] = useState('')
-  const [formRefImageParams, setFormRefImageParams] = useState('')
   const [formItems, setFormItems] = useState<FormCreditItem[]>([])
   const [formError, setFormError] = useState('')
   const [formSaving, setFormSaving] = useState(false)
@@ -72,7 +72,6 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
     setFormBaseCredits('')
     setFormDesc('')
     setFormRefImageCredits('')
-    setFormRefImageParams('')
     setFormItems([])
   }, [])
 
@@ -85,9 +84,8 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
         setFormRuleType(res.data.rule_type)
         setFormBaseCredits(formatCredits(res.data.base_credits))
         setFormDesc(res.data.description || '')
-        // 老规则没有这两个字段，用 ?? 兜底避免 formatCredits(undefined) 崩溃
+        // 老规则没有这个字段，用 ?? 兜底避免 formatCredits(undefined) 崩溃
         setFormRefImageCredits(formatCredits(res.data.ref_image_credits ?? 0))
-        setFormRefImageParams(res.data.ref_image_params || DEFAULT_REF_IMAGE_PARAMS)
         // 将后端数据转换为表单格式
         setFormItems((res.data.items || []).map(item => ({
           credits: formatCredits(item.credits),
@@ -202,8 +200,16 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
         return
       }
       for (let j = 0; j < item.conditions.length; j++) {
-        if (!item.conditions[j].param_path.trim() || !item.conditions[j].param_value.trim()) {
+        const paramPath = item.conditions[j].param_path.trim()
+        if (!paramPath || !item.conditions[j].param_value.trim()) {
           setFormError(`第 ${i + 1} 项的第 ${j + 1} 个条件参数路径和参数值不能为空`)
+          return
+        }
+        // 提前拦一道，省一次往返；后端也会校验（前端可绕过）
+        if (!CREDIT_PARAM_NAMES.includes(paramPath)) {
+          setFormError(
+            `第 ${i + 1} 项的第 ${j + 1} 个条件的参数路径「${paramPath}」不是标准请求字段，可选：${CREDIT_PARAM_NAMES.join('、')}`
+          )
           return
         }
       }
@@ -217,9 +223,6 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
         base_credits: parseFloat(formBaseCredits),
         description: formDesc || undefined,
         ref_image_credits: refImageCredits,
-        // 显式发送（可能为空串）：后端把空串规范化为内置默认值，
-        // 这样「清空输入框」才能真的恢复默认，而不是变成一个静默的空操作
-        ref_image_params: formRefImageParams.trim(),
         items: formItems.length > 0 ? formItems.map(item => ({
           credits: parseFloat(item.credits),
           conditions: item.conditions.map(c => ({
@@ -403,14 +406,13 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                             <div>参数路径</div>
                             <div>参数值</div>
                             <div></div>
-                          </div>
-                          {item.conditions.map((cond, condIndex) => (
+                          </div>                          {item.conditions.map((cond, condIndex) => (
                             <div key={condIndex} className='grid grid-cols-[1fr_1fr_40px] items-center gap-3'>
                               <input
                                 type='text'
                                 value={cond.param_path}
                                 onChange={(e) => updateCondition(index, condIndex, 'param_path', e.target.value)}
-                                placeholder='如: resolution'
+                                placeholder={CREDIT_PARAM_NAMES.join(' / ')}
                                 className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
                               />
                               <input
@@ -448,7 +450,8 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
 
                 <p className='text-muted-foreground mb-4 text-xs'>
                   在基础积分之上<strong className='font-medium text-foreground'>叠加</strong>：图片生成时按请求中携带的参考图张数计费，
-                  留空或填 0 表示不计费。同一张图重复出现在多个参数名下只计一次。
+                  留空或填 0 表示不计费。参考图统一按标准字段 <code>image_urls</code> 数组计数，
+                  数组里重复的 URL 只计一次。
                 </p>
 
                 {/* 这个依赖跨了两个界面（模型类型在「模型管理」里配），不写出来没人知道 */}
@@ -458,38 +461,23 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                   如需修改，请到「模型管理」编辑该模型的类型。
                 </p>
 
-                <div className='grid grid-cols-2 gap-6'>
-                  <div className='space-y-2'>
-                    <label className='text-sm font-medium'>每张参考图积分</label>
-                    <div className='flex items-center gap-2'>
-                      <input
-                        type='text'
-                        inputMode='decimal'
-                        value={formRefImageCredits}
-                        onChange={(e) => setFormRefImageCredits(e.target.value)}
-                        placeholder='0 表示不计费'
-                        className='border-border/60 bg-background focus-visible:ring-ring flex h-9 flex-1 rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
-                      />
-                      <span className='text-muted-foreground text-sm whitespace-nowrap'>积分/张</span>
-                    </div>
-                    <p className='text-muted-foreground text-xs'>
-                      例如基础积分 2.00、此处填 1.00，则带 3 张参考图共扣 5.00
-                    </p>
-                  </div>
-
-                  <div className='space-y-2'>
-                    <label className='text-sm font-medium'>参考图参数名</label>
+                <div className='space-y-2'>
+                  <label className='text-sm font-medium'>每张参考图积分</label>
+                  <div className='flex items-center gap-2'>
                     <input
                       type='text'
-                      value={formRefImageParams}
-                      onChange={(e) => setFormRefImageParams(e.target.value)}
-                      placeholder={DEFAULT_REF_IMAGE_PARAMS}
-                      className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                      inputMode='decimal'
+                      value={formRefImageCredits}
+                      onChange={(e) => setFormRefImageCredits(e.target.value)}
+                      placeholder='0 表示不计费'
+                      className='border-border/60 bg-background focus-visible:ring-ring flex h-9 flex-1 rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
                     />
-                    <p className='text-muted-foreground text-xs'>
-                      逗号分隔，留空使用默认值。只填实际会用到的参数名
-                    </p>
+                    <span className='text-muted-foreground text-sm whitespace-nowrap'>积分/张</span>
                   </div>
+                  <p className='text-muted-foreground text-xs'>
+                    例如基础积分 2.00、此处填 1.00，则带 3 张参考图共扣 5.00。
+                    参考图按请求体的 <code>image_urls</code> 数组计数，同一张图只计一次
+                  </p>
                 </div>
               </div>
 

@@ -353,7 +353,7 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_rules.description IS '规则描述'`,
 		`COMMENT ON COLUMN credit_rules.status IS '规则状态：1=启用, 2=禁用'`,
 		`COMMENT ON COLUMN credit_rules.ref_image_credits IS '每张参考图消耗的积分，0=不计费'`,
-		`COMMENT ON COLUMN credit_rules.ref_image_params IS '参考图参数名（逗号分隔），空串使用内置默认值'`,
+		`COMMENT ON COLUMN credit_rules.ref_image_params IS '已废弃：参考图统一按标准字段 image_urls 计数，此列不再被读取'`,
 		`COMMENT ON COLUMN credit_rules.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN credit_rules.updated_at IS '记录最后更新时间'`,
 
@@ -369,8 +369,8 @@ func addTableComments() error {
 		`COMMENT ON TABLE credit_rule_conditions IS '积分规则参数组合条件表，存储每个映射项的 AND 条件'`,
 		`COMMENT ON COLUMN credit_rule_conditions.id IS '条件唯一标识，自增主键'`,
 		`COMMENT ON COLUMN credit_rule_conditions.item_id IS '所属映射项ID，关联 credit_rule_items 表'`,
-		`COMMENT ON COLUMN credit_rule_conditions.param_path IS '请求参数路径（如 resolution, quality, model）'`,
-		`COMMENT ON COLUMN credit_rule_conditions.param_value IS '参数值（如 1k, low, gpt-4）'`,
+		`COMMENT ON COLUMN credit_rule_conditions.param_path IS '标准请求字段（model, prompt, size, resolution）'`,
+		`COMMENT ON COLUMN credit_rule_conditions.param_value IS '参数值（如 2k, 1024x1024）'`,
 		`COMMENT ON COLUMN credit_rule_conditions.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN credit_rule_conditions.updated_at IS '记录最后更新时间'`,
 

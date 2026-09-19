@@ -4,9 +4,11 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/FutureAI/token-hub/common"
 	"github.com/FutureAI/token-hub/model"
+	"github.com/FutureAI/token-hub/supplier"
 	"github.com/gin-gonic/gin"
 )
 
@@ -14,42 +16,6 @@ import (
 func validateDecimalPlaces(value float64) bool {
 	rounded := math.Round(value*100) / 100
 	return math.Abs(value-rounded) < 1e-9
-}
-
-// refImageParamsMaxLen 参考图参数名配置的总长度上限，与 credit_rules.ref_image_params 列宽一致
-const refImageParamsMaxLen = 255
-
-// refImageParamNameMaxLen 单个参考图参数名的长度上限
-const refImageParamNameMaxLen = 64
-
-// forbiddenRefImageParams 不允许配置为参考图参数名的常规请求参数。
-// 这些字段的值天然是非空字符串（prompt="a cat"），一旦被误配成参考图参数名，
-// 每个请求都会凭空多扣 1 张参考图的积分。
-var forbiddenRefImageParams = map[string]bool{
-	"model": true, "prompt": true, "n": true, "size": true,
-	"quality": true, "response_format": true, "style": true,
-	"user": true, "seed": true, "output_format": true,
-}
-
-// normalizeRefImageParams 校验并清洗参考图参数名配置，返回规范化后的存储值与错误提示。
-// 解析器在空输入时回落到内置默认值，因此返回值不会为空。
-func normalizeRefImageParams(raw string) (string, string) {
-	names := model.ParseRefImageParams(raw)
-	for _, name := range names {
-		if len(name) > refImageParamNameMaxLen {
-			return "", "参考图参数名「" + name + "」过长，单个参数名最多 " +
-				strconv.Itoa(refImageParamNameMaxLen) + " 个字符"
-		}
-		if forbiddenRefImageParams[name] {
-			return "", "「" + name + "」是请求的常规参数，不能作为参考图参数名"
-		}
-	}
-
-	joined := model.JoinRefImageParams(names)
-	if len(joined) > refImageParamsMaxLen {
-		return "", "参考图参数名配置过长，最多 " + strconv.Itoa(refImageParamsMaxLen) + " 个字符"
-	}
-	return joined, ""
 }
 
 // AdminGetCreditRule 获取模型的积分规则
@@ -67,13 +33,6 @@ func AdminGetCreditRule(c *gin.Context) {
 		return
 	}
 
-	// 存量规则（及未显式配置的规则）该字段为空串，计费时回落到内置默认值。
-	// 这里回填后再返回，否则管理员看到空输入框、默认值却在静默生效，
-	// 会产生「我明明没配参数名为什么在扣费」的困惑。
-	if rule.RefImageParams == "" {
-		rule.RefImageParams = model.DefaultRefImageParams
-	}
-
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": rule})
 }
 
@@ -88,13 +47,12 @@ type AdminSaveCreditRuleRequest struct {
 	// 白名单式全量写入，若用值类型，任何省略该字段的请求（旧缓存前端、curl、
 	// 其它 API 客户端）都会把已配置的单价静默清零。
 	RefImageCredits *float64 `json:"ref_image_credits"`
-	RefImageParams  *string  `json:"ref_image_params"`
 }
 
 // CreditRuleItemRequest 参数组合映射项请求（一组 AND 条件 → 积分）
 type CreditRuleItemRequest struct {
-	Credits    float64                       `json:"credits"`
-	Conditions []CreditRuleConditionRequest  `json:"conditions"`
+	Credits    float64                      `json:"credits"`
+	Conditions []CreditRuleConditionRequest `json:"conditions"`
 }
 
 // CreditRuleConditionRequest 参数映射条件请求
@@ -149,16 +107,6 @@ func AdminSaveCreditRule(c *gin.Context) {
 		}
 	}
 
-	var normalizedRefParams *string
-	if req.RefImageParams != nil {
-		joined, msg := normalizeRefImageParams(*req.RefImageParams)
-		if msg != "" {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": msg})
-			return
-		}
-		normalizedRefParams = &joined
-	}
-
 	// 验证模型是否存在
 	_, err = model.GetModelByID(modelID)
 	if err != nil {
@@ -186,6 +134,13 @@ func AdminSaveCreditRule(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "第 " + strconv.Itoa(i+1) + " 项的第 " + strconv.Itoa(j+1) + " 个条件参数路径和参数值不能为空"})
 				return
 			}
+			// 参数路径必须是标准请求字段。其余名字永远匹配不上（计费只认标准字段），
+			// 配错了不会有任何报错、只会静默退回基础积分计费，必须在保存时就挡住。
+			if !supplier.IsCreditParamName(cond.ParamPath) {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "第 " + strconv.Itoa(i+1) + " 项的第 " + strconv.Itoa(j+1) +
+					" 个条件的参数路径「" + cond.ParamPath + "」不是标准请求字段，可选：" + strings.Join(supplier.CreditParamNames(), ", ")})
+				return
+			}
 		}
 	}
 
@@ -203,9 +158,6 @@ func AdminSaveCreditRule(c *gin.Context) {
 		if req.RefImageCredits != nil {
 			updates["ref_image_credits"] = *req.RefImageCredits
 		}
-		if normalizedRefParams != nil {
-			updates["ref_image_params"] = *normalizedRefParams
-		}
 		if err := model.UpdateCreditRule(existingRule.ID, updates); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "更新积分规则失败"})
 			return
@@ -222,18 +174,14 @@ func AdminSaveCreditRule(c *gin.Context) {
 	} else {
 		// 创建新规则
 		rule := &model.CreditRule{
-			ModelID:        modelID,
-			RuleType:       model.CreditRuleType(req.RuleType),
-			BaseCredits:    req.BaseCredits,
-			Description:    req.Description,
-			Status:         1,
-			RefImageParams: model.DefaultRefImageParams,
+			ModelID:     modelID,
+			RuleType:    model.CreditRuleType(req.RuleType),
+			BaseCredits: req.BaseCredits,
+			Description: req.Description,
+			Status:      1,
 		}
 		if req.RefImageCredits != nil {
 			rule.RefImageCredits = *req.RefImageCredits
-		}
-		if normalizedRefParams != nil {
-			rule.RefImageParams = *normalizedRefParams
 		}
 
 		// 构建参数组合映射

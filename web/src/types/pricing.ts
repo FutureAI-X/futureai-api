@@ -18,8 +18,6 @@ export interface CreditRule {
   description?: string
   /** 每张参考图消耗的积分，0 = 不计费 */
   ref_image_credits?: number
-  /** 参考图参数名（逗号分隔） */
-  ref_image_params?: string
   items?: CreditRuleItem[]
 }
 

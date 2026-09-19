@@ -8,120 +8,106 @@ import (
 	"unicode/utf8"
 
 	"github.com/FutureAI/token-hub/model"
+	"github.com/FutureAI/token-hub/supplier"
 )
+
+// ── 请求标准：非标准字段一律忽略 ──
+
+// 标准之外的字段不能被解析进来：它们既进不了计费条件，也进不了快照和上游请求。
+// VendorModelID 尤其重要——它由服务端填充，调用方注入就等于绕过模型映射。
+func TestImageGenerateRequestIgnoresNonStandardFields(t *testing.T) {
+	body := `{
+		"model": "gpt-image-2.5-flare-ext",
+		"prompt": "a cat",
+		"size": "1024x1024",
+		"resolution": "2k",
+		"image_urls": ["https://a.png"],
+		"quality": "high",
+		"n": 4,
+		"seed": 7,
+		"version": "sunburst",
+		"vendor_model_id": "hacked",
+		"body": {"model": "hacked"}
+	}`
+
+	var req supplier.ImageGenerateRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("解析标准字段失败: %v", err)
+	}
+
+	if req.VendorModelID != "" {
+		t.Errorf("调用方不该能注入 VendorModelID，实际 %q", req.VendorModelID)
+	}
+	if req.Model != "gpt-image-2.5-flare-ext" || req.Prompt != "a cat" ||
+		req.Size != "1024x1024" || req.Resolution != "2k" || len(req.ImageURLs) != 1 {
+		t.Fatalf("标准字段解析结果不符: %+v", req)
+	}
+
+	params := req.CreditParams()
+	if len(params) != 4 {
+		t.Errorf("参与计费的字段集不符: %v", params)
+	}
+	for _, name := range []string{"quality", "n", "seed", "version", "vendor_model_id"} {
+		if _, ok := params[name]; ok {
+			t.Errorf("非标准字段 %s 不该参与计费", name)
+		}
+	}
+}
 
 // ── countRefImages：参考图张数统计 ──
 
-func TestCountRefImagesCountsArraysAndStrings(t *testing.T) {
-	params := []string{"image", "images", "image_urls"}
-
+func TestCountRefImagesCountsURLs(t *testing.T) {
 	cases := []struct {
-		name string
-		body map[string]interface{}
-		want int
+		name      string
+		imageURLs []string
+		want      int
 	}{
-		{"无参考图字段", map[string]interface{}{"prompt": "a cat"}, 0},
-		{"单字符串算1张", map[string]interface{}{"image": "https://a.png"}, 1},
-		{"字符串数组按元素个数", map[string]interface{}{"image": []interface{}{"https://a.png", "https://b.png"}}, 2},
-		{"Go字符串切片", map[string]interface{}{"images": []string{"a.png", "b.png", "c.png"}}, 3},
-		{"空数组算0张", map[string]interface{}{"image": []interface{}{}}, 0},
-		{"空字符串算0张", map[string]interface{}{"image": ""}, 0},
-		{"数组里的空串不计", map[string]interface{}{"image": []interface{}{"a.png", "", "b.png"}}, 2},
-		{"数组里的null不计", map[string]interface{}{"image": []interface{}{"a.png", nil}}, 1},
-		{"显式null算0张", map[string]interface{}{"image": nil}, 0},
-		{"未配置的参数名不参与", map[string]interface{}{"reference_images": []interface{}{"a.png", "b.png"}}, 0},
+		{"无参考图", nil, 0},
+		{"空数组", []string{}, 0},
+		{"单个", []string{"https://a.png"}, 1},
+		{"多个", []string{"https://a.png", "https://b.png", "https://c.png"}, 3},
+		{"空串是占位没填，不算一张", []string{"https://a.png", "", "https://b.png"}, 2},
+		{"全是空串", []string{"", ""}, 0},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := countRefImages(tc.body, params); got != tc.want {
-				t.Errorf("countRefImages(%v) = %d, want %d", tc.body, got, tc.want)
+			if got := countRefImages(tc.imageURLs); got != tc.want {
+				t.Errorf("countRefImages(%v) = %d, want %d", tc.imageURLs, got, tc.want)
 			}
 		})
 	}
 }
 
-// 默认参数名列表里 image / image_url / image_urls 是同一张图的不同 SDK 写法，
-// 按参数名累加会把一张图扣上 2~3 次，必须按图片值去重。
-func TestCountRefImagesDeduplicatesAcrossParamNames(t *testing.T) {
-	params := model.ParseRefImageParams(model.DefaultRefImageParams)
+// 同一张图重复出现只计一次：否则调用方复制一遍 URL 就会被多扣一次。
+func TestCountRefImagesDeduplicates(t *testing.T) {
+	urls := []string{"https://a.png", "https://b.png", "https://a.png"}
 
-	cases := []struct {
-		name string
-		body map[string]interface{}
-		want int
-	}{
-		{
-			"同一张图出现在两个参数名下只计一次",
-			map[string]interface{}{"image": "https://a.png", "image_urls": []interface{}{"https://a.png"}},
-			1,
-		},
-		{
-			"不同图片分别计数",
-			map[string]interface{}{"image": "https://a.png", "image_urls": []interface{}{"https://b.png"}},
-			2,
-		},
-		{
-			"同一数组内的重复值只计一次",
-			map[string]interface{}{"image": []interface{}{"https://a.png", "https://a.png"}},
-			1,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := countRefImages(tc.body, params); got != tc.want {
-				t.Errorf("countRefImages(%v) = %d, want %d", tc.body, got, tc.want)
-			}
-		})
-	}
-}
-
-// 类型不认识时保守按 1 张计：漏计费是资损，多计费只是一次可解释的争议。
-func TestCountRefImagesConservativeOnUnknownTypes(t *testing.T) {
-	params := []string{"image"}
-
-	cases := []struct {
-		name string
-		body map[string]interface{}
-		want int
-	}{
-		{"对象形态按1张", map[string]interface{}{"image": map[string]interface{}{"url": "https://a.png"}}, 1},
-		{"数字按1张", map[string]interface{}{"image": 0}, 1},
-		{"布尔按1张", map[string]interface{}{"image": false}, 1},
-		{"对象数组每个算1张", map[string]interface{}{"image": []interface{}{map[string]interface{}{"url": "a"}, map[string]interface{}{"url": "b"}}}, 2},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := countRefImages(tc.body, params); got != tc.want {
-				t.Errorf("countRefImages(%v) = %d, want %d", tc.body, got, tc.want)
-			}
-		})
+	if got := countRefImages(urls); got != 2 {
+		t.Errorf("countRefImages(%v) = %d, want 2（去重后）", urls, got)
 	}
 }
 
 // 请求体目前没有大小限制，一个上万元素的数组会产生荒谬的扣费，必须封顶。
 func TestCountRefImagesClampsToMax(t *testing.T) {
-	huge := make([]interface{}, maxRefImagesPerRequest+50)
+	huge := make([]string, maxRefImagesPerRequest+50)
 	for i := range huge {
 		huge[i] = "https://example.com/" + strconv.Itoa(i) + ".png"
 	}
 
-	got := countRefImages(map[string]interface{}{"image": huge}, []string{"image"})
-	if got != maxRefImagesPerRequest {
+	if got := countRefImages(huge); got != maxRefImagesPerRequest {
 		t.Errorf("超限时应封顶到 %d，实际 %d", maxRefImagesPerRequest, got)
 	}
 }
 
 // 恰好等于上限时不应触发封顶，也不应少计
 func TestCountRefImagesAtMaxBoundary(t *testing.T) {
-	exact := make([]interface{}, maxRefImagesPerRequest)
+	exact := make([]string, maxRefImagesPerRequest)
 	for i := range exact {
 		exact[i] = "https://example.com/" + strconv.Itoa(i) + ".png"
 	}
 
-	if got := countRefImages(map[string]interface{}{"image": exact}, []string{"image"}); got != maxRefImagesPerRequest {
+	if got := countRefImages(exact); got != maxRefImagesPerRequest {
 		t.Errorf("恰好上限时应为 %d，实际 %d", maxRefImagesPerRequest, got)
 	}
 }
@@ -172,6 +158,37 @@ func TestMarshalRequestBodyKeepsNormalBody(t *testing.T) {
 	want, _ := json.Marshal(body)
 	if got != string(want) {
 		t.Errorf("未超长时不应改动内容: got %q, want %q", got, want)
+	}
+}
+
+// 快照是调用方视角：只含标准字段，供应商侧模型 ID 不能落库。
+func TestMarshalRequestBodyExcludesVendorModelID(t *testing.T) {
+	req := supplier.ImageGenerateRequest{
+		Model:         "gpt-image-2.5-flare-ext",
+		Prompt:        "a cat",
+		Size:          "1024x1024",
+		Resolution:    "2k",
+		ImageURLs:     []string{"https://a.png"},
+		VendorModelID: "gpt-image-2.5-ext",
+	}
+
+	got := marshalRequestBody(req)
+
+	if strings.Contains(got, `"gpt-image-2.5-ext"`) {
+		t.Errorf("快照不应包含供应商侧模型 ID: %s", got)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("快照应为合法 JSON: %v", err)
+	}
+	if len(decoded) != 5 {
+		t.Fatalf("快照字段集不符: %v", decoded)
+	}
+	for _, k := range []string{"model", "prompt", "size", "resolution", "image_urls"} {
+		if _, ok := decoded[k]; !ok {
+			t.Errorf("快照缺少标准字段 %s", k)
+		}
 	}
 }
 

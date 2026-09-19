@@ -18,20 +18,24 @@ import (
 // ImageGenerate 图像生成端点
 // POST /v1/images/generations
 func ImageGenerate(c *gin.Context) {
-	// 解析请求体
-	var reqBody map[string]interface{}
-	if err := c.ShouldBindJSON(&reqBody); err != nil {
+	// 解析请求体。只认标准字段，请求体里的其他字段被 encoding/json 直接忽略，
+	// 因此后续流程（计费、快照、供应商调用）都只可能看到标准字段。
+	var req supplier.ImageGenerateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		common.SysErrorf("[ImageGenerate] 请求体解析失败: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": "请求体格式错误"})
 		return
 	}
 
-	// 提取 model 字段
-	modelName, _ := reqBody["model"].(string)
+	modelName := req.Model
 	if modelName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": "缺少 model 参数"})
 		return
 	}
+
+	// 补齐标准默认值，且必须在计费之前：计费条件匹配的是补齐后的值，
+	// 否则省略 resolution 的请求会计基础价、实际按 1k 出图，价格与生成结果不符。
+	req.ApplyDefaults()
 
 	common.SysLogf("[ImageGenerate] 收到请求: model=%s", modelName)
 
@@ -109,10 +113,9 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 7. 计算积分消耗。
-	// 必须在覆盖 reqBody["model"] 之前计算：差异化计费规则可能以 model 作为条件，
-	// 此处应匹配调用方传入的模型名，而不是供应商侧的模型 ID。
-	credits, err := resolveCredits(m.ID, m.Type, reqBody, endpoint.Path)
+	// 7. 计算积分消耗。条件按标准字段匹配：差异化计费规则可能以 model 作为条件，
+	// 此处匹配的是调用方传入的模型名，供应商侧模型 ID 不作为计费条件。
+	credits, err := resolveCredits(m.ID, m.Type, req, endpoint.Path)
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 计费规则解析失败: model=%s, err=%v", modelName, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费规则，暂不可用"})
@@ -134,9 +137,9 @@ func ImageGenerate(c *gin.Context) {
 		EndpointID: endpoint.ID,
 		Status:     "pending", // 尚未提交上游
 		Credits:    credits.Total,
-		// 必须在下面覆盖 reqBody["model"] 之前取快照，否则落库的是供应商侧模型 ID，
-		// 回溯时看不到调用方实际传入的模型名，也无法复现计费规则的匹配过程。
-		RequestBody: marshalRequestBody(reqBody),
+		// 落库的是标准字段快照（已补齐默认值），即计费实际依据的那份数据：
+		// 供应商侧模型 ID 被 json:"-" 排除，回溯时可据此复现条件匹配过程。
+		RequestBody: marshalRequestBody(req),
 	}
 
 	if err := model.CreateTaskAndDeduct(&task, credits.Total, credits.Remark()); err != nil {
@@ -164,15 +167,12 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 10. 调用供应商 API（将用户侧模型名替换为供应商侧模型 ID）
-	reqBody["model"] = vendorModel.VendorModelID
+	// 10. 调用供应商 API。标准字段原样传下去，供应商侧模型 ID 单独给出：
+	// 供应商需要同时知道「调用方请求的是哪个模型」（多个模型可能映射到同一个
+	// vendor_model_id，要靠它区分变体）和「该往上游发哪个模型 ID」。
+	req.VendorModelID = vendorModel.VendorModelID
 
-	result := s.ImageGenerate(supplier.ImageGenerateRequest{
-		// 一并带上用户侧模型名：多个模型映射到同一 vendor_model_id 时，
-		// 供应商侧只能靠它区分调用方实际请求的变体。
-		Model: modelName,
-		Body:  reqBody,
-	})
+	result := s.ImageGenerate(req)
 
 	// 11. 上游调用失败 → 退还积分
 	if result.Code != "success" {
@@ -215,8 +215,8 @@ const requestBodyTruncatedMarker = "...[truncated]"
 // marshalRequestBody 把请求体序列化成可落库的字符串。
 //
 // 只用于回溯，因此任何失败都必须降级为「记不下就不记」，绝不能让它影响一次已经扣过费的调用。
-func marshalRequestBody(reqBody map[string]interface{}) string {
-	data, err := json.Marshal(reqBody)
+func marshalRequestBody(v interface{}) string {
+	data, err := json.Marshal(v)
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 请求体序列化失败，本次不记录: %v", err)
 		return ""
@@ -291,7 +291,10 @@ func (r creditResolution) Remark() string {
 // 计费公式：基础积分（或命中的参数组合积分）+ 参考图张数 × 每张参考图积分。
 // 参考图部分是叠加而非取代，且需要同时满足两个条件：模型类型是图像生成、
 // 且 endpointPath 命中图片端点白名单。
-func resolveCredits(modelID int, modelType model.ModelType, reqBody map[string]interface{}, endpointPath string) (creditResolution, error) {
+//
+// 计费口径只认标准字段：调用方发的非标准字段进不了 req，因此既不会命中条件，
+// 也不会被算成参考图——价格永远对得上实际发往上游的请求。
+func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGenerateRequest, endpointPath string) (creditResolution, error) {
 	creditRule, err := model.GetCreditRuleByModelID(modelID)
 	if err != nil || creditRule == nil {
 		return creditResolution{}, errors.New("模型未配置计费规则")
@@ -300,11 +303,12 @@ func resolveCredits(modelID int, modelType model.ModelType, reqBody map[string]i
 	creditsAmount := creditRule.BaseCredits
 
 	// 参数组合差异化定价：某组合的所有条件都命中时使用该组合的积分。
-	// 注意条件只支持字符串值的顶层参数，数组值（如参考图）永远匹配不上。
+	// 注意条件只支持字符串值的标准字段，数组值（如参考图）永远匹配不上。
+	params := req.CreditParams()
 	for _, item := range creditRule.Items {
 		matched := len(item.Conditions) > 0
 		for _, cond := range item.Conditions {
-			if paramVal, ok := reqBody[cond.ParamPath].(string); !ok || paramVal != cond.ParamValue {
+			if params[cond.ParamPath] != cond.ParamValue {
 				matched = false
 				break
 			}
@@ -327,7 +331,7 @@ func resolveCredits(modelID int, modelType model.ModelType, reqBody map[string]i
 	refImageCount := 0
 	if creditRule.RefImageCredits > 0 && isRefImageModel(modelType) {
 		if isRefImageEndpoint(endpointPath) {
-			refImageCount = countRefImages(reqBody, creditRule.EffectiveRefImageParams())
+			refImageCount = countRefImages(req.ImageURLs)
 			creditsAmount += float64(refImageCount) * creditRule.RefImageCredits
 		} else {
 			// 配了参考图计费却收不到钱：这是误配，必须可见
@@ -349,18 +353,17 @@ func resolveCredits(modelID int, modelType model.ModelType, reqBody map[string]i
 	}, nil
 }
 
-// countRefImages 统计请求体中携带的参考图张数。
-// 按「去重后的图片值」计数：默认参数名里的 image / image_url / image_urls 是
-// 同一张图的不同 SDK 写法，若按参数名累加，会把一张图扣上 2~3 次。
-func countRefImages(reqBody map[string]interface{}, params []string) int {
-	seen := make(map[string]bool)
-	for _, name := range params {
-		raw, ok := reqBody[name]
-		if !ok || raw == nil {
-			continue
-		}
-		for _, v := range refImageValues(raw, name) {
-			seen[v] = true
+// countRefImages 统计参考图张数。
+//
+// 按「去重后的 URL」计数：同一张图在数组里出现多次只算一张，
+// 否则调用方复制一遍 URL 就会被多扣一次。
+// 类型由标准结构体保证是 []string，不再需要按取值形态分支判断。
+func countRefImages(imageURLs []string) int {
+	seen := make(map[string]bool, len(imageURLs))
+	for _, u := range imageURLs {
+		// 空串是「占位但没填」，不算一张图
+		if u != "" {
+			seen[u] = true
 		}
 	}
 
@@ -369,50 +372,6 @@ func countRefImages(reqBody map[string]interface{}, params []string) int {
 		return maxRefImagesPerRequest
 	}
 	return len(seen)
-}
-
-// refImageValues 把某个参数名的取值归一化成图片值列表（用于去重计数）。
-// 未知类型保守按 1 张计并告警：漏计费是资损，多计费只是一次可解释的争议。
-func refImageValues(raw interface{}, name string) []string {
-	switch v := raw.(type) {
-	case string:
-		if v == "" {
-			return nil
-		}
-		return []string{v}
-
-	case []interface{}:
-		values := make([]string, 0, len(v))
-		for _, elem := range v {
-			if s, ok := elem.(string); ok {
-				// 空串是「占位但没填」，不算一张图
-				if s != "" {
-					values = append(values, s)
-				}
-				continue
-			}
-			// 元素非字符串（0 / false / {} / null）：只有非 nil 才当作一张图。
-			// 朴素的 s != "" 判断会把 0 和 false 误判成有效图片。
-			if elem != nil {
-				common.SysErrorf("[countRefImages] 参数 %s 的数组元素类型为 %T，按 1 张计入", name, elem)
-				values = append(values, fmt.Sprintf("%v", elem))
-			}
-		}
-		return values
-
-	case []string:
-		values := make([]string, 0, len(v))
-		for _, s := range v {
-			if s != "" {
-				values = append(values, s)
-			}
-		}
-		return values
-
-	default:
-		common.SysErrorf("[countRefImages] 参数 %s 的类型为 %T，无法识别，按 1 张计入", name, raw)
-		return []string{fmt.Sprintf("%v", raw)}
-	}
 }
 
 // GetTask 查询任务状态

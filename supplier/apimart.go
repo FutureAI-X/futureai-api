@@ -68,28 +68,36 @@ func applyImageVersion(body map[string]interface{}, requestedModel string) {
 		return
 	}
 
-	// 服务端推导的值优先。若放行调用方自带的 version，就能拿着一个模型的计费
-	// （计费规则按调用方模型名匹配）去生成另一个模型的风格。
-	if existing, exists := body["version"]; exists && existing != version {
-		common.SysErrorf("[APIMart] 调用方传入 version=%v，按模型 %s 覆盖为 %s", existing, requestedModel, version)
-	}
 	body["version"] = version
 
 	common.SysLogf("[APIMart] 根据模型 %s 补全 version=%s", requestedModel, version)
+}
+
+// buildRequest 把平台标准字段翻译成 APIMart 的线上请求体。
+//
+// size / resolution 直接写入：默认值已在计费前由 ApplyDefaults 补齐，
+// 传空串上游会当作未指定，反而绕开了默认值。image_urls 为空时不写入。
+func buildRequest(req ImageGenerateRequest) map[string]interface{} {
+	body := map[string]interface{}{
+		"model":      req.VendorModelID,
+		"prompt":     req.Prompt,
+		"size":       req.Size,
+		"resolution": req.Resolution,
+	}
+	if len(req.ImageURLs) > 0 {
+		body["image_urls"] = req.ImageURLs
+	}
+
+	applyImageVersion(body, req.Model)
+
+	return body
 }
 
 // ImageGenerate 调用 APIMart 图像生成 API
 func (a *apimart) ImageGenerate(req ImageGenerateRequest) ImageGenerateResponse {
 	fail := ImageGenerateResponse{Code: "fail"}
 
-	// 构建请求体。复制一层再补 version，避免写进调用方传进来的 map。
-	body := make(map[string]interface{}, len(req.Body)+1)
-	for k, v := range req.Body {
-		body[k] = v
-	}
-	applyImageVersion(body, req.Model)
-
-	bodyBytes, err := json.Marshal(body)
+	bodyBytes, err := json.Marshal(buildRequest(req))
 	if err != nil {
 		common.SysErrorf("[APIMart] 请求体序列化失败: %v", err)
 		return fail
