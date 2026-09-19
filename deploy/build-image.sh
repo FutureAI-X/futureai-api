@@ -51,8 +51,15 @@ REFS=("$IMAGE:$TAG")
 TAGS=()
 for ref in "${REFS[@]}"; do TAGS+=(-t "$ref"); done
 
-echo "==> 构建 $IMAGE:$TAG ($PLATFORM)"
-docker buildx build --platform "$PLATFORM" "${TAGS[@]}" --load .
+# 把 commit 写进镜像元数据（org.opencontainers.image.revision）。
+# 时间戳标签与代码版本之间没有对应关系，出问题时无法确定「上一个版本」
+# 到底是哪一版，回滚只能靠猜。
+GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+echo "==> 构建 $IMAGE:$TAG ($PLATFORM, commit $GIT_SHA)"
+docker buildx build --platform "$PLATFORM" \
+  --build-arg "GIT_SHA=$GIT_SHA" \
+  "${TAGS[@]}" --load .
 
 echo "==> 导出 $ARCHIVE"
 docker save "${REFS[@]}" | gzip >"$ARCHIVE"

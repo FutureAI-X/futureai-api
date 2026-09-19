@@ -1,0 +1,46 @@
+# 行尾统一。开发在 Windows、部署到 Linux，而这个仓库的部署方式是
+# `scp -r deploy/ <server>:/opt/stacks/` —— 如果脚本在 Windows 上被检出成
+# CRLF，传到服务器后会报 `\r: command not found`（或更隐蔽的解析错误）。
+#
+# 这里强制这些文件在**仓库里和工作区里**都是 LF，不受 core.autocrlf 影响。
+#
+# 只在 Windows 本机使用、不离开这台机器的文件（.bat/.cmd/.ps1）保持 CRLF。
+
+# 会在 Linux 上执行的脚本：必须是 LF
+*.sh            text eol=lf
+*.bash          text eol=lf
+
+# 容器与编排：Linux 侧读取，\r 会进入镜像元数据或触发 compose 解析错误
+Dockerfile      text eol=lf
+*.dockerfile    text eol=lf
+.dockerignore   text eol=lf
+docker-compose*.yml text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+
+# 配置文件与文档
+*.conf          text eol=lf
+*.template      text eol=lf
+Makefile        text eol=lf
+*.md            text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+.env.example    text eol=lf
+
+# Go 源码
+*.go            text eol=lf
+go.mod          text eol=lf
+go.sum          text eol=lf
+
+# 二进制与产物：不做任何转换（转换会破坏文件内容）
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.webp          binary
+*.ico           binary
+*.svg           text eol=lf
+*.gz            binary
+*.tar.gz        binary
+*.pem           text eol=lf
+*.key           text eol=lf
