@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Coins } from 'lucide-react'
+import { formatCredits } from '../../lib/credits'
 
 interface UserInfo {
   id: number
@@ -79,12 +80,12 @@ export function Wallet() {
           <div className='flex items-center gap-8'>
             <div>
               <p className='text-muted-foreground text-sm font-medium'>当前积分</p>
-              <p className='text-4xl font-bold tabular-nums'>{formatPoints(user.credits)}</p>
+              <p className='text-4xl font-bold tabular-nums'>{formatCredits(user.credits)}</p>
             </div>
             <div className='border-border/40 h-12 border-l' />
             <div>
               <p className='text-muted-foreground text-sm font-medium'>已消耗积分</p>
-              <p className='text-2xl font-bold tabular-nums text-muted-foreground'>{formatPoints(user.used_credits)}</p>
+              <p className='text-2xl font-bold tabular-nums text-muted-foreground'>{formatCredits(user.used_credits)}</p>
             </div>
           </div>
         </div>
@@ -105,7 +106,3 @@ export function Wallet() {
 }
 
 // ── 格式化积分 ──
-function formatPoints(points: number): string {
-  if (points <= 0) return '0.00'
-  return points.toFixed(2)
-}

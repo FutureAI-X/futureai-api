@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { Loader2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { formatCredits, validCreditInput } from '../../lib/credits'
+import { CreditAmountInput } from './CreditAmountInput'
 
 type CreditMode = 'add' | 'subtract' | 'override'
 
@@ -57,19 +59,23 @@ export function CreditDialog({
 
   const amountValue = parseFloat(amount) || 0
 
+  // 位数与后端对齐：格式错误的输入由 CreditAmountInput 即时标红，
+  // 这里只是提交闸门。覆盖模式允许填 0（表示清零），添加/减少必须为正。
+  const canConfirm = validCreditInput(amount) && (mode === 'override' || amountValue > 0)
+
   const getPreview = () => {
     switch (mode) {
       case 'add':
-        return `当前积分: ${currentCredits.toLocaleString()}  + ${amountValue.toLocaleString()} = ${(currentCredits + amountValue).toLocaleString()}`
+        return `当前积分: ${formatCredits(currentCredits)}  + ${formatCredits(amountValue)} = ${formatCredits(currentCredits + amountValue)}`
       case 'subtract':
-        return `当前积分: ${currentCredits.toLocaleString()}  - ${amountValue.toLocaleString()} = ${Math.max(0, currentCredits - amountValue).toLocaleString()}`
+        return `当前积分: ${formatCredits(currentCredits)}  - ${formatCredits(amountValue)} = ${formatCredits(Math.max(0, currentCredits - amountValue))}`
       case 'override':
-        return `当前积分: ${currentCredits.toLocaleString()} → ${amountValue.toLocaleString()}`
+        return `当前积分: ${formatCredits(currentCredits)} → ${formatCredits(amountValue)}`
     }
   }
 
   const handleConfirm = () => {
-    if (mode !== 'override' && amountValue <= 0) return
+    if (!canConfirm) return
     onConfirm(mode, amountValue)
   }
 
@@ -120,13 +126,9 @@ export function CreditDialog({
         {/* 数值输入 */}
         <div className='mt-4 space-y-2'>
           <label className='text-sm font-medium'>积分数量</label>
-          <input
-            type='number'
+          <CreditAmountInput
             value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            min={mode === 'override' ? 0 : 1}
-            placeholder='请输入积分数量'
-            className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+            onChange={setAmount}
             onKeyDown={(e) => { if (e.key === 'Enter') handleConfirm() }}
           />
         </div>
@@ -142,7 +144,7 @@ export function CreditDialog({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={loading || (mode !== 'override' && amountValue <= 0)}
+            disabled={loading || !canConfirm}
             className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors disabled:opacity-50'
           >
             {loading && <Loader2 className='size-4 animate-spin' />}

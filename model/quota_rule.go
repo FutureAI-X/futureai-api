@@ -25,8 +25,10 @@ type CreditRule struct {
 	// 规则类型：per_request=按次计费
 	RuleType CreditRuleType `json:"rule_type" gorm:"size:32;not null;default:'per_request'"`
 
-	// 基础积分（每次请求扣除的积分数量）
-	BaseCredits float64 `json:"base_credits" gorm:"not null;default:0"`
+	// 基础积分（每次请求扣除的积分数量）。
+	// 显式指定 numeric(20,10) 而不是让 GORM 按 float64 推出无约束的 decimal：
+	// 上界可预期，且与其余积分列口径一致（业务精度见 CreditPrecision）。
+	BaseCredits float64 `json:"base_credits" gorm:"type:numeric(20,10);not null;default:0"`
 
 	// 规则描述
 	Description string `json:"description,omitempty" gorm:"type:text"`
@@ -42,7 +44,7 @@ type CreditRule struct {
 
 	// 参考图附加计费：每张参考图消耗的积分，0=不计费。
 	// 叠加在基础积分（或命中的参数组合积分）之上，不取代它们。
-	RefImageCredits float64 `json:"ref_image_credits" gorm:"not null;default:0"`
+	RefImageCredits float64 `json:"ref_image_credits" gorm:"type:numeric(20,10);not null;default:0"`
 
 	// 注意：数据库里还有一列 credit_rules.ref_image_params（历史遗留），
 	// 自请求标准落地后已不再被读取。参考图统一按标准字段 image_urls 计数，
@@ -66,7 +68,7 @@ type CreditRuleItem struct {
 	RuleID int `json:"rule_id" gorm:"index;not null"`
 
 	// 该组合命中部请求时对应的积分
-	Credits float64 `json:"credits" gorm:"not null;default:0"`
+	Credits float64 `json:"credits" gorm:"type:numeric(20,10);not null;default:0"`
 
 	// 记录创建时间
 	CreatedAt time.Time `json:"created_at"`

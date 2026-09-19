@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { User, Mail, AtSign, Pencil, Loader2, Coins, X, KeyRound, Copy, Check } from 'lucide-react'
 import { getUserAvatarFallback, getUserAvatarStyle } from '../../lib/avatar'
 import { decryptWithKey } from '../../lib/crypto'
+import { formatCredits } from '../../lib/credits'
 
 interface UserInfo {
   id: number
@@ -306,7 +307,7 @@ export function Profile() {
           </div>
           <div>
             <p className='text-muted-foreground text-xs'>当前积分</p>
-            <p className='text-2xl font-bold tabular-nums'>{formatPoints(user.credits)}</p>
+            <p className='text-2xl font-bold tabular-nums'>{formatCredits(user.credits)}</p>
           </div>
         </div>
         <div className='border-border/40 mt-4 flex items-center gap-3 border-t pt-4'>
@@ -315,7 +316,7 @@ export function Profile() {
           </div>
           <div>
             <p className='text-muted-foreground text-xs'>已消耗积分</p>
-            <p className='text-lg font-semibold tabular-nums'>{formatPoints(user.used_credits)}</p>
+            <p className='text-lg font-semibold tabular-nums'>{formatCredits(user.used_credits)}</p>
           </div>
         </div>
       </div>
@@ -456,7 +457,3 @@ export function Profile() {
   )
 }
 
-function formatPoints(points: number): string {
-  if (points <= 0) return '0.00'
-  return points.toFixed(2)
-}

@@ -12,6 +12,7 @@ import {
 import { cn } from '../../lib/utils'
 import { getTaskLogs, getTaskLogDetail, type TaskLog } from '../../api/task-log'
 import { CopyButton } from '../../components/CopyButton'
+import { formatCredits } from '../../lib/credits'
 
 const STATUS_CONFIG: Record<string, { label: string; className: string; icon: typeof Clock }> = {
   submitted: { label: '已提交', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', icon: Clock },
@@ -152,7 +153,7 @@ export function TaskLogs() {
                     </td>
                     <td className='px-4 py-3'>
                       <div className='flex items-center gap-1'>
-                        <span className='text-xs font-medium'>{task.credits}</span>
+                        <span className='text-xs font-medium'>{formatCredits(task.credits)}</span>
                         {task.credits_refunded && (
                           <span className='text-emerald-600 dark:text-emerald-400 text-[10px]'>已退还</span>
                         )}
@@ -245,7 +246,7 @@ export function TaskLogs() {
                     <div>
                       <label className='text-muted-foreground text-xs font-medium'>积分消耗</label>
                       <p className='mt-1 text-sm'>
-                        {detailTask.credits}
+                        {formatCredits(detailTask.credits)}
                         {detailTask.credits_refunded && (
                           <span className='text-emerald-600 dark:text-emerald-400 ml-2 text-xs'>已退还</span>
                         )}

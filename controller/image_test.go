@@ -246,7 +246,16 @@ func TestCreditResolutionRemark(t *testing.T) {
 	}
 
 	got := (creditResolution{Total: 5, Base: 1, RefImageCount: 2}).Remark()
-	if got != "图像生成任务(基础1.00+参考图2张)" {
+	if got != "图像生成任务(基础1+参考图2张)" {
 		t.Errorf("备注格式不符: %q", got)
+	}
+}
+
+// 备注是审计记录，位数写死会和实际扣费对不上：
+// 3 位精度下 0.001 写成 "0.00" 就是在说这次没扣钱。
+func TestCreditResolutionRemarkKeepsSmallAmounts(t *testing.T) {
+	got := (creditResolution{Total: 0.003, Base: 0.001, RefImageCount: 2}).Remark()
+	if got != "图像生成任务(基础0.001+参考图2张)" {
+		t.Errorf("小数额备注被截断: %q", got)
 	}
 }

@@ -4,6 +4,7 @@ import type { PricingModel } from '../types/pricing'
 import { modelTypeLabel } from '../lib/model-type'
 import { CopyButton } from './CopyButton'
 import { OwnerAvatar } from './OwnerAvatar'
+import { formatCredits } from '../lib/credits'
 
 // 规则类型标签。目前后端只有 per_request 一个值，回落到原始字符串以免新增类型时显示空白。
 // 用常量映射而非 enum：tsconfig 开了 erasableSyntaxOnly。
@@ -16,10 +17,6 @@ interface ModelDetailDialogProps {
   // 会出现「页面被锁住却什么都不渲染」的状态（滚动锁 effect 只看 open）。
   model: PricingModel | null
   onClose: () => void
-}
-
-function formatCredits(value: number): string {
-  return value.toFixed(2)
 }
 
 // 条件组合的可读形式，如 "resolution=1k & quality=high"
@@ -188,7 +185,7 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
                     </div>
                     <p className='text-muted-foreground mt-3 text-xs leading-relaxed'>
                       图片生成时，按请求里携带的参考图<strong className='font-medium text-foreground'>张数</strong>叠加在基础积分之上，
-                      而不是取代它。同一张图重复出现在多个参数名下只计一次。
+                      而不是取代它。
                     </p>
                   </div>
                 )}

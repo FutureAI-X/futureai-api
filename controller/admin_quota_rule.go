@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,11 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// validateDecimalPlaces 验证小数位数不超过2位
-func validateDecimalPlaces(value float64) bool {
-	rounded := math.Round(value*100) / 100
-	return math.Abs(value-rounded) < 1e-9
-}
+// creditPrecisionHint 「最多支持 N 位小数」的提示文案。
+// 位数从常量拼出来，否则改了 CreditPrecision 之后提示还在说旧位数。
+var creditPrecisionHint = strconv.Itoa(model.CreditPrecision)
 
 // AdminGetCreditRule 获取模型的积分规则
 func AdminGetCreditRule(c *gin.Context) {
@@ -88,9 +85,9 @@ func AdminSaveCreditRule(c *gin.Context) {
 		return
 	}
 
-	// 验证小数位数不超过2位
-	if !validateDecimalPlaces(req.BaseCredits) {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "基础积分最多支持2位小数"})
+	// 验证小数位数不超过业务精度
+	if !model.ValidCreditPrecision(req.BaseCredits) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "基础积分最多支持" + creditPrecisionHint + "位小数"})
 		return
 	}
 
@@ -101,8 +98,8 @@ func AdminSaveCreditRule(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "每张参考图积分不能为负数"})
 			return
 		}
-		if !validateDecimalPlaces(*req.RefImageCredits) {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "每张参考图积分最多支持2位小数"})
+		if !model.ValidCreditPrecision(*req.RefImageCredits) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "每张参考图积分最多支持" + creditPrecisionHint + "位小数"})
 			return
 		}
 	}
@@ -120,8 +117,8 @@ func AdminSaveCreditRule(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "第 " + strconv.Itoa(i+1) + " 项的积分必须大于 0"})
 			return
 		}
-		if !validateDecimalPlaces(item.Credits) {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "第 " + strconv.Itoa(i+1) + " 项的积分最多支持2位小数"})
+		if !model.ValidCreditPrecision(item.Credits) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "第 " + strconv.Itoa(i+1) + " 项的积分最多支持" + creditPrecisionHint + "位小数"})
 			return
 		}
 		// 至少 1 个条件，无上限

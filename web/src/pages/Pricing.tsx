@@ -8,6 +8,7 @@ import { CopyButton } from '../components/CopyButton'
 import { ModelDetailDialog } from '../components/ModelDetailDialog'
 import { OwnerAvatar } from '../components/OwnerAvatar'
 import type { PricingModel, PricingData } from '../types/pricing'
+import { formatCredits } from '../lib/credits'
 
 // ── 筛选常量 ──
 const FILTER_ALL = '__all__'
@@ -115,7 +116,7 @@ function ModelCard({
           <div className='flex items-center justify-between'>
             <div className='flex items-baseline gap-1'>
               <span className='text-xl font-bold tracking-tight sm:text-2xl'>
-                {minCredits.toFixed(2)}
+                {formatCredits(minCredits)}
               </span>
               <span className='text-muted-foreground text-xs'>积分起</span>
             </div>
@@ -442,7 +443,7 @@ export function Pricing() {
                           <td className='px-4 py-3 text-sm'>
                             {model.credit_rule ? (
                               <>
-                                <span className='font-medium'>{model.credit_rule.base_credits.toFixed(2)}</span>
+                                <span className='font-medium'>{formatCredits(model.credit_rule.base_credits)}</span>
                                 <span className='text-muted-foreground text-xs'> 积分/次</span>
                               </>
                             ) : (

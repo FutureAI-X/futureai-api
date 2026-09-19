@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -277,11 +277,20 @@ type creditResolution struct {
 
 // Remark 生成扣费备注。CreditLog.Remark 是 varchar(255)，超长在 Postgres 上是
 // 硬报错而非截断，所以格式固定且短；张数已封顶 100，长度可控。
+//
+// 基础积分按最短形式输出（1 → "1"，0.001 → "0.001"）：位数写死会与实际扣费对不上，
+// 而这是给人看的审计备注，写了多少就该扣了多少。
 func (r creditResolution) Remark() string {
 	if r.RefImageCount <= 0 {
 		return "图像生成任务"
 	}
-	return fmt.Sprintf("图像生成任务(基础%.2f+参考图%d张)", r.Base, r.RefImageCount)
+	return fmt.Sprintf("图像生成任务(基础%s+参考图%d张)", formatCredits(r.Base), r.RefImageCount)
+}
+
+// formatCredits 以最短形式输出积分值（去掉末尾的 0）。
+// 输入已由 model.RoundCredits 收敛到业务精度，因此不会打出浮点噪声。
+func formatCredits(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 // resolveCredits 按模型的计费规则计算本次请求应扣积分。
@@ -344,11 +353,11 @@ func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGe
 		return creditResolution{}, errors.New("计费规则中的积分为负数")
 	}
 
-	// 收敛到 2 位小数：0.01*3 这类累加会产出 0.030000000000000002。
-	// 写库虽是 numeric(20,6) 会被四舍五入，但内存值会与实际扣费不一致。
+	// 收敛到业务精度：0.001*3 这类累加会产出 0.0030000000000000005。
+	// 不收敛的话内存值与落库值不一致，对账时会被当成差异。
 	return creditResolution{
-		Total:         math.Round(creditsAmount*100) / 100,
-		Base:          math.Round(baseAmount*100) / 100,
+		Total:         model.RoundCredits(creditsAmount),
+		Base:          model.RoundCredits(baseAmount),
 		RefImageCount: refImageCount,
 	}, nil
 }

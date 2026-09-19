@@ -247,6 +247,11 @@ func migrateDB() error {
 		return err
 	}
 
+	// 积分列需要从建表时的标度放宽到 CreditStorageScale，同样放在 AutoMigrate 之后
+	if err := ensureCreditColumnScale(); err != nil {
+		return err
+	}
+
 	// 添加表和字段注释
 	return addTableComments()
 }
@@ -292,6 +297,70 @@ func ensureUniqueCreditRuleIndex() error {
 		return err
 	}
 	common.SysLogf("[计费] %s 已重建为唯一索引", creditRuleModelIndex)
+	return nil
+}
+
+// creditScaleColumns 需要保证存储标度的积分列。
+// 表名与列名都是字面量，不来自外部输入，因此可以安全拼进 DDL。
+var creditScaleColumns = []struct{ table, column string }{
+	{"users", "credits"},
+	{"users", "used_credits"},
+	{"tasks", "credits"},
+	{"credit_logs", "credits"},
+	{"credit_rules", "base_credits"},
+	{"credit_rules", "ref_image_credits"},
+	{"credit_rule_items", "credits"},
+}
+
+// ensureCreditColumnScale 把积分列的标度补齐到 CreditStorageScale。
+//
+// 为什么不只改 gorm tag 交给 AutoMigrate：这些列在历史库上早已存在，AutoMigrate
+// 对已有列的类型改动并不可靠，而漏改是**静默**的——列还是窄的，数据库照旧替我们
+// 舍入，内存值与实际扣费对不上，界面上一切正常，只有对账时才发现差异。
+//
+// 只在标度确实不足时才执行 ALTER：首次会对该表做一次重写（numeric 改标度需要重写
+// 数据），此后类型与标度一致，Postgres 会跳过重写。所以这几张最大的表实际只在
+// 升级的那一次启动被重写，之后每次启动都是几条只读查询。
+func ensureCreditColumnScale() error {
+	for _, c := range creditScaleColumns {
+		var info struct {
+			DataType string `gorm:"column:data_type"`
+			Scale    *int   `gorm:"column:numeric_scale"`
+		}
+		// 限定 current_schema()：不限定的话，别的 schema 下的同名表也会被命中
+		err := DB.Raw(`
+			SELECT data_type, numeric_scale
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = ? AND column_name = ?`,
+			c.table, c.column).Scan(&info).Error
+		if err != nil {
+			return fmt.Errorf("读取 %s.%s 的列类型失败: %w", c.table, c.column, err)
+		}
+
+		// 列不存在：表还没建或已被改名，交给 AutoMigrate 处理，这里不擅自建列
+		if info.DataType == "" {
+			continue
+		}
+		// 非 numeric 属于意料之外的类型（比如被手工改成 float8），不做静默转换
+		if info.DataType != "numeric" {
+			common.SysErrorf("[计费] %s.%s 的类型是 %s 而非 numeric，跳过标度检查",
+				c.table, c.column, info.DataType)
+			continue
+		}
+		// 无标度（numeric 不带 (p,s)）或标度已足够，都无需处理
+		if info.Scale == nil || *info.Scale >= CreditStorageScale {
+			continue
+		}
+
+		common.SysLogf("[计费] 放宽 %s.%s 的标度: %d -> %d（本次会重写该表）",
+			c.table, c.column, *info.Scale, CreditStorageScale)
+		stmt := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE numeric(20,%d)",
+			c.table, c.column, CreditStorageScale)
+		if err := DB.Exec(stmt).Error; err != nil {
+			return fmt.Errorf("放宽 %s.%s 标度失败: %w", c.table, c.column, err)
+		}
+	}
 	return nil
 }
 

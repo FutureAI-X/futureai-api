@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils'
 import { getAdminCreditLogs, type AdminCreditLog } from '../../api/admin'
 import { UserSelect } from '../../components/admin/UserSelect'
 import { CopyButton } from '../../components/CopyButton'
+import { formatCredits } from '../../lib/credits'
 
 const TYPE_CONFIG: Record<string, { label: string; className: string; icon: typeof Minus }> = {
   deduct: { label: '扣除', className: 'text-red-600 dark:text-red-400', icon: Minus },
@@ -106,7 +107,7 @@ export function AdminCreditLogs() {
                     </td>
                     <td className='px-4 py-3'>
                       <span className={cn('text-sm font-medium', typeConf.className)}>
-                        {log.type === 'refund' ? '+' : '-'}{log.credits}
+                        {log.type === 'refund' ? '+' : '-'}{formatCredits(log.credits)}
                       </span>
                     </td>
                     <td className='px-4 py-3'>

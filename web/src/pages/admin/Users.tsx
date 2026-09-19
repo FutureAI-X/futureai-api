@@ -32,6 +32,7 @@ import {
 import { UserDrawer } from '../../components/admin/UserDrawer'
 import { CreditDialog } from '../../components/admin/CreditDialog'
 import { ConfirmDialog } from '../../components/admin/ConfirmDialog'
+import { formatCredits } from '../../lib/credits'
 
 // ── 角色配置 ──
 const ROLE_CONFIG: Record<number, { label: string; icon: typeof Shield; className: string }> = {
@@ -356,9 +357,9 @@ export function AdminUsers() {
                       </td>
                       <td className='px-4 py-3'>
                         <div className='flex flex-col gap-0.5'>
-                          <span className='font-mono text-sm'>{user.credits.toLocaleString()}</span>
+                          <span className='font-mono text-sm'>{formatCredits(user.credits)}</span>
                           <span className='text-muted-foreground text-xs'>
-                            已用 {user.used_credits.toLocaleString()}
+                            已用 {formatCredits(user.used_credits)}
                           </span>
                         </div>
                       </td>

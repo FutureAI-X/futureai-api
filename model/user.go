@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/FutureAI/token-hub/common"
@@ -35,6 +36,9 @@ var (
 	ErrUserDeleted          = errors.New("user is deleted")
 	ErrUserEmptyCredentials = errors.New("username or password is empty")
 	ErrInsufficientCredits  = errors.New("insufficient credits")
+	// ErrCreditPrecision 积分的小数位超过业务精度（model.CreditPrecision）。
+	// 调用方应据此返回 400 而不是 500：这是输入问题，不是服务故障。
+	ErrCreditPrecision = errors.New("积分的小数位超过允许的位数")
 )
 
 // User 用户模型
@@ -54,11 +58,11 @@ type User struct {
 	// 状态：1=启用, 2=禁用, 3=已删除
 	Status int `json:"status" gorm:"default:1"`
 
-	// 当前积分，0 表示无积分
-	Credits float64 `json:"credits" gorm:"type:numeric(20,6);default:0"`
+	// 当前积分，0 表示无积分。标度刻意宽于业务精度 CreditPrecision
+	Credits float64 `json:"credits" gorm:"type:numeric(20,10);default:0"`
 
-	// 已使用积分
-	UsedCredits float64 `json:"used_credits" gorm:"type:numeric(20,6);default:0"`
+	// 已使用积分，标度同上
+	UsedCredits float64 `json:"used_credits" gorm:"type:numeric(20,10);default:0"`
 
 	// 邮箱，用于通知和找回密码，长度限制64字符
 	Email string `json:"email" gorm:"size:64"`
@@ -292,30 +296,45 @@ func UpdateUser(id int, updates map[string]interface{}) error {
 	return DB.Model(&User{}).Where("id = ?", id).Updates(updates).Error
 }
 
-// AdjustUserCredits 调整用户积分。
+// AdjustUserCredits 调整用户积分。写 users.credits 的第三个（也是最后一个）入口，
+// 与 deductCreditsTx / refundCreditsTx 一样在边界上守精度。
+//
 // 全程使用数据库端原子表达式（credits = credits ± ?），不再读-改-写：
 // 并发调整时原来的实现会丢失更新（TOCTOU），导致余额与审计不一致。
 // 同时写入一条 CreditLog，使管理员调整可追溯。
+//
+// 这里刻意是「拒绝」而不是像扣费那样「静默收敛」：金额是管理员手输的，
+// 把他的 1.2345 悄悄改成 1.234 会让人以为系统记账不准；扣费金额是算出来的，
+// 收敛掉浮点噪声才是正确行为。这个差异是有意的。
 func AdjustUserCredits(id int, mode string, value float64) error {
 	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 		return errors.New("积分调整值必须是非负数")
+	}
+	// 位数守卫：这里曾是唯一的漏网点——不校验也不收敛，管理员可以直接往库里
+	// 塞 6 位小数，于是「库里只有 CreditPrecision 位小数」这个前提不成立，
+	// 往后每一次「业务精度放宽」都要先面对一批精度不明的存量数据。
+	if !ValidCreditPrecision(value) {
+		return ErrCreditPrecision
 	}
 
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var expr clause.Expr
 		var remark string
 
+		// 备注按最短形式输出：值已收敛到业务精度，写死位数只会和实际入账对不上
+		amount := strconv.FormatFloat(value, 'f', -1, 64)
+
 		switch mode {
 		case "add":
 			expr = gorm.Expr("credits + ?", value)
-			remark = fmt.Sprintf("管理员增加积分 %.6f", value)
+			remark = "管理员增加积分 " + amount
 		case "subtract":
 			// GREATEST 保证余额不会变成负数
 			expr = gorm.Expr("GREATEST(credits - ?, 0)", value)
-			remark = fmt.Sprintf("管理员扣减积分 %.6f", value)
+			remark = "管理员扣减积分 " + amount
 		case "override":
 			expr = gorm.Expr("?", value)
-			remark = fmt.Sprintf("管理员覆盖积分为 %.6f", value)
+			remark = "管理员覆盖积分为 " + amount
 		default:
 			return errors.New("invalid mode: must be add, subtract, or override")
 		}

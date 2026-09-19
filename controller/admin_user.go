@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -347,8 +348,26 @@ func AdminAdjustUserCredits(c *gin.Context) {
 		return
 	}
 
+	// 位数必须与业务精度一致：这个口子以前不校验，管理员可以往库里塞任意位数的小数，
+	// 之后每一次放宽精度都要先面对一批精度不明的存量余额。
+	if !model.ValidCreditPrecision(req.Value) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "积分最多支持 " + strconv.Itoa(model.CreditPrecision) + " 位小数",
+		})
+		return
+	}
+
 	if err := model.AdjustUserCredits(id, req.Mode, req.Value); err != nil {
 		common.SysErrorf("[AdminAdjustUserCredits] 积分调整失败: id=%d, mode=%s, err=%v", id, req.Mode, err)
+		// 位数问题属于输入错误（上面的校验是同一条规则的重复防线，模型侧也可能先拦下）
+		if errors.Is(err, model.ErrCreditPrecision) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "积分最多支持 " + strconv.Itoa(model.CreditPrecision) + " 位小数",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "积分调整失败",

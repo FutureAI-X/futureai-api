@@ -16,6 +16,8 @@ import {
   type CreditRule,
 } from '../../api/admin-model'
 import { ConfirmDialog } from './ConfirmDialog'
+import { CREDIT_DECIMALS, formatCredits, hasMalformedCreditInput, validCreditInput } from '../../lib/credits'
+import { CreditAmountInput } from './CreditAmountInput'
 
 const RULE_TYPE_OPTIONS = [
   { value: 'per_request', label: '按次计费' },
@@ -58,11 +60,6 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
   const [formError, setFormError] = useState('')
   const [formSaving, setFormSaving] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
-
-  // 格式化为两位小数
-  const formatCredits = (credits: number): string => {
-    return credits.toFixed(2)
-  }
 
   // 清空表单。所有「加载失败 / 无规则 / 删除成功」的分支都必须走这里，
   // 否则上一个模型的价格会串到下一个模型上。
@@ -108,12 +105,13 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
     if (open) loadRule()
   }, [open, loadRule])
 
-  // 验证小数位数不超过2位
-  const validateDecimalPlaces = (value: number): boolean => {
-    const str = value.toString()
-    const decimalPart = str.split('.')[1]
-    return !decimalPart || decimalPart.length <= 2
-  }
+  // 有「填了但位数不对」的输入时禁用保存，与调整对话框一致：不等点击再报错。
+  // 空值不算（基础积分必填、参考图积分留空表示不计费，两者都在提交时统一判断）。
+  const hasMalformedInput = hasMalformedCreditInput([
+    formBaseCredits,
+    formRefImageCredits,
+    ...formItems.map((i) => i.credits),
+  ])
 
   // 添加一个参数组合映射项（默认带一个空条件）
   const addItem = () => {
@@ -167,8 +165,8 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
       return
     }
 
-    if (!validateDecimalPlaces(parseFloat(formBaseCredits))) {
-      setFormError('基础积分最多支持2位小数')
+    if (!validCreditInput(formBaseCredits)) {
+      setFormError(`基础积分最多支持${CREDIT_DECIMALS}位小数`)
       return
     }
 
@@ -178,8 +176,8 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
       setFormError('每张参考图积分不能为负数')
       return
     }
-    if (!validateDecimalPlaces(refImageCredits)) {
-      setFormError('每张参考图积分最多支持2位小数')
+    if (!validCreditInput(formRefImageCredits.trim() === '' ? '0' : formRefImageCredits)) {
+      setFormError(`每张参考图积分最多支持${CREDIT_DECIMALS}位小数`)
       return
     }
 
@@ -191,8 +189,8 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
         setFormError(`第 ${i + 1} 项的积分必须大于 0`)
         return
       }
-      if (!validateDecimalPlaces(credits)) {
-        setFormError(`第 ${i + 1} 项的积分最多支持2位小数`)
+      if (!validCreditInput(item.credits)) {
+        setFormError(`第 ${i + 1} 项的积分最多支持${CREDIT_DECIMALS}位小数`)
         return
       }
       if (item.conditions.length === 0) {
@@ -308,17 +306,14 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
 
                   <div className='space-y-2'>
                     <label className='text-sm font-medium'>基础积分</label>
-                    <div className='flex items-center gap-2'>
-                      <input
-                        type='number'
+                    <div className='flex items-start gap-2'>
+                      <CreditAmountInput
                         value={formBaseCredits}
-                        onChange={(e) => setFormBaseCredits(e.target.value)}
+                        onChange={setFormBaseCredits}
                         placeholder='例如: 10'
-                        min='0'
-                        step='0.01'
-                        className='border-border/60 bg-background focus-visible:ring-ring flex h-9 flex-1 rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                        className='flex-1'
                       />
-                      <span className='text-muted-foreground text-sm whitespace-nowrap'>积分/次</span>
+                      <span className='text-muted-foreground pt-2 text-sm whitespace-nowrap'>积分/次</span>
                     </div>
                     <p className='text-muted-foreground text-xs'>每次 API 调用扣除的基础积分数量</p>
                   </div>
@@ -369,17 +364,15 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                       <div key={index} className='rounded-lg border border-border/60 p-4'>
                         {/* 积分 */}
                         <div className='flex items-center gap-3'>
-                          <div className='flex items-center gap-2'>
-                            <label className='text-sm font-medium shrink-0'>积分</label>
-                            <input
-                              type='text'
-                              inputMode='decimal'
+                          <div className='flex items-start gap-2'>
+                            <label className='text-sm font-medium shrink-0 pt-2'>积分</label>
+                            <CreditAmountInput
                               value={item.credits}
-                              onChange={(e) => updateItemCredits(index, e.target.value)}
+                              onChange={(v) => updateItemCredits(index, v)}
                               placeholder='例如: 0.01'
-                              className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-28 rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                              className='w-28'
                             />
-                            <span className='text-muted-foreground text-xs whitespace-nowrap'>积分/次</span>
+                            <span className='text-muted-foreground pt-2 text-xs whitespace-nowrap'>积分/次</span>
                           </div>
                           <div className='ml-auto flex items-center gap-1'>
                             <button
@@ -463,19 +456,17 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
 
                 <div className='space-y-2'>
                   <label className='text-sm font-medium'>每张参考图积分</label>
-                  <div className='flex items-center gap-2'>
-                    <input
-                      type='text'
-                      inputMode='decimal'
+                  <div className='flex items-start gap-2'>
+                    <CreditAmountInput
                       value={formRefImageCredits}
-                      onChange={(e) => setFormRefImageCredits(e.target.value)}
+                      onChange={setFormRefImageCredits}
                       placeholder='0 表示不计费'
-                      className='border-border/60 bg-background focus-visible:ring-ring flex h-9 flex-1 rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                      className='flex-1'
                     />
-                    <span className='text-muted-foreground text-sm whitespace-nowrap'>积分/张</span>
+                    <span className='text-muted-foreground pt-2 text-sm whitespace-nowrap'>积分/张</span>
                   </div>
                   <p className='text-muted-foreground text-xs'>
-                    例如基础积分 2.00、此处填 1.00，则带 3 张参考图共扣 5.00。
+                    例如基础积分 2.000、此处填 1.000，则带 3 张参考图共扣 5.000。
                     参考图按请求体的 <code>image_urls</code> 数组计数，同一张图只计一次
                   </p>
                 </div>
@@ -519,7 +510,7 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
             </button>
             <button
               onClick={handleSave}
-              disabled={formSaving}
+              disabled={formSaving || hasMalformedInput}
               className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors disabled:opacity-50'
             >
               {formSaving && <Loader2 className='size-4 animate-spin' />}
