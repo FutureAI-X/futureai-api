@@ -70,8 +70,12 @@ docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-
 
 ```bash
 # 在本机（你的开发电脑），仓库根目录下执行
-./deploy/build-image.sh linux/amd64          # 用第 0 步查到的架构
+bash deploy/build-image.sh linux/amd64          # 用第 0 步查到的架构
 ```
+
+> 用 `bash` 前缀而不是 `./`：脚本的执行位依赖 git 里的文件模式，
+> 在部分环境（旧 clone、从压缩包解出的副本）可能没带上，
+> 直接 `./` 会报 `Permission denied`。`bash <脚本>` 没有这个问题。
 
 **预期看到**：最后打印 `完成，镜像包 14M，标签 20260915225600`，并在仓库根目录生成
 `token-hub-20260915225600-amd64.tar.gz`。
@@ -82,7 +86,20 @@ docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-
 
 ```bash
 # 把两个配置目录和镜像都传上去（文件名里的 20260915225600 换成你的标签）
-scp -r deploy/gateway deploy/token-hub <user>@<server>:/opt/stacks/
+#
+# ⚠️ 刻意逐个列出要传的文件，而不是 `scp -r deploy/gateway deploy/token-hub`：
+#    后者会把本机的 certs/（含私钥）、logs/、.env 一起带上服务器。
+#    后果不小：本机那张占位证书传过去之后，第 2 步的 self-signed.sh
+#    会因为「证书已存在」直接跳过并返回 0，你会以为这步失败了、
+#    或者更糟——真的用了那张域名对不上的证书。
+scp deploy/gateway/docker-compose.yml deploy/gateway/.env.example \
+    <user>@<server>:/opt/stacks/gateway/
+scp -r deploy/gateway/templates deploy/gateway/snippets deploy/gateway/scripts \
+    <user>@<server>:/opt/stacks/gateway/
+scp deploy/token-hub/docker-compose.yml deploy/token-hub/.env.example \
+    <user>@<server>:/opt/stacks/token-hub/
+scp deploy/backup.sh deploy/restore.sh <user>@<server>:/opt/stacks/token-hub/
+
 scp token-hub-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
 ```
 
@@ -169,6 +186,14 @@ gunzip -c /tmp/token-hub-20260915225600-amd64.tar.gz | docker load
 cd /opt/stacks/token-hub
 cp .env.example .env
 chmod 600 .env
+
+# 建数据卷。compose 里把它声明成 external（防 `docker compose down -v` 误删生产库），
+# 因此 compose 不会替你创建，必须先手工建好，否则 up 的时候会报
+# "external volume ... not found"。
+docker volume create token-hub-prod-data
+
+# 给备份脚本加执行位（如果 scp 时没带上）
+chmod +x backup.sh restore.sh
 ```
 
 下面三条命令各自**生成一串随机字符**，你需要把它们**复制下来填进 `.env`**：
@@ -330,13 +355,18 @@ curl -I https://token.example.com/health
 Let's Encrypt 证书**有效期只有 90 天**，过期网站就打不开了。所以挂个定时任务：
 
 ```bash
-crontab -e
+# 必须用 sudo：日志写在 /var/log/ 下，普通用户的 crontab 没有写权限，
+# 会静默失败——直到某天证书过期、网站打不开才发现。
+sudo crontab -e
 ```
 
 会打开一个编辑器（第一次用会问选哪个，选 `nano` 最简单）。在文件末尾加一行：
 
 ```
 17 3 * * * cd /opt/stacks/gateway && ./scripts/certbot.sh renew >> /var/log/certbot-renew.log 2>&1
+
+# 数据库备份（同样需要 sudo，理由同上）
+30 3 * * * /opt/stacks/token-hub/backup.sh >> /var/log/token-hub-backup.log 2>&1
 ```
 
 保存退出（`nano` 是 `Ctrl+O` 回车，再 `Ctrl+X`）。

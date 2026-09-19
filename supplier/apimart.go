@@ -10,22 +10,21 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"regexp"
 
 	"github.com/FutureAI/token-hub/common"
 )
 
 // apimart APIMart 供应商实现
 type apimart struct {
-	cfg    Config
-	client *http.Client
+	cfg Config
 }
 
-// newAPIMart 创建 APIMart 供应商实例
+// newAPIMart 创建 APIMart 供应商实例。
+// 刻意不持有自己的 http.Client：出站客户端是进程级共享的，
+// 每实例一个客户端会让连接池退化成「每次请求一条新连接」（见 common.OutboundHTTPClient）。
 func newAPIMart(cfg Config) *apimart {
-	return &apimart{
-		cfg:    cfg,
-		client: common.NewSafeHTTPClient(defaultHTTPTimeout),
-	}
+	return &apimart{cfg: cfg}
 }
 
 // apimartResponse APIMart API 原始响应结构
@@ -94,73 +93,88 @@ func buildRequest(req ImageGenerateRequest) map[string]interface{} {
 }
 
 // ImageGenerate 调用 APIMart 图像生成 API
-func (a *apimart) ImageGenerate(req ImageGenerateRequest) ImageGenerateResponse {
-	fail := ImageGenerateResponse{Code: "fail"}
+func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) ImageGenerateResponse {
+	// 本函数内所有失败都必须明确标注性质：
+	// 请求根本没发出去 → rejected；发出去了但结果读不到 → unknown。
+	// 两者的差别决定了控制器是否退款，判错就是资损。
+	failRejected := ImageGenerateResponse{Code: "fail", FailureKind: FailureRejected}
+	failUnknown := ImageGenerateResponse{Code: "fail", FailureKind: FailureUnknown}
 
 	bodyBytes, err := json.Marshal(buildRequest(req))
 	if err != nil {
+		// 本地序列化失败，请求尚未发出
 		common.SysErrorf("[APIMart] 请求体序列化失败: %v", err)
-		return fail
+		return failRejected
 	}
 
 	// 构建 HTTP 请求
 	url := fmt.Sprintf("%s/v1/images/generations", a.cfg.BaseURL)
 	common.SysLogf("[APIMart] 发起图像生成请求: POST %s", url)
 
-	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(bodyBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		common.SysErrorf("[APIMart] 构建HTTP请求失败: %v", err)
-		return fail
+		return failRejected
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", a.cfg.APIKey))
 
 	// 发送请求
-	resp, err := a.client.Do(httpReq)
+	resp, err := common.OutboundHTTPClient().Do(httpReq)
 	if err != nil {
-		common.SysErrorf("[APIMart] 请求发送失败: %v", err)
-		return fail
+		// 超时或连接中断：请求可能已经送达并被受理，绝不能当成「没接单」
+		common.SysErrorf("[APIMart] 请求发送失败(结果不确定，不得退款): %v", err)
+		return failUnknown
 	}
 	defer resp.Body.Close()
 
 	common.SysLogf("[APIMart] 收到响应: HTTP %d", resp.StatusCode)
 
 	// 读取响应
-	// 限制读取体积：Timeout 只限时长，恶意上游可流式输出打爆内存
+	// 限制读取体积：超时只限时长，恶意或被控的上游可流式输出打爆内存
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, common.MaxOutboundBodySize))
 	if err != nil {
-		common.SysErrorf("[APIMart] 读取响应体失败: %v", err)
-		return fail
+		common.SysErrorf("[APIMart] 读取响应体失败(结果不确定，不得退款): %v", err)
+		return failUnknown
 	}
 
-	// HTTP 状态码非 200 直接失败
+	// HTTP 状态码非 200。
+	// 4xx 是上游明确拒绝，可以退款；5xx 可能来自上游前面的网关，
+	// 请求或许已经落到上游并建了任务，只能算不确定。
 	if resp.StatusCode != http.StatusOK {
 		common.SysErrorf("[APIMart] HTTP状态码异常: %d, 响应: %s", resp.StatusCode, truncate(string(respBody), 500))
-		return fail
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return failRejected
+		}
+		return failUnknown
 	}
 
-	// 解析响应
+	// 解析响应。
+	// 解析失败的一种常见成因是响应体超过 MaxOutboundBodySize 被 LimitReader 截断，
+	// 此时上游其实已经成功建单，只是我们读不完整 → 只能算不确定。
 	var apiResp apimartResponse
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {
-		common.SysErrorf("[APIMart] 响应JSON解析失败: %v, 原始响应: %s", err, truncate(string(respBody), 500))
-		return fail
+		common.SysErrorf("[APIMart] 响应JSON解析失败(结果不确定，不得退款): %v, 原始响应: %s", err, truncate(string(respBody), 500))
+		return failUnknown
 	}
 
-	// code 非 200 视为失败
+	// code 非 200：拿到了结构完整的业务响应且上游自述失败，可以退款
 	if apiResp.Code != 200 {
 		common.SysErrorf("[APIMart] 业务code异常: %d, 响应: %s", apiResp.Code, truncate(string(respBody), 500))
-		return fail
+		return failRejected
 	}
 
-	// 解析 data 数组，提取第一个元素的 task_id
+	// 解析 data 数组，提取第一个元素的 task_id。
+	// 走到这里上游已经返回成功，只是 task_id 取不到——任务很可能已经建了，
+	// 不能退款，否则就是「平台付钱、用户免费」。
 	var tasks []apimartTaskItem
 	if err := json.Unmarshal(apiResp.Data, &tasks); err != nil {
-		common.SysErrorf("[APIMart] data字段解析失败: %v, data: %s", err, string(apiResp.Data))
-		return fail
+		common.SysErrorf("[APIMart] data字段解析失败(结果不确定，不得退款): %v, data: %s", err, truncate(string(apiResp.Data), 500))
+		return failUnknown
 	}
-	if len(tasks) == 0 {
-		common.SysErrorf("[APIMart] data数组为空")
-		return fail
+	if len(tasks) == 0 || tasks[0].TaskID == "" {
+		common.SysErrorf("[APIMart] data数组为空或缺少 task_id(结果不确定，不得退款): %s", truncate(string(apiResp.Data), 500))
+		return failUnknown
 	}
 
 	common.SysLogf("[APIMart] 图像生成成功, taskId: %s", tasks[0].TaskID)
@@ -195,9 +209,16 @@ type apimartTaskImage struct {
 	B64JSON string   `json:"b64_json"`
 }
 
+// apimartTaskIDPattern 供应商任务 ID 的合法形态。
+//
+// taskID 来自上游响应且会被直接拼进查询 URL，必须限制字符集：
+// 否则一个被控的上游（或将来某次响应异常）返回 "../other" 之类的内容，
+// 就会带着供应商 API Key 去请求该主机上的任意路径。
+var apimartTaskIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 // TaskQuery 查询 APIMart 任务状态
 // vendorResponse 为提交任务时供应商返回的原始 JSON，APIMart 从中提取 taskId
-func (a *apimart) TaskQuery(vendorResponse string) TaskQueryResponse {
+func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQueryResponse {
 	// 从 vendorResponse 中提取 taskId
 	var respData map[string]interface{}
 	if err := json.Unmarshal([]byte(vendorResponse), &respData); err != nil {
@@ -209,14 +230,20 @@ func (a *apimart) TaskQuery(vendorResponse string) TaskQueryResponse {
 		common.SysErrorf("[APIMart] vendorResponse 中缺少 taskId")
 		return TaskQueryResponse{Status: "call_fail"}
 	}
+	if !apimartTaskIDPattern.MatchString(taskID) {
+		common.SysErrorf("[APIMart] taskId 形态非法，拒绝拼接查询 URL: %q", truncate(taskID, 64))
+		return TaskQueryResponse{Status: "call_fail"}
+	}
 
+	// 查询失败一律是 call_fail（= 状态未知），控制器不会据此退款，
+	// 因此这里所有错误路径共用同一个返回值。
 	failResp := TaskQueryResponse{TaskID: taskID, Status: "call_fail"}
 
 	// 构建请求
 	url := fmt.Sprintf("%s/v1/tasks/%s?language=zh", a.cfg.BaseURL, taskID)
 	common.SysLogf("[APIMart] 查询任务状态: GET %s", url)
 
-	httpReq, err := http.NewRequest(http.MethodGet, url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		common.SysErrorf("[APIMart] 构建查询请求失败: %v", err)
 		return failResp
@@ -224,7 +251,7 @@ func (a *apimart) TaskQuery(vendorResponse string) TaskQueryResponse {
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", a.cfg.APIKey))
 
 	// 发送请求
-	resp, err := a.client.Do(httpReq)
+	resp, err := common.OutboundHTTPClient().Do(httpReq)
 	if err != nil {
 		common.SysErrorf("[APIMart] 查询请求发送失败: %v", err)
 		return failResp
@@ -300,16 +327,12 @@ func truncate(s string, maxLen int) string {
 
 // apimartUploader APIMart 图片上传实现
 type apimartUploader struct {
-	cfg    Config
-	client *http.Client
+	cfg Config
 }
 
-// newAPIMartUploader 创建 APIMart 上传实例
+// newAPIMartUploader 创建 APIMart 上传实例（同样复用进程级共享的出站客户端）
 func newAPIMartUploader(cfg Config) *apimartUploader {
-	return &apimartUploader{
-		cfg:    cfg,
-		client: common.NewSafeHTTPClient(defaultHTTPTimeout),
-	}
+	return &apimartUploader{cfg: cfg}
 }
 
 // apimartUploadResponse APIMart 上传响应体
@@ -355,7 +378,7 @@ func (u *apimartUploader) UploadImage(ctx context.Context, filename string, cont
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", u.cfg.APIKey))
 
-	resp, err := u.client.Do(httpReq)
+	resp, err := common.OutboundHTTPClient().Do(httpReq)
 	if err != nil {
 		common.SysErrorf("[APIMart] 上传请求发送失败: %v", err)
 		return nil, err

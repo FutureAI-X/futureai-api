@@ -3,15 +3,20 @@
 # 部署位置: /opt/stacks/gateway/
 #
 # 前置（一次性，见 deploy/README.md）:
-#   docker network create --subnet 172.20.0.0/16 gateway-proxy
+#   docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
+#
+#   ⚠️ --ip-range 不能省：网关在下面绑了固定地址 172.20.0.2，
+#      没有它这个地址仍可能被后续启动的容器动态占用，
+#      网关会因地址被占而再也起不来。必须与 README 里的命令保持一致。
 #
 # 它按域名把请求分流到各服务，同时负责 TLS 终止、HSTS、gzip，
 # 以及登录接口的限流。各服务本身不发布任何宿主机端口。
 
 services:
   gateway:
-    # 钉在 stable 分支，不用 latest：latest 会在某次 pull 时静默跳大版本，
-    # 而 nginx 的行为在大版本之间确实会变。stable 分支仍能拿到安全补丁。
+    # 钉在 minor tag 上，不用 latest：latest 会在某次 pull 时静默跳大版本，
+    #   而 nginx 的行为在大版本之间确实会变。
+    #   （nginx 官方镜像没有「stable 分支」这种 tag，此处只是不打 latest。）
     image: nginx:1.30-alpine
     container_name: gateway
     restart: unless-stopped

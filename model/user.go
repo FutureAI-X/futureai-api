@@ -70,6 +70,10 @@ type User struct {
 	// 密码哈希值，使用 bcrypt 加密存储，JSON 序列化时忽略
 	Password string `json:"-" gorm:"not null"`
 
+	// TokenVersion 令牌版本号，每次改密递增，用于立即作废已签发的 JWT。
+	// 没有它时密码泄露后改密无效——旧令牌仍可用满 24 小时。
+	TokenVersion int `json:"-" gorm:"default:0"`
+
 	// 记录创建时间，自动设置
 	CreatedAt time.Time `json:"created_at"`
 
@@ -294,6 +298,27 @@ func UpdateUserStatus(id int, status int) error {
 // UpdateUser 更新用户信息
 func UpdateUser(id int, updates map[string]interface{}) error {
 	return DB.Model(&User{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// UpdatePasswordAndInvalidateTokens 更新密码并作废该用户已签发的所有令牌。
+//
+// 两件事必须在同一条 UPDATE 里完成：分两步做的话，中间失败会留下
+// 「密码已改、旧令牌仍然有效」的状态——恰恰是应急改密最不希望的结果。
+//
+// 用数据库端自增而非先读后写：并发改密时两种写法结果都是作废旧令牌，
+// 但自增不会丢失更新。
+func UpdatePasswordAndInvalidateTokens(id int, hashedPassword string) error {
+	result := DB.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"password":      hashedPassword,
+		"token_version": gorm.Expr("token_version + 1"),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("用户不存在")
+	}
+	return nil
 }
 
 // AdjustUserCredits 调整用户积分。写 users.credits 的第三个（也是最后一个）入口，

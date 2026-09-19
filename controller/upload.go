@@ -5,7 +5,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,14 +18,34 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// maxUploadSize 最大上传文件大小（10MB）
-const maxUploadSize = 10 * 1024 * 1024
-
-// multipartOverhead multipart 边界、头字段等额外的字节余量
-const multipartOverhead = 64 * 1024
-
 // uploadTimeout 上传调用超时
 const uploadTimeout = 30 * time.Second
+
+// uploadCreditsEnv 图片上传的单次积分成本（环境变量名）
+const uploadCreditsEnv = "UPLOAD_CREDITS"
+
+// uploadCredits 读取上传计费配置，默认 0（免费）。
+//
+// 默认留 0 是保持既有行为；但必须存在这个开关：上传端点是拿平台自己的
+// 供应商密钥把用户文件转存到上游的，平台承担全部存储与带宽成本。
+// 不开计费又不设配额时，任何持有效 API Key 的用户（哪怕余额为 0）
+// 都能以每分钟 60 次的速度持续消耗，账单全记在平台头上。
+//
+// 配置非法时按 0 处理而不是拒绝启动：这个值只影响定价，
+// 不该因为一次笔误让整个服务起不来。但会打错误日志，不会静默。
+func uploadCredits() float64 {
+	raw := strings.TrimSpace(os.Getenv(uploadCreditsEnv))
+	if raw == "" {
+		return 0
+	}
+
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		common.SysErrorf("[UploadImage] %s 配置无效(%q)，本次按 0（免费）处理", uploadCreditsEnv, raw)
+		return 0
+	}
+	return model.RoundCredits(v)
+}
 
 // maxFilenameLen 文件名最大长度
 const maxFilenameLen = 100
@@ -31,16 +54,14 @@ const maxFilenameLen = 100
 // POST /v1/uploads/images
 // 仅一个参数：file；返回 url(来自第三方)/filename/content_type/bytes(程序解析)
 func UploadImage(c *gin.Context) {
-	// 1. 先限制请求体大小，再解析 multipart。
-	// 顺序至关重要：c.FormFile 会触发 multipart 解析，超过内存阈值（默认 32MB）
-	// 的部分会被写入临时文件；只有在解析前加上 MaxBytesReader 才能真正拦住
-	// 超大请求打满磁盘/内存的情况（原来的 Size 检查发生在解析之后，为时已晚）。
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize+multipartOverhead)
-
+	// 1. 请求体大小已由 middleware.BodyLimit 在进入本函数前限制住
+	//（multipart 端点按 文件上限 + 边框余量 放宽，其余端点 1MB）。
+	// 顺序仍然关键：c.FormFile 会触发 multipart 解析，超过内存阈值的部分
+	// 会被写入临时文件，因此限制必须发生在**解析之前**——中间件在 handler
+	// 之前执行，正好满足这一点。
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
+		if common.IsBodyTooLarge(err) {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": "fail", "message": "文件大小超过 10MB 限制"})
 			return
 		}
@@ -48,8 +69,8 @@ func UploadImage(c *gin.Context) {
 		return
 	}
 
-	// 2. 大小限制（maxUploadSize 之外的兜底）
-	if fileHeader.Size > maxUploadSize {
+	// 2. 大小限制（体积上限之外的兜底：Content-Length 与实际文件大小可能不一致）
+	if fileHeader.Size > common.MaxUploadFileSize {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": "文件大小超过 10MB 限制"})
 		return
 	}
@@ -109,11 +130,49 @@ func UploadImage(c *gin.Context) {
 		return
 	}
 
+	// 7.5 计费。顺序与图像生成一致：先扣费、后调用上游。
+	// 反过来的话，零余额用户可以先把文件传上去、再由扣费失败收场，
+	// 而平台已经为这次上传付过上游成本。
+	userID := c.GetInt("user_id")
+	if userID <= 0 {
+		common.SysErrorf("[UploadImage] 缺少有效用户身份")
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": gin.H{"message": "无效的 API Key", "type": "authentication_error"},
+		})
+		return
+	}
+
+	credits := uploadCredits()
+	ref := ""
+	if credits > 0 {
+		ref = model.GenerateUploadRef()
+		if err := model.DeductCreditsFor(userID, ref, credits, "图片上传"); err != nil {
+			if errors.Is(err, model.ErrInsufficientCredits) {
+				common.SysErrorf("[UploadImage] 积分不足: userID=%d, amount=%.6f", userID, credits)
+				c.JSON(http.StatusPaymentRequired, gin.H{"code": "fail", "message": "积分不足"})
+			} else {
+				common.SysErrorf("[UploadImage] 扣费失败: userID=%d, err=%v", userID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "服务暂时不可用，请稍后再试"})
+			}
+			return
+		}
+	}
+
+	// 上传用独立带超时的 context，理由同提交任务：客户端断开就取消，
+	// 会让我们既不知道上游是否收下文件、又已经把积分扣掉。
 	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
 	defer cancel()
 	result, err := uploader.UploadImage(ctx, safeFilename, contentType, data)
 	if err != nil {
 		common.SysErrorf("[UploadImage] 上传失败: vendor=%s, err=%v", vendor.Name, err)
+		// 明确失败（拿到响应且非 200、或请求根本没发出去）才退款；
+		// 这里无法区分「超时但上游已收下」，与图像生成的取舍一致：
+		// 用户没拿到 URL，收钱不发货比平台承担损失更糟。
+		if credits > 0 {
+			if refundErr := model.RefundCreditsFor(userID, ref, credits, "图片上传失败退还"); refundErr != nil {
+				common.SysErrorf("[UploadImage] 退还积分失败: userID=%d, ref=%s, err=%v", userID, ref, refundErr)
+			}
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"code": "fail", "message": "上传失败，请稍后再试"})
 		return
 	}

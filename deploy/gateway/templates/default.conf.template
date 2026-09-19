@@ -129,6 +129,18 @@ server {
     # 在共享网络上由 Docker 内置 DNS 解析。
     set $token_hub_up "token-hub:3001";
 
+    # 请求体超过 client_max_body_size 时，nginx 默认返回一个 HTML 错误页。
+    # 而 /v1 的调用方都是按 JSON 解析响应的程序，拿到 HTML 会再报一次
+    # 「解析失败」，把真正的原因（请求体太大）掩盖掉。这里统一成 JSON。
+    #
+    # 常见触发场景：把参考图以 base64 内联进请求体。正确做法是先调
+    # /v1/uploads/images 拿到 URL，再在 image_urls 里传 URL。
+    error_page 413 = @too_large;
+    location @too_large {
+        default_type application/json;
+        return 413 '{"error":{"message":"请求体过大。参考图请先上传取得 URL，不要以 base64 内联。","type":"invalid_request_error"}}';
+    }
+
     # 登录接口叠加网关层限流。精确匹配的优先级高于下面的前缀匹配。
     location = /api/auth/login {
         limit_req zone=token_hub_login burst=10 nodelay;

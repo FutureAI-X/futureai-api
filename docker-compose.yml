@@ -1,6 +1,10 @@
 # 本地开发栈：PostgreSQL + 应用容器
 #
-# 启动: docker-compose up -d          页面在 http://localhost:8080
+# 前置: cp .env.example .env  然后填 POSTGRES_PASSWORD / JWT_SECRET / SECRET_KEY
+#       （.env 被 gitignore，干净 clone 上没有这个文件，
+#         直接 docker compose up 会报 "env file not found"）
+#
+# 启动: docker compose up -d          页面在 http://localhost:8080
 # 只起数据库: docker compose up -d postgres
 # 停止: docker compose down
 # 删除数据: docker compose down -v    ← 会清空开发库
@@ -9,17 +13,19 @@
 # 那一份不发布任何端口，数据库也不在网关可达的网段上。
 #
 # 安全提示：
-#   - 端口仅绑定 127.0.0.1，避免数据库暴露到公网。
-#     如果曾在公网主机上以 5432:5432 启动过，任何人都能直接读取
-#     全部密码哈希与供应商密钥密文。
+#   - 端口仅绑定 127.0.0.1，避免数据库与应用暴露到公网。
+#     如果曾在公网主机上以 5432:5432 / 8080:3001 启动过，
+#     任何人都能直接读取全部密码哈希与供应商密钥密文、或打开管理后台。
 #   - 密码从环境变量读取，不在仓库中硬编码。使用前请在 .env 中设置
 #     POSTGRES_PASSWORD（可用 openssl rand -hex 24 生成）。
+#   - ⚠️ 这套编排仅供本机开发。即使绑定了 127.0.0.1，它也缺少
+#     生产 compose 里的日志上限、停止宽限期与资源约束。
 
 services:
   postgres:
     image: postgres:15
     container_name: token-hub-postgres
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-token_hub}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置，请勿使用默认密码}
@@ -65,7 +71,10 @@ services:
     ports:
       # 刻意用 8080 而不是 3001：本机 go run 时占的是 3001，
       # 错开之后容器和本机两种跑法可以同时存在。
-      - "8080:3001"
+      #
+      # 绑定 127.0.0.1 而不是默认的 0.0.0.0：不带 IP 时 Docker 会把端口
+      # 发布到所有网卡，在公网主机上等于把管理后台与 /api/admin 直接敞开。
+      - "127.0.0.1:8080:3001"
 
 volumes:
   pg_data:

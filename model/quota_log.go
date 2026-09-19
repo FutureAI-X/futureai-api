@@ -92,6 +92,32 @@ func refundCreditsTx(tx *gorm.DB, userID int, taskID string, amount float64, rem
 	return tx.Create(&log).Error
 }
 
+// DeductCreditsFor 为一次非任务型调用扣除积分（目前用于图片上传）。
+// ref 记入 credit_logs.task_id，用于把账目回溯到具体调用。
+// amount <= 0 视为免费调用，不产生任何记录。
+//
+// 与任务路径共用 deductCreditsTx，因此精度收敛、余额守卫、
+// 「扣不成负余额」这些不变量与图像生成完全一致。
+func DeductCreditsFor(userID int, ref string, amount float64, remark string) error {
+	if amount <= 0 {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return deductCreditsTx(tx, userID, ref, amount, remark)
+	})
+}
+
+// RefundCreditsFor 退还一次非任务型调用的积分。
+// 调用方保证只在明确失败时调用一次（上传路径没有重试，因此无需幂等标记）。
+func RefundCreditsFor(userID int, ref string, amount float64, remark string) error {
+	if amount <= 0 {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return refundCreditsTx(tx, userID, ref, amount, remark)
+	})
+}
+
 // GetCreditLogsByUserID 获取用户积分日志
 func GetCreditLogsByUserID(userID int, page, pageSize int) ([]CreditLog, int64, error) {
 	var logs []CreditLog

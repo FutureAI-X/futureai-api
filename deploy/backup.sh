@@ -32,7 +32,7 @@ fail() { echo "[$(date '+%F %T')] 错误: $*" >&2; exit 1; }
 # 写死会在改过配置的部署上静默备份错误的库（或直接报错）。
 # 只取需要的三个键，不 source 整个文件：.env 里的值可能包含 shell 特殊字符。
 read_env() {
-  sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | tr -d '"'\'''
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | tr -d "\"'"
 }
 
 PG_USER="$(read_env POSTGRES_USER)"; PG_USER="${PG_USER:-token_hub}"

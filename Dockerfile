@@ -41,9 +41,29 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 
-# buildx 自动注入的目标平台信息
-ARG TARGETOS
-ARG TARGETARCH
+# 目标平台。buildx 会自动注入并覆盖，这两个默认值是为了让
+# 普通 `docker build .` 也能工作——不设默认值时 TARGETOS/TARGETARCH
+# 为空串，GOOS/GOARCH 退化成宿主机值，于是**静默**产出 amd64 镜像，
+# 传到 arm 服务器才报 exec format error，而错误现场离原因很远。
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+# 记录构建对应的 commit，供回滚时定位。构建脚本通过 --build-arg 传入。
+ARG GIT_SHA=unknown
+
+# Go 模块代理。
+#
+# ⚠️ 必须显式设置：构建容器**不继承宿主机的 go env**，默认会去访问
+#    proxy.golang.org —— 在国内网络下通常直接不可达，表现为
+#    `dial tcp ...: connect: connection refused`，整个构建失败。
+#    这个坑很隐蔽：如果本地 Docker 缓存还热着，构建会一路走缓存成功，
+#    直到某次改动使缓存失效（或换一台干净机器）才突然暴雷。
+#
+# 默认用国内镜像，海外环境或不信任第三方镜像时可覆盖：
+#   bash deploy/build-image.sh linux/amd64        # 脚本会优先用你本机的 GOPROXY
+#   docker buildx build --build-arg GOPROXY=https://proxy.golang.org,direct .
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=$GOPROXY
 
 WORKDIR /build
 
@@ -71,12 +91,23 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # ---------------------------------------------------------------------------
 FROM alpine:3.22
 
+# 镜像元数据：把镜像与 commit 关联起来，回滚时才能确定「上一个版本」是哪一版。
+# 没有它时只能在时间戳标签之间猜测。
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$GIT_SHA \
+      org.opencontainers.image.title="Token Hub"
+
 # ca-certificates：调用上游供应商 API 需要信任根证书
 # tzdata：        日志时间戳按本地时区输出
 RUN apk add --no-cache ca-certificates tzdata \
     && adduser -D -u 10001 -h /app appuser \
     && mkdir -p /app \
     && chown -R 10001:10001 /app
+
+# 时区。装了 tzdata 但不设 TZ 的话日志仍然是 UTC，
+# 与「日志按本地时区输出」的预期不符，排查问题时要在脑子里做一次换算。
+ARG TZ=Asia/Shanghai
+ENV TZ=$TZ
 
 COPY --from=build /out/token-hub /usr/local/bin/token-hub
 
@@ -87,5 +118,11 @@ USER 10001:10001
 WORKDIR /app
 
 EXPOSE 3001
+
+# 健康检查写在镜像里，这样 docker run 直接跑、或将来换别的编排时
+# 也有健康信号，而不是只有生产 compose 里配了才知道要看健康状态。
+# alpine 自带 busybox wget，不额外装工具。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:3001/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/token-hub"]

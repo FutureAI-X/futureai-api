@@ -43,8 +43,10 @@ token-hub/
 │
 ├── deploy/              # 服务器部署编排
 │   ├── README.md        #   照着敲的步骤
-│   ├── NOTES.md         #   为什么这么设计 / 排查 / 升级备份
+│   ├── NOTES.md         #   为什么这么设计 / 排查 / 升级备份 / 上线自检清单
 │   ├── build-image.sh   #   构建镜像并导出，收平台参数
+│   ├── backup.sh        #   数据库 + .env 定时备份（含轮转）
+│   ├── restore.sh       #   从备份恢复（演练用）
 │   ├── gateway/         #   Nginx 容器网关（全机唯一占用 80/443）
 │   └── token-hub/       #   生产用的应用 + PostgreSQL compose
 │
@@ -53,12 +55,13 @@ token-hub/
 │   └── webui_test.go
 │
 ├── common/              # 公共工具
+│   ├── body_limit.go    #   请求体大小上限
 │   ├── crypto.go        #   密码加密
-│   ├── jwt.go           #   JWT
+│   ├── jwt.go           #   JWT（含令牌版本号，改密即失效）
 │   ├── database.go      #   数据库类型定义
 │   ├── env.go           #   环境变量工具
 │   ├── log.go           #   日志
-│   ├── outbound.go      #   出站请求（SSRF 防护）
+│   ├── outbound.go      #   出站请求（共享连接池 + SSRF 防护 + 代理）
 │   ├── paths.go         #   API 与前端路由的分界判断
 │   └── trusted_proxy.go #   TRUSTED_PROXIES 解析
 │

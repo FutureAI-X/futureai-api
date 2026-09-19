@@ -3,11 +3,18 @@
 # 部署位置: /opt/stacks/token-hub/
 #
 # 前置（一次性，见 deploy/README.md）:
-#   docker network create --subnet 172.20.0.0/16 gateway-proxy
+#   docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
+#
+#   ⚠️ --ip-range 不能省：网关在 compose 里绑了固定地址 172.20.0.2，
+#      没有 ip-range 时这个地址仍可能被后续启动的容器动态占用，
+#      网关会因地址被占而再也起不来。
 #
 # 上线:
 #   cp .env.example .env && chmod 600 .env    # 填写密钥
 #   docker compose up -d
+#
+# ⚠️ 升级前务必先备份数据库（见 NOTES.md 的备份一节）：
+#    应用启动时会跑 AutoMigrate，部分变更不可逆，回滚旧镜像不一定能回到旧 schema。
 #
 # 关键点：应用与数据库都不发布任何宿主机端口。
 # 应用只挂在共享网络 gateway-proxy 上，能被网关访问；
@@ -20,14 +27,26 @@
 # 会完全撞上。如果在同一台机器上同时跑过这两份（比如买服务器之前先在本机
 # 试跑一遍生产配置），生产库会与开发库共用同一个数据卷，
 # 症状是用开发库的密码去开生产库，报一个与密码无关的认证错误，极难排查。
+#
+# 注意 container_name 是**显式指定**的，优先级高于项目名前缀，
+# 因此两边都不能写死同一个名字（下面应用容器刻意不设 container_name，
+# 交给 compose 按项目名自动生成）。
 name: token-hub-prod
 
 services:
   token-hub:
-    image: token-hub:${TOKEN_HUB_TAG:-latest}
-    container_name: token-hub
+    image: token-hub:${TOKEN_HUB_TAG:?TOKEN_HUB_TAG 必须设置为具体标签，详见 NOTES.md}
+    # 刻意不写 container_name：写了就会与开发栈的 token-hub 撞名，
+    # 而同机跑过开发栈后生产会直接报 "container name is already in use"。
+    # 不写时 compose 会按项目名生成 token-hub-prod-token-hub-1，天然不冲突。
     restart: unless-stopped
     env_file: .env
+
+    # 停止宽限期必须大于最慢的在途请求（提交上游最长 30s）。
+    # 默认 10 秒会在滚动更新时把正在提交的任务直接 SIGKILL，
+    # 留下「已扣费、已提交上游、但状态未落库」的任务。
+    stop_grace_period: 40s
+
     environment:
       # ----------------------------------------------------------------------
       # 下面几项刻意写在这里覆盖 .env —— 容器内的网络视图与宿主机不同，
@@ -48,6 +67,11 @@ services:
       #    是宿主机直跑时的形态（127.0.0.1/32），照抄进来会让应用把网关 IP
       #    当成唯一来源，登录限流会把全体用户视为同一人。
       TRUSTED_PROXIES: ${GATEWAY_IP:-172.20.0.2}/32
+
+      # 连接数上限。PostgreSQL 默认 max_connections=100 且为超级用户预留了
+      # 几条，应用侧配成同样的 100 会在打满时被数据库拒绝连接。
+      SQL_MAX_OPEN_CONNS: ${SQL_MAX_OPEN_CONNS:-80}
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,6 +81,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+    # 日志上限。不限制的话容器 json-file 日志会无限增长，
+    # 最终写满磁盘 —— 而 PostgreSQL 与它同盘，会一起挂掉。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 纵深防御：容器已经是非 root（镜像里 USER 10001），
+    # 这两项堵住 setuid 提权与能力滥用的路径。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
     networks:
       - internal   # 用它连数据库
       - proxy      # 用它被网关访问
@@ -67,12 +107,22 @@ services:
     # 容器名在同一个 Docker 守护进程上是全局唯一的，重名会直接启动失败。
     container_name: token-hub-pg
     restart: unless-stopped
+
+    # PostgreSQL 正常关闭需要把内存中的脏页刷盘，默认 10 秒常常不够，
+    # 超时被 SIGKILL 会触发崩溃恢复，极端情况丢最近的事务。
+    stop_grace_period: 60s
+
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-token_hub}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}
       POSTGRES_DB: ${POSTGRES_DB:-token_hub}
     volumes:
       - pg_data:/var/lib/postgresql/data
+
+    # Docker 默认 /dev/shm 只有 64MB，并发查询做排序/哈希聚合时
+    # 会报 "could not resize shared memory segment"，表现为偶发查询失败。
+    shm_size: 256m
+
     healthcheck:
       # 应用启动时会跑 AutoMigrate，数据库没就绪就启动会直接失败，
       # 因此这里必须让 depends_on 真正等到可连接。
@@ -81,12 +131,28 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
     networks:
       # 刻意不接 gateway-proxy：数据库不该出现在网关能到达的网段上。
       - internal
 
 volumes:
   pg_data:
+    # ⚠️ external 是为了防误删：默认的命名卷会被 `docker compose down -v`
+    #    连数据一起删掉，而这条命令很容易在「清理环境」时被顺手敲出来。
+    #    声明为 external 后 compose 不会自动创建或删除它，
+    #    删库只能靠显式 `docker volume rm`。
+    #
+    #    首次部署需要先创建（见 deploy/README.md）：
+    #      docker volume create token-hub-prod-data
+    external: true
+    name: token-hub-prod-data
 
 networks:
   internal:

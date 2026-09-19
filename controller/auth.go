@@ -112,6 +112,21 @@ func Login(c *gin.Context) {
 
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		// 解析失败同样计入失败次数。
+		//
+		// 原实现只在凭证错误时计数，于是「必然解析失败」的请求（缺字段、
+		// 体积超限）走的是不计数、不受限的分支——登录接口因此成了一个
+		// 无需任何凭证、不受速率约束的入口，配合超大请求体即可稳定打满内存。
+		// 计数口径必须覆盖所有失败，而不只是「密码错」这一种。
+		recordLoginFailure(c.ClientIP())
+
+		if common.IsBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"message": "请求体过大",
+			})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": "用户名和密码不能为空",
@@ -139,8 +154,8 @@ func Login(c *gin.Context) {
 	// 登录成功，清空失败计数
 	resetLoginAttempts(c.ClientIP())
 
-	// 生成 JWT Token
-	token, err := common.GenerateToken(user.ID, user.Username, user.Role)
+	// 生成 JWT Token（带上当前令牌版本，改密后旧令牌即失效）
+	token, err := common.GenerateToken(user.ID, user.Username, user.Role, user.TokenVersion)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -268,7 +283,9 @@ func ResetMyPassword(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpdateUser(userID.(int), map[string]interface{}{"password": hashed}); err != nil {
+	// 同时递增令牌版本：重置密码的常见动机是「账号可能被盗」，
+	// 此时旧令牌必须立刻作废，否则应急处理形同虚设。
+	if err := model.UpdatePasswordAndInvalidateTokens(userID.(int), hashed); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "重置密码失败"})
 		return
 	}

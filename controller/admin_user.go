@@ -421,7 +421,10 @@ func AdminResetPassword(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpdateUser(id, map[string]interface{}{"password": hashed}); err != nil {
+	// 递增令牌版本，作废该用户已签发的所有 JWT。
+	// 管理员重置密码的场景往往就是「这个账号可能被盗」，
+	// 此时旧令牌仍旧可用的话，这次重置等于没做。
+	if err := model.UpdatePasswordAndInvalidateTokens(id, hashed); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "重置密码失败"})
 		return
 	}

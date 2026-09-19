@@ -167,7 +167,7 @@ netsh int ipv6 set dynamicport tcp start=49152 num=16384
 | `API_RATE_LIMIT_PER_MINUTE` | `/v1` 每用户每分钟请求数 | `60` |
 | `API_RATE_LIMIT_BURST` | `/v1` 每用户瞬时突发量 | `10` |
 | `INITIAL_ROOT_PASSWORD` | root 初始密码（可选） | 空（随机生成并写入文件） |
-| `DEBUG` | 调试模式 | `false` |
+| `DEBUG` | 调试模式，开启后打印 SQL 日志 | `false` |
 | `POSTGRES_PASSWORD` | 本地开发库的密码（仅 docker compose 用） | 必须设置 |
 
 本地开发时 `TRUSTED_PROXIES` **留空**即可 —— 前面没有反向代理。

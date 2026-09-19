@@ -2,6 +2,7 @@ package common
 
 import (
 	"net"
+	"net/http"
 	"testing"
 )
 
@@ -99,12 +100,33 @@ func TestValidateOutboundBaseURLTrimsWhitespace(t *testing.T) {
 
 // ── 安全 HTTP 客户端 ──
 
-func TestNewSafeHTTPClientRejectsCrossHostRedirect(t *testing.T) {
-	c := NewSafeHTTPClient(0)
+func TestOutboundHTTPClientRejectsCrossHostRedirect(t *testing.T) {
+	c := OutboundHTTPClient()
 	if c.CheckRedirect == nil {
 		t.Fatal("必须设置 CheckRedirect，否则跨主机重定向会带着 API Key 跳走")
 	}
 	if c.Transport == nil {
 		t.Fatal("必须设置自定义 Transport 以启用拨号期 IP 校验")
+	}
+}
+
+// 出站客户端必须是共享单例：每个请求新建 Transport 等于连接池归零，
+// keep-alive 完全失效，且未设 IdleConnTimeout 时空闲连接永不回收。
+func TestOutboundHTTPClientIsShared(t *testing.T) {
+	a := OutboundHTTPClient()
+	b := OutboundHTTPClient()
+	if a != b {
+		t.Fatal("OutboundHTTPClient 必须返回同一个实例，否则连接池无法复用")
+	}
+
+	tr, ok := a.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport 类型 = %T, want *http.Transport", a.Transport)
+	}
+	if tr.IdleConnTimeout <= 0 {
+		t.Error("IdleConnTimeout 必须大于 0：Go 只在它大于 0 时才回收空闲连接")
+	}
+	if tr.MaxIdleConnsPerHost <= 2 {
+		t.Errorf("MaxIdleConnsPerHost = %d，等于默认值 2，高并发下会频繁重建连接", tr.MaxIdleConnsPerHost)
 	}
 }

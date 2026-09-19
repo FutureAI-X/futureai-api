@@ -3,7 +3,7 @@
 日常改代码不用这个 —— 那是 [DEVELOPMENT.md](DEVELOPMENT.md)。
 这里是把项目打包成镜像、用 Docker Desktop 跑起来的流程，也是发版前验证镜像的方式。
 
-生产服务器上的部署是另一套（带 Nginx 网关、三个服务共存），见 [deploy/README.md](../deploy/README.md)。
+生产服务器上的部署是另一套（带 Nginx 网关），见 [deploy/README.md](../deploy/README.md)。
 
 ---
 
@@ -32,8 +32,17 @@
 - 在 Windows 上本地测试 → `linux/amd64`（Docker Desktop 跑的是 Linux 虚拟机）
 - 服务器是 x86 → `linux/amd64`；服务器是 arm → `linux/arm64`
 
-脚本做两件事：构建出镜像 `token-hub:latest`，并导出
-`token-hub-latest-<arch>.tar.gz`（用于传到服务器）。
+脚本做两件事：构建出镜像 `token-hub:<标签>`，并导出
+`token-hub-<标签>-<arch>.tar.gz`（用于传到服务器）。
+
+**标签默认是构建时刻**（形如 `20260915225600`），不是 `latest`。
+每次打包都是一个新标签，服务器上的历史镜像因此不会被覆盖，回滚就是换标签。
+脚本会**附带**打一个 `latest` 指向同一个镜像（方便 `.env` 还是默认值的机器直接跑），
+但回滚时不要用它——它只代表最后一次 `docker load` 进来的版本。
+
+> ⚠️ 构建必须走 `buildx`（脚本已经这么做）。直接 `docker build .` 时
+> `TARGETOS`/`TARGETARCH` 为空，会**静默**产出宿主机架构的镜像，
+> 传到服务器才报 `exec format error`。
 
 > 交叉编译不需要 QEMU。Dockerfile 的两个构建阶段都固定在 `$BUILDPLATFORM` 上执行 ——
 > 前端产物与架构无关，Go 用 `GOARCH` 原生交叉编译。所以在 x86 机器上构建 arm64
@@ -62,6 +71,12 @@ docker pull alpine:3.22
 ## 2. 跑起来
 
 ```bash
+# .env 被 gitignore，干净 clone 上没有这个文件；
+# 缺了它 compose 会直接报 "env file ... not found"。
+cp .env.example .env
+# 然后按需填入 POSTGRES_PASSWORD / JWT_SECRET / SECRET_KEY
+# （后两项留空的话服务会拒绝启动，这是刻意的 fail-closed）
+
 docker compose up -d
 ```
 
@@ -69,8 +84,11 @@ docker compose up -d
 
 | 容器 | 端口 | 说明 |
 |---|---|---|
-| `token-hub` | **8080** → 3001 | 应用 |
+| `token-hub` | `127.0.0.1:8080` → 3001 | 应用 |
 | `token-hub-postgres` | `127.0.0.1:5432` | 开发数据库 |
+
+> 两个端口都只绑在 `127.0.0.1`。这套编排是给本机开发用的，
+> 别跑在公网机器上——那等于把管理后台敞开。
 
 浏览器打开 **http://localhost:8080**。
 

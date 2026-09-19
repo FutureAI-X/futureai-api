@@ -30,7 +30,7 @@ fail() { echo "[$(date '+%F %T')] 错误: $*" >&2; exit 1; }
 gzip -t "$BACKUP_FILE" || fail "备份文件损坏: $BACKUP_FILE"
 
 read_env() {
-  sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | tr -d '"'\'''
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | tr -d "\"'"
 }
 
 PG_USER="$(read_env POSTGRES_USER)"; PG_USER="${PG_USER:-token_hub}"

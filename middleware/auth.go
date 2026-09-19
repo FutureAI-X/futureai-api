@@ -107,6 +107,19 @@ func parseAndLoadUser(c *gin.Context) (*common.Claims, bool) {
 		return nil, false
 	}
 
+	// 令牌版本必须与库中一致。改密码会递增用户的 token_version，
+	// 因此这一步让「改密」具备立即作废所有旧令牌的能力——
+	// JWT 本身无状态、签发后无法撤回，没有这道校验时密码泄露后的
+	// 应急改密对攻击者手上的旧令牌毫无作用。
+	if claims.TokenVersion != user.TokenVersion {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "登录状态已失效，请重新登录",
+		})
+		c.Abort()
+		return nil, false
+	}
+
 	// 以数据库中的当前角色/用户名为准，使降权即时生效
 	claims.Role = user.Role
 	claims.Username = user.Username

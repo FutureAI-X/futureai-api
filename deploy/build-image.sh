@@ -56,9 +56,24 @@ for ref in "${REFS[@]}"; do TAGS+=(-t "$ref"); done
 # 到底是哪一版，回滚只能靠猜。
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
+# 把本机的 GOPROXY 带进构建容器。
+#
+# ⚠️ 构建容器不继承宿主机的 go env。不带过去的话容器会去访问
+#    proxy.golang.org，在国内网络下通常不可达，构建直接失败
+#    （`connect: connection refused`）。而这个坑只在缓存失效时才暴露：
+#    本地缓存热着的时候构建能成功，换台机器或改了 Dockerfile 就突然不行。
+#
+# 设置为空串（GOPROXY= ）可退回镜像内的默认值。
+GOPROXY="${GOPROXY:-$(go env GOPROXY 2>/dev/null || true)}"
+BUILD_ARGS=()
+[ -n "$GOPROXY" ] && BUILD_ARGS+=(--build-arg "GOPROXY=$GOPROXY")
+
 echo "==> 构建 $IMAGE:$TAG ($PLATFORM, commit $GIT_SHA)"
+[ -n "$GOPROXY" ] && echo "    模块代理: $GOPROXY"
+
 docker buildx build --platform "$PLATFORM" \
   --build-arg "GIT_SHA=$GIT_SHA" \
+  "${BUILD_ARGS[@]}" \
   "${TAGS[@]}" --load .
 
 echo "==> 导出 $ARCHIVE"

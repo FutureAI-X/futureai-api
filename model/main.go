@@ -57,21 +57,26 @@ func InitDB() error {
 	if err != nil {
 		return err
 	}
+	// 连接池参数。
+	//
+	// SQL_MAX_LIFETIME 默认 1800 秒而不是 60：连接存活超时后归还即被关闭，
+	// 设成 60 秒意味着稳定流量下每分钟把整个连接池重建一遍。PostgreSQL 的
+	// 每个连接是一个独立后端进程（fork + 认证往返 + 可观的常驻内存），
+	// 高频重建会持续给数据库制造无谓开销。
+	//
+	// 同时补 SetConnMaxIdleTime：只限寿命不限空闲的话，低峰期攒下的空闲连接
+	// 会一直占着数据库侧的后端进程，直到寿命到期。
 	sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 10))
-	sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 100))
-	sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
+	sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 80))
+	sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 1800)))
+	sqlDB.SetConnMaxIdleTime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_IDLE_TIME", 600)))
 
-	// 数据库迁移
+	// 数据库迁移（migrateDB 内部已包含 addTableComments，此处不再重复调用：
+	// 每次启动多跑近百条 COMMENT ON DDL 纯属浪费，还要取对象锁）
 	common.SysLog("database migration started")
 	err = migrateDB()
 	if err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
-	}
-
-	// 更新表注释
-	err = addTableComments()
-	if err != nil {
-		common.SysError("failed to add table comments: " + err.Error())
 	}
 
 	// 创建默认 root 用户（如果不存在）

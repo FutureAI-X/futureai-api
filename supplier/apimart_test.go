@@ -1,12 +1,17 @@
 package supplier
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
+	"time"
 	"testing"
+
+	"github.com/FutureAI/token-hub/common"
 )
 
 // ── ApplyDefaults：标准字段默认值 ──
@@ -239,8 +244,12 @@ func TestImageGenerateSendsStandardFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// 用普通 client 绕过 SSRF 防护：SafeDialContext 会拒绝测试服务器的回环地址。
-	a := &apimart{cfg: Config{BaseURL: srv.URL, APIKey: "test-key"}, client: srv.Client()}
+	// 注入 httptest 的 client 绕过 SSRF 防护：
+	// SafeDialContext 会拒绝测试服务器所在的回环地址。
+	common.SetOutboundClientForTest(srv.Client())
+	defer common.SetOutboundClientForTest(nil)
+
+	a := &apimart{cfg: Config{BaseURL: srv.URL, APIKey: "test-key"}}
 
 	// 默认值由 controller 在计费前补齐，这里按同一条路径构造请求。
 	var req ImageGenerateRequest
@@ -250,7 +259,7 @@ func TestImageGenerateSendsStandardFields(t *testing.T) {
 	req.VendorModelID = apimartVersionedImageModel
 	req.ApplyDefaults()
 
-	resp := a.ImageGenerate(req)
+	resp := a.ImageGenerate(context.Background(), req)
 
 	if resp.Code != "success" {
 		t.Fatalf("resp.Code = %s, want success", resp.Code)
@@ -263,5 +272,176 @@ func TestImageGenerateSendsStandardFields(t *testing.T) {
 	}
 	if got := received["model"]; got != apimartVersionedImageModel {
 		t.Errorf("上游收到的 model = %v, want %s", got, apimartVersionedImageModel)
+	}
+}
+
+// ── 失败性质分类：直接决定控制器是否退款 ──
+//
+// 这组测试守的是最贵的一条边界：把「不知道结果」误判成「上游没受理」
+// 会让用户在平台已经付过上游成本的情况下被退款——平台净损失。
+
+// newTestAPIMart 起一个行为由 handler 决定的假上游，并注入其 client。
+func newTestAPIMart(t *testing.T, handler http.HandlerFunc) (*apimart, func()) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	common.SetOutboundClientForTest(srv.Client())
+	return &apimart{cfg: Config{BaseURL: srv.URL, APIKey: "test-key"}}, func() {
+		common.SetOutboundClientForTest(nil)
+		srv.Close()
+	}
+}
+
+func testImageReq() ImageGenerateRequest {
+	req := ImageGenerateRequest{Model: "m", Prompt: "a cat", VendorModelID: "vendor-m"}
+	req.ApplyDefaults()
+	return req
+}
+
+// 超时：请求很可能已经送达并被受理，绝不能当成「上游没接单」去退款。
+func TestImageGenerateTimeoutIsUnknownNotRejected(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	})
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+
+	resp := a.ImageGenerate(ctx, testImageReq())
+
+	if resp.Code != "fail" {
+		t.Fatalf("resp.Code = %q, want fail", resp.Code)
+	}
+	if resp.FailureKind != FailureUnknown {
+		t.Errorf("超时必须归类为 %q（上游可能已受理，不能退款），实际 %q",
+			FailureUnknown, resp.FailureKind)
+	}
+}
+
+// 4xx：上游明确拒绝，本次请求未被受理，可以安全退款。
+func TestImageGenerate4xxIsRejected(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"bad model"}`)
+	})
+	defer cleanup()
+
+	resp := a.ImageGenerate(context.Background(), testImageReq())
+
+	if resp.FailureKind != FailureRejected {
+		t.Errorf("HTTP 4xx 必须归类为 %q（可退款），实际 %q", FailureRejected, resp.FailureKind)
+	}
+}
+
+// 5xx：可能来自上游前面的网关，请求或许已经落地并建单，只能算不确定。
+func TestImageGenerate5xxIsUnknown(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	defer cleanup()
+
+	resp := a.ImageGenerate(context.Background(), testImageReq())
+
+	if resp.FailureKind != FailureUnknown {
+		t.Errorf("HTTP 5xx 必须归类为 %q（不得退款），实际 %q", FailureUnknown, resp.FailureKind)
+	}
+}
+
+// 响应体无法解析：常见成因是超过读取上限被截断，
+// 此时上游其实已经建单，只是我们读不完整。
+func TestImageGenerateUnparseableBodyIsUnknown(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":200,"data":[{"task_id":"t1"`) // 截断的 JSON
+	})
+	defer cleanup()
+
+	resp := a.ImageGenerate(context.Background(), testImageReq())
+
+	if resp.FailureKind != FailureUnknown {
+		t.Errorf("响应无法解析必须归类为 %q（不得退款），实际 %q", FailureUnknown, resp.FailureKind)
+	}
+}
+
+// 上游返回了结构完整的失败业务码：它明确告诉我们没有受理，可以退款。
+func TestImageGenerateBusinessFailureIsRejected(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":400,"data":null}`)
+	})
+	defer cleanup()
+
+	resp := a.ImageGenerate(context.Background(), testImageReq())
+
+	if resp.FailureKind != FailureRejected {
+		t.Errorf("业务失败码应归类为 %q（可退款），实际 %q", FailureRejected, resp.FailureKind)
+	}
+}
+
+// 上游成功但没有 task_id：任务很可能已经建了，不能退款。
+func TestImageGenerateMissingTaskIDIsUnknown(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":200,"data":[]}`)
+	})
+	defer cleanup()
+
+	resp := a.ImageGenerate(context.Background(), testImageReq())
+
+	if resp.FailureKind != FailureUnknown {
+		t.Errorf("缺少 task_id 必须归类为 %q（不得退款），实际 %q", FailureUnknown, resp.FailureKind)
+	}
+}
+
+// ── 查询 URL 注入防护 ──
+
+// taskId 来自上游响应且会被拼进查询 URL，必须限制字符集，
+// 否则一个被控的上游就能带着 API Key 去请求该主机的任意路径。
+func TestTaskQueryRejectsMalformedTaskID(t *testing.T) {
+	hits := 0
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		fmt.Fprint(w, `{"code":200,"data":{"id":"t","status":"completed"}}`)
+	})
+	defer cleanup()
+
+	bad := []string{
+		"../../etc/passwd",
+		"a/../b",
+		"a b",
+		"a?language=en",
+		"a#frag",
+		strings.Repeat("a", 65),
+		"",
+	}
+	for _, id := range bad {
+		resp := a.TaskQuery(context.Background(), `{"taskId":"`+id+`"}`)
+		if resp.Status != "call_fail" {
+			t.Errorf("taskId %q 应被拒绝（call_fail），实际 status=%q", id, resp.Status)
+		}
+	}
+
+	if hits != 0 {
+		t.Errorf("非法 taskId 不应发出任何上游请求，实际发出 %d 次", hits)
+	}
+}
+
+// 合法的 taskId 仍要正常工作，别把校验做成过严
+func TestTaskQueryAcceptsWellFormedTaskID(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		if want := "/v1/tasks/abc-123_XYZ"; r.URL.Path != want {
+			t.Errorf("查询路径 = %q, want %q", r.URL.Path, want)
+		}
+		fmt.Fprint(w, `{"code":200,"data":{"id":"abc-123_XYZ","status":"completed","result":{"images":[{"url":["https://img/1.png"]}]}}}`)
+	})
+	defer cleanup()
+
+	resp := a.TaskQuery(context.Background(), `{"taskId":"abc-123_XYZ"}`)
+
+	if resp.Status != "completed" {
+		t.Fatalf("status = %q, want completed", resp.Status)
+	}
+	if resp.Data["url"] != "https://img/1.png" {
+		t.Errorf("url = %v, want https://img/1.png", resp.Data["url"])
 	}
 }

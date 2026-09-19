@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"errors"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/FutureAI/token-hub/common"
 	"github.com/FutureAI/token-hub/controller"
@@ -32,11 +38,30 @@ import (
 //go:embed all:web/dist
 var webDist embed.FS
 
+// HTTP 服务器超时。
+//
+// 此前用的是 gin 的 server.Run()，它内部是 http.ListenAndServe——**没有任何超时**，
+// 慢速发送请求体（slowloris）可以长期占用连接与 goroutine。
+// WriteTimeout 必须大于最慢的处理路径：提交上游最长 30s，取 180s 留足余量。
+const (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 60 * time.Second
+	writeTimeout      = 180 * time.Second
+	idleTimeout       = 120 * time.Second
+
+	// shutdownTimeout 优雅关闭的等待上限。要大于最慢的在途请求，
+	// 否则滚动更新时正在提交上游的请求仍会被切断。
+	shutdownTimeout = 35 * time.Second
+)
+
 func main() {
 	// 加载 .env 文件
 	if err := godotenv.Load(); err != nil {
 		common.SysLog("No .env file found, using environment variables")
 	}
+
+	// 调试开关必须在加载 .env 之后、InitDB 之前应用（InitDB 会读它决定是否打印 SQL）
+	common.ApplyDebugSetting()
 
 	// 安全前置校验：密钥必须存在且足够强，否则拒绝启动（fail-closed）。
 	// 绝不能回落到可预测的默认值——那会让 JWT 可被伪造、供应商密钥可被解密。
@@ -50,10 +75,11 @@ func main() {
 	if err := model.InitDB(); err != nil {
 		common.FatalLog("failed to initialize database: " + err.Error())
 	}
-	defer model.CloseDB()
 
-	// 恢复未完成任务的轮询
-	go controller.RecoverPendingTasks()
+	// 任务对账循环：接管所有非终态任务（含上个进程遗留的）。
+	// 用一个可取消的 context 控制生命周期，关闭时能干净地停下来。
+	reconcilerCtx, stopReconciler := context.WithCancel(context.Background())
+	go controller.RunTaskReconciler(reconcilerCtx)
 
 	// 设置 Gin 模式（默认 release；仅在显式 GIN_MODE=debug 时开启调试）
 	if os.Getenv("GIN_MODE") != "debug" {
@@ -62,6 +88,10 @@ func main() {
 
 	// 创建 Gin 引擎
 	server := gin.New()
+
+	// multipart 解析的内存阈值。小于请求体上限（10MB+64KB），
+	// 因此上传内容始终在内存中处理，不会落临时文件。
+	server.MaxMultipartMemory = common.MaxUploadFileSize
 
 	// 信任代理配置。
 	// gin 默认信任所有代理（0.0.0.0/0），导致 c.ClientIP() 无条件采信客户端自带的
@@ -76,6 +106,10 @@ func main() {
 	} else {
 		common.SysLogf("[安全] 信任的代理网段: %s", strings.Join(trustedProxies, ", "))
 	}
+
+	// 请求体大小限制。必须尽早挂载：JSON 绑定会把整个请求体读进内存，
+	// 没有上限时一个几百 MB 的 body 就能让进程分配等量内存。
+	server.Use(middleware.BodyLimit())
 
 	// 安全响应头
 	server.Use(middleware.SecurityHeaders())
@@ -118,9 +152,49 @@ func main() {
 		log.Fatalf("invalid PORT value: %s", port)
 	}
 
-	// 启动服务器
-	common.SysLogf("Token Hub started on port %s", port)
-	if err := server.Run(":" + port); err != nil {
-		common.FatalLog("failed to start server: " + err.Error())
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           server,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
+
+	// 在独立 goroutine 中监听，主 goroutine 负责等待退出信号
+	go func() {
+		common.SysLogf("Token Hub started on port %s", port)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			common.FatalLog("failed to start server: " + err.Error())
+		}
+	}()
+
+	// 优雅关闭。
+	//
+	// 没有这一段时，滚动更新会在收到 SIGTERM 的瞬间切断所有在途请求：
+	// 客户端拿到连接重置而不是结构化错误，正在提交上游的请求则留下
+	// 「已扣费但状态未落库」的痕迹。defer 也只能在正常返回时执行，
+	// 被信号直接杀死时根本不会跑。
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	common.SysLog("收到退出信号，开始优雅关闭（等待在途请求完成）")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		common.SysError("优雅关闭超时，仍有请求未完成: " + err.Error())
+	}
+
+	// 停对账循环并释放出站连接，避免进程退出时留下半途的查询
+	stopReconciler()
+	common.OutboundHTTPClient().CloseIdleConnections()
+
+	if err := model.CloseDB(); err != nil {
+		common.SysError("关闭数据库连接失败: " + err.Error())
+	}
+
+	common.SysLog("Token Hub 已退出")
 }

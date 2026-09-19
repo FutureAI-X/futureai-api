@@ -2,13 +2,17 @@ package controller
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/FutureAI/token-hub/model"
 	"github.com/FutureAI/token-hub/supplier"
+	"github.com/gin-gonic/gin"
 )
 
 // ── 请求标准：非标准字段一律忽略 ──
@@ -257,5 +261,81 @@ func TestCreditResolutionRemarkKeepsSmallAmounts(t *testing.T) {
 	got := (creditResolution{Total: 0.003, Base: 0.001, RefImageCount: 2}).Remark()
 	if got != "图像生成任务(基础0.001+参考图2张)" {
 		t.Errorf("小数额备注被截断: %q", got)
+	}
+}
+
+// ── 幂等键解析 ──
+
+func TestParseIdempotencyKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name      string
+		header    string
+		wantKey   *string
+		wantValid bool
+	}{
+		{"未提供", "", nil, true},
+		{"仅空白视为未提供", "   ", nil, true},
+		{"正常值", "req-abc-123", strPtr("req-abc-123"), true},
+		{"首尾空白被裁剪", "  req-1  ", strPtr("req-1"), true},
+		{"超长非法", strings.Repeat("a", maxIdempotencyKeyLen+1), nil, false},
+		{"恰好上限合法", strings.Repeat("a", maxIdempotencyKeyLen), strPtr(strings.Repeat("a", maxIdempotencyKeyLen)), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+			if tc.header != "" {
+				c.Request.Header.Set("Idempotency-Key", tc.header)
+			}
+
+			key, valid := parseIdempotencyKey(c)
+
+			if valid != tc.wantValid {
+				t.Fatalf("valid = %v, want %v", valid, tc.wantValid)
+			}
+			if tc.wantKey == nil {
+				if key != nil {
+					t.Errorf("key = %q, want nil", *key)
+				}
+				return
+			}
+			if key == nil {
+				t.Fatal("key = nil, want 非空")
+			}
+			if *key != *tc.wantKey {
+				t.Errorf("key = %q, want %q", *key, *tc.wantKey)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+// 轮询的超时余量必须显著大于提交超时：正在同步提交的任务同样是
+// pending 且无 vendor_response，静默期不够长就会把在途任务当成
+// 「提交失败」退款——用户既拿图又退款。
+func TestStalePendingGraceExceedsSubmitTimeout(t *testing.T) {
+	if stalePendingGrace <= supplier.SubmitTimeout {
+		t.Fatalf("stalePendingGrace(%s) 必须大于 SubmitTimeout(%s)",
+			stalePendingGrace, supplier.SubmitTimeout)
+	}
+}
+
+// 兜底时限要足够长，避免正常的慢生成被误判为无法对账
+func TestTaskMaxPollAgeIsGenerous(t *testing.T) {
+	if taskMaxPollAge < time.Hour {
+		t.Errorf("taskMaxPollAge = %s，对慢速图像生成过短", taskMaxPollAge)
+	}
+}
+
+// 并发查询上限不能超过批量大小，否则一轮里永远用不满并发
+func TestReconcileConcurrencyFitsInBatch(t *testing.T) {
+	if maxConcurrentQueries > reconcileBatchSize {
+		t.Errorf("maxConcurrentQueries(%d) 大于 reconcileBatchSize(%d)，一轮用不满并发",
+			maxConcurrentQueries, reconcileBatchSize)
 	}
 }
