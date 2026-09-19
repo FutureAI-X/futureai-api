@@ -168,7 +168,10 @@ func ImageGenerate(c *gin.Context) {
 	reqBody["model"] = vendorModel.VendorModelID
 
 	result := s.ImageGenerate(supplier.ImageGenerateRequest{
-		Body: reqBody,
+		// 一并带上用户侧模型名：多个模型映射到同一 vendor_model_id 时，
+		// 供应商侧只能靠它区分调用方实际请求的变体。
+		Model: modelName,
+		Body:  reqBody,
 	})
 
 	// 11. 上游调用失败 → 退还积分

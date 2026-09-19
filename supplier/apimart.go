@@ -40,12 +40,56 @@ type apimartTaskItem struct {
 	TaskID string `json:"task_id"`
 }
 
+// apimartVersionedImageModel 在 APIMart 侧靠 version 字段区分外观风格的图像模型。
+// 调用方侧的多个模型都映射到这一个 vendor_model_id，因此请求体里的 model
+// 不足以判断调用方要哪个变体，必须回看调用方原始模型名（req.Model）。
+const apimartVersionedImageModel = "gpt-image-2.5-ext"
+
+// apimartImageVersions 调用方模型名 → APIMart version 取值。
+// version 不是 OpenAI 兼容接口的参数，调用方不会传，只能由服务端按模型名补全。
+// 新增映射到 apimartVersionedImageModel 的模型时，必须在这里登记，
+// 漏配会落到 APIMart 的默认值（flare）并打错误日志。
+var apimartImageVersions = map[string]string{
+	"gpt-image-2.5-flare-ext":    "flare",
+	"gpt-image-2.5-sunburst-ext": "sunburst",
+}
+
+// applyImageVersion 按调用方请求的模型名补齐请求体里的 version 字段。
+// 只有映射到 apimartVersionedImageModel 的模型才需要补；其余模型原样透传。
+func applyImageVersion(body map[string]interface{}, requestedModel string) {
+	if body["model"] != apimartVersionedImageModel {
+		return
+	}
+
+	version, ok := apimartImageVersions[requestedModel]
+	if !ok {
+		common.SysErrorf("[APIMart] 模型 %s 未配置 version 映射，将使用 APIMart 默认值: model=%s",
+			requestedModel, apimartVersionedImageModel)
+		return
+	}
+
+	// 服务端推导的值优先。若放行调用方自带的 version，就能拿着一个模型的计费
+	// （计费规则按调用方模型名匹配）去生成另一个模型的风格。
+	if existing, exists := body["version"]; exists && existing != version {
+		common.SysErrorf("[APIMart] 调用方传入 version=%v，按模型 %s 覆盖为 %s", existing, requestedModel, version)
+	}
+	body["version"] = version
+
+	common.SysLogf("[APIMart] 根据模型 %s 补全 version=%s", requestedModel, version)
+}
+
 // ImageGenerate 调用 APIMart 图像生成 API
 func (a *apimart) ImageGenerate(req ImageGenerateRequest) ImageGenerateResponse {
 	fail := ImageGenerateResponse{Code: "fail"}
 
-	// 构建请求体
-	bodyBytes, err := json.Marshal(req.Body)
+	// 构建请求体。复制一层再补 version，避免写进调用方传进来的 map。
+	body := make(map[string]interface{}, len(req.Body)+1)
+	for k, v := range req.Body {
+		body[k] = v
+	}
+	applyImageVersion(body, req.Model)
+
+	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		common.SysErrorf("[APIMart] 请求体序列化失败: %v", err)
 		return fail

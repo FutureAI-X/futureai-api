@@ -11,8 +11,13 @@ type Config struct {
 }
 
 // ImageGenerateRequest 图像生成规范化请求
-// Body 为外部传入的原始 JSON，直接透传给供应商 API
 type ImageGenerateRequest struct {
+	// Model 为调用方请求的模型名（用户侧模型名，未被替换成供应商模型 ID）。
+	// 多个调用方模型映射到同一个 vendor_model_id 时，Body["model"] 已经无法区分
+	// 调用方要的是哪个变体，供应商实现需要靠这个字段补齐变体参数。
+	Model string
+
+	// Body 为外部传入的原始 JSON，直接透传给供应商 API
 	Body map[string]interface{}
 }
 
