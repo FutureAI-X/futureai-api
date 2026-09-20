@@ -85,12 +85,6 @@ func InitDB() error {
 		common.SysError("failed to create root user: " + err.Error())
 	}
 
-	// 创建默认模型数据
-	err = createDefaultModels()
-	if err != nil {
-		common.SysError("failed to create default models: " + err.Error())
-	}
-
 	// 计费采用 fail-closed：缺少规则的模型会拒绝服务而非静默免费。
 	// 启动时列出这些模型，便于上线前补齐。
 	warnModelsWithoutCreditRule()

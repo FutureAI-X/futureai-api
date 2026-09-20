@@ -76,7 +76,10 @@ export function AdminVendors() {
     setFormName(v.name)
     setFormDesc(v.description)
     setFormBaseURL(v.base_url)
-    setFormAPIKey(v.api_key)
+    // v.api_key 是服务端返回的脱敏串（****+末4位），不是明文，不能填进输入框：
+    // 那样眼睛按钮「打开」出来的只是掩码，而且用户若在掩码上改几个字当新密钥保存，
+    // 会把供应商密钥静默写坏。这里留空，由下方提示展示「已设置」。
+    setFormAPIKey('')
     setShowKey(false)
     setFormError('')
     setDrawerOpen(true)
@@ -99,6 +102,8 @@ export function AdminVendors() {
         if (formName !== editRow.name) data.name = formName
         if (formDesc !== editRow.description) data.description = formDesc
         if (formBaseURL !== editRow.base_url) data.base_url = formBaseURL
+        // 编辑时输入框默认是空的（见 handleEdit），有内容才算要更新；
+        // 与 editRow.api_key 相同说明用户把展示用的脱敏串粘了进来，忽略
         if (formAPIKey && formAPIKey !== editRow.api_key) {
           data.api_key = await encryptWithKey(formAPIKey, dataKey)
           data.data_key = dataKey
@@ -313,18 +318,31 @@ export function AdminVendors() {
                     type={showKey ? 'text' : 'password'}
                     value={formAPIKey}
                     onChange={(e) => setFormAPIKey(e.target.value)}
-                    placeholder={editRow ? '已设置，留空则不修改' : '请输入 API Key'}
+                    placeholder={editRow ? '留空则不修改，输入新值可覆盖' : '请输入 API Key'}
                     autoComplete='new-password'
-                    className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border pr-10 pl-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                    className={cn(
+                      'border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border pl-3 text-sm focus-visible:ring-2 focus-visible:outline-none',
+                      formAPIKey ? 'pr-10' : 'pr-3',
+                    )}
                   />
-                  <button
-                    type='button'
-                    onClick={() => setShowKey(!showKey)}
-                    className='text-muted-foreground hover:text-foreground absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1.5 transition-colors'
-                  >
-                    {showKey ? <EyeOff className='size-4' /> : <Eye className='size-4' />}
-                  </button>
+                  {/* 输入框为空时没有可查看的内容，按钮不渲染：
+                      原来的实心眼睛点开只有空输入框，正是「点了没反应」的来源 */}
+                  {formAPIKey && (
+                    <button
+                      type='button'
+                      onClick={() => setShowKey(!showKey)}
+                      className='text-muted-foreground hover:text-foreground absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1.5 transition-colors'
+                    >
+                      {showKey ? <EyeOff className='size-4' /> : <Eye className='size-4' />}
+                    </button>
+                  )}
                 </div>
+                {editRow?.api_key && (
+                  <p className='text-muted-foreground text-xs'>
+                    当前密钥：<code className='font-mono'>{editRow.api_key}</code>
+                    （服务端只返回末 4 位，明文不下发到浏览器）
+                  </p>
+                )}
               </div>
             </div>
 
