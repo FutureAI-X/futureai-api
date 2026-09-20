@@ -26,11 +26,11 @@ fi
 # shellcheck disable=SC1091
 set -a && source .env && set +a
 
-: "${TOKEN_HUB_DOMAIN:?未设置 TOKEN_HUB_DOMAIN}"
+: "${FUTUREAI_API_DOMAIN:?未设置 FUTUREAI_API_DOMAIN}"
 : "${ACME_EMAIL:?未设置 ACME_EMAIL}"
 
 # 证书以第一个域名为名
-PRIMARY="$TOKEN_HUB_DOMAIN"
+PRIMARY="$FUTUREAI_API_DOMAIN"
 LIVE_DIR="certbot/conf/live/$PRIMARY"
 
 mkdir -p certbot/conf certbot/www certs
@@ -62,9 +62,9 @@ deploy_certs() {
 
 case "${1:-}" in
   issue)
-    echo "==> 为 $TOKEN_HUB_DOMAIN 申请证书"
+    echo "==> 为 $FUTUREAI_API_DOMAIN 申请证书"
     run_certbot certonly --webroot -w /var/www/certbot \
-      -d "$TOKEN_HUB_DOMAIN" \
+      -d "$FUTUREAI_API_DOMAIN" \
       --email "$ACME_EMAIL" \
       --agree-tos --no-eff-email
 
@@ -72,7 +72,7 @@ case "${1:-}" in
 
     echo
     echo "==> 完成。可以去掉自签证书的 -k 验证："
-    echo "    curl -I https://$TOKEN_HUB_DOMAIN/health"
+    echo "    curl -I https://$FUTUREAI_API_DOMAIN/health"
     ;;
 
   renew)

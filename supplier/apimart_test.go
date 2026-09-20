@@ -11,7 +11,7 @@ import (
 	"time"
 	"testing"
 
-	"github.com/FutureAI/token-hub/common"
+	"github.com/FutureAI-X/futureai-api/common"
 )
 
 // ── ApplyDefaults：标准字段默认值 ──

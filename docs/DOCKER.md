@@ -32,8 +32,8 @@
 - 在 Windows 上本地测试 → `linux/amd64`（Docker Desktop 跑的是 Linux 虚拟机）
 - 服务器是 x86 → `linux/amd64`；服务器是 arm → `linux/arm64`
 
-脚本做两件事：构建出镜像 `token-hub:<标签>`，并导出
-`token-hub-<标签>-<arch>.tar.gz`（用于传到服务器）。
+脚本做两件事：构建出镜像 `futureai-api:<标签>`，并导出
+`futureai-api-<标签>-<arch>.tar.gz`（用于传到服务器）。
 
 **标签默认是构建时刻**（形如 `20260915225600`），不是 `latest`。
 每次打包都是一个新标签，服务器上的历史镜像因此不会被覆盖，回滚就是换标签。
@@ -84,8 +84,8 @@ docker compose up -d
 
 | 容器 | 端口 | 说明 |
 |---|---|---|
-| `token-hub` | `127.0.0.1:8080` → 3001 | 应用 |
-| `token-hub-postgres` | `127.0.0.1:5432` | 开发数据库 |
+| `futureai-api` | `127.0.0.1:8080` → 3001 | 应用 |
+| `futureai-api-postgres` | `127.0.0.1:5432` | 开发数据库 |
 
 > 两个端口都只绑在 `127.0.0.1`。这套编排是给本机开发用的，
 > 别跑在公网机器上——那等于把管理后台敞开。
@@ -130,11 +130,11 @@ curl -s http://localhost:8080/api/nope                                      # JS
 ## 常用操作
 
 ```bash
-docker compose logs -f token-hub        # 看日志
-docker exec -it token-hub sh            # 进容器（alpine 基础镜像，有 shell）
+docker compose logs -f futureai-api        # 看日志
+docker exec -it futureai-api sh            # 进容器（alpine 基础镜像，有 shell）
 docker compose down                     # 停掉，数据卷保留
-docker image inspect token-hub:latest --format '{{.Architecture}}'   # 确认镜像架构
-docker images token-hub                 # 看镜像大小
+docker image inspect futureai-api:latest --format '{{.Architecture}}'   # 确认镜像架构
+docker images futureai-api                 # 看镜像大小
 ```
 
 ---
@@ -149,7 +149,7 @@ docker images token-hub                 # 看镜像大小
 ### 应用连不上数据库
 
 ```bash
-docker compose logs token-hub | head -20
+docker compose logs futureai-api | head -20
 ```
 
 容器之间走的是服务名 `postgres:5432`，**不是**宿主机那条 `127.0.0.1:5432` 映射。
@@ -162,7 +162,7 @@ docker compose down -v && docker compose up -d
 
 ### 想换成别的端口
 
-改 [docker-compose.yml](../docker-compose.yml) 里 `token-hub` 服务的 `ports`
+改 [docker-compose.yml](../docker-compose.yml) 里 `futureai-api` 服务的 `ports`
 左侧那个数字即可，右侧的 `3001` 是容器内端口，不要动。
 
 ---

@@ -29,7 +29,7 @@
 ## 项目结构
 
 ```
-token-hub/
+futureai-api/
 ├── main.go              # 主入口（含 go:embed 前端产物）
 ├── Dockerfile           # 多阶段构建：前端 → 后端 → 运行时
 ├── Makefile             # 常用命令。注意 web 是 build / test 的前置
@@ -48,7 +48,7 @@ token-hub/
 │   ├── backup.sh        #   数据库 + .env 定时备份（含轮转）
 │   ├── restore.sh       #   从备份恢复（演练用）
 │   ├── gateway/         #   Nginx 容器网关（全机唯一占用 80/443）
-│   └── token-hub/       #   生产用的应用 + PostgreSQL compose
+│   └── futureai-api/    #   生产用的应用 + PostgreSQL compose
 │
 ├── webui/               # 托管内嵌的前端静态文件与安全头
 │   ├── webui.go

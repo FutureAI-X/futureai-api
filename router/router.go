@@ -1,9 +1,9 @@
 package router
 
 import (
-	"github.com/FutureAI/token-hub/common"
-	"github.com/FutureAI/token-hub/controller"
-	"github.com/FutureAI/token-hub/middleware"
+	"github.com/FutureAI-X/futureai-api/common"
+	"github.com/FutureAI-X/futureai-api/controller"
+	"github.com/FutureAI-X/futureai-api/middleware"
 	"github.com/gin-gonic/gin"
 )
 

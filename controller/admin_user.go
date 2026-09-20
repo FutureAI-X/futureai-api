@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/FutureAI/token-hub/common"
-	"github.com/FutureAI/token-hub/model"
+	"github.com/FutureAI-X/futureai-api/common"
+	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/gin-gonic/gin"
 )
 

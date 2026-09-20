@@ -3,7 +3,7 @@
 # 从 backup.sh 产出的备份恢复数据库。
 #
 # 用法（在服务器上）:
-#   ./restore.sh /opt/backups/token-hub/db-2026-09-20_030000.sql.gz
+#   ./restore.sh /opt/backups/futureai-api/db-2026-09-20_030000.sql.gz
 #
 # ⚠️ 这是破坏性操作：会用备份覆盖当前数据库。
 #    脚本会二次确认，并要求先停掉应用容器（否则恢复过程中应用仍在读写，
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 BACKUP_FILE="${1:-}"
-STACK_DIR="${STACK_DIR:-/opt/stacks/token-hub}"
+STACK_DIR="${STACK_DIR:-/opt/stacks/futureai-api}"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
 ENV_FILE="$STACK_DIR/.env"
 
@@ -33,8 +33,8 @@ read_env() {
   sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | tr -d "\"'"
 }
 
-PG_USER="$(read_env POSTGRES_USER)"; PG_USER="${PG_USER:-token_hub}"
-PG_DB="$(read_env POSTGRES_DB)"; PG_DB="${PG_DB:-token_hub}"
+PG_USER="$(read_env POSTGRES_USER)"; PG_USER="${PG_USER:-futureai_api}"
+PG_DB="$(read_env POSTGRES_DB)"; PG_DB="${PG_DB:-futureai_api}"
 
 log "即将用以下备份覆盖数据库 $PG_DB:"
 log "  $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
@@ -44,7 +44,7 @@ read -r -p "确认继续？应用容器会先被停止。输入 yes 继续: " an
 [ "$answer" = "yes" ] || { echo "已取消"; exit 0; }
 
 log "停止应用容器（保留数据库）"
-docker compose -f "$COMPOSE_FILE" stop token-hub
+docker compose -f "$COMPOSE_FILE" stop futureai-api
 
 log "恢复数据库"
 # --clean --if-exists 让 pg_dump 的产物自带 DROP，能覆盖已有的表；
@@ -61,7 +61,7 @@ docker compose -f "$COMPOSE_FILE" up -d
 
 log "等待应用健康"
 for i in $(seq 1 30); do
-  if docker compose -f "$COMPOSE_FILE" exec -T token-hub \
+  if docker compose -f "$COMPOSE_FILE" exec -T futureai-api \
       wget -qO- http://127.0.0.1:3001/health >/dev/null 2>&1; then
     log "应用已就绪"
     exit 0
@@ -69,4 +69,4 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-fail "应用在 60 秒内未就绪，请查看: docker compose -f $COMPOSE_FILE logs token-hub"
+fail "应用在 60 秒内未就绪，请查看: docker compose -f $COMPOSE_FILE logs futureai-api"

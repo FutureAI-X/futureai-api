@@ -8,7 +8,7 @@
 #   TAG=v1.2.3 ./deploy/build-image.sh       # 指定标签，不用构建时刻
 #
 # 标签默认取构建时刻（20260915225600），每打一次包就是一个新标签。
-# 服务器上的历史镜像因此不会被覆盖，回滚只是改 .env 里的 TOKEN_HUB_TAG。
+# 服务器上的历史镜像因此不会被覆盖，回滚只是改 .env 里的 FUTUREAI_API_TAG。
 #
 # 服务器买好后先确认架构:
 #   ssh <server> uname -m
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 PLATFORM="${1:-linux/amd64}"
-IMAGE="${IMAGE:-token-hub}"
+IMAGE="${IMAGE:-futureai-api}"
 TAG="${TAG:-$(date +%Y%m%d%H%M%S)}"
 
 case "$PLATFORM" in
@@ -90,8 +90,8 @@ cat <<EOF
   ssh <user>@<server> 'gunzip -c /tmp/$IMAGE-$TAG-$ARCH.tar.gz | docker load'
 
 然后在服务器上把 .env 指向这个标签并重启:
-  cd /opt/stacks/token-hub
-  sed -i 's/^TOKEN_HUB_TAG=.*/TOKEN_HUB_TAG=$TAG/' .env
+  cd /opt/stacks/futureai-api
+  sed -i 's/^FUTUREAI_API_TAG=.*/FUTUREAI_API_TAG=$TAG/' .env
   docker compose up -d
 
 EOF

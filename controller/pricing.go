@@ -3,7 +3,7 @@ package controller
 import (
 	"net/http"
 
-	"github.com/FutureAI/token-hub/model"
+	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/gin-gonic/gin"
 )
 

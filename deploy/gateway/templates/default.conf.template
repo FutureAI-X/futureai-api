@@ -9,7 +9,7 @@
 #
 # 架构:
 #
-#     浏览器 ──HTTPS──> 网关 (443) ──HTTP──> token-hub:3001
+#     浏览器 ──HTTPS──> 网关 (443) ──HTTP──> futureai-api:3001
 #                          │
 #                          └──> 80: ACME 校验 + 跳转 HTTPS
 #
@@ -34,7 +34,7 @@
 # 粒度是真实客户端 IP（网关是边缘节点，$binary_remote_addr 即真实 IP）。
 # 阈值刻意取得比应用宽松（应用是 5 次失败 / 5 分钟），网关只负责挡住
 # 明显的机器人洪泛，精细策略仍由应用负责，避免误伤 NAT 后的正常用户。
-limit_req_zone $binary_remote_addr zone=token_hub_login:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=futureai_api_login:10m rate=30r/m;
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ resolver_timeout 5s;
 server {
     listen 80;
     listen [::]:80;
-    server_name ${TOKEN_HUB_DOMAIN};
+    server_name ${FUTUREAI_API_DOMAIN};
 
     access_log /var/log/nginx/http.access.log edge;
 
@@ -112,22 +112,22 @@ server {
 
 
 # ============================================================================
-# token-hub
+# futureai-api
 # ============================================================================
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
 
-    server_name ${TOKEN_HUB_DOMAIN};
-    access_log /var/log/nginx/token-hub.access.log edge;
+    server_name ${FUTUREAI_API_DOMAIN};
+    access_log /var/log/nginx/futureai-api.access.log edge;
 
     include /etc/nginx/snippets/tls.conf;
     include /etc/nginx/snippets/proxy-common.conf;
 
-    # token-hub 是 deploy/token-hub/docker-compose.yml 里的服务名，
+    # futureai-api 是 deploy/futureai-api/docker-compose.yml 里的服务名，
     # 在共享网络上由 Docker 内置 DNS 解析。
-    set $token_hub_up "token-hub:3001";
+    set $futureai_api_up "futureai-api:3001";
 
     # 请求体超过 client_max_body_size 时，nginx 默认返回一个 HTML 错误页。
     # 而 /v1 的调用方都是按 JSON 解析响应的程序，拿到 HTML 会再报一次
@@ -143,15 +143,15 @@ server {
 
     # 登录接口叠加网关层限流。精确匹配的优先级高于下面的前缀匹配。
     location = /api/auth/login {
-        limit_req zone=token_hub_login burst=10 nodelay;
+        limit_req zone=futureai_api_login burst=10 nodelay;
         limit_req_status 429;   # 与应用返回的 429 保持一致，便于客户端统一处理
-        proxy_pass http://$token_hub_up;
+        proxy_pass http://$futureai_api_up;
     }
 
     # 健康检查不记日志，避免每几秒一条污染访问日志
     location = /health {
         access_log off;
-        proxy_pass http://$token_hub_up;
+        proxy_pass http://$futureai_api_up;
     }
 
     # OpenAI 兼容接口。
@@ -160,14 +160,14 @@ server {
     location /v1/ {
         proxy_send_timeout 120s;
         proxy_read_timeout 120s;
-        proxy_pass http://$token_hub_up;
+        proxy_pass http://$futureai_api_up;
     }
 
-    # 其余全部交给 token-hub，前端页面也由它提供。
+    # 其余全部交给 futureai-api，前端页面也由它提供。
     location / {
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
-        proxy_pass http://$token_hub_up;
+        proxy_pass http://$futureai_api_up;
     }
 }
 
@@ -176,7 +176,7 @@ server {
 # 以后要再加一个服务（比如 new-api）
 # ============================================================================
 #
-# 复制上面 token-hub 那个 server 块，改四处：
+# 复制上面 futureai-api 那个 server 块，改四处：
 #
 #   1. server_name        —— 换成新域名，并在 deploy/gateway/.env 里加一个变量
 #   2. access_log         —— 换个日志文件名

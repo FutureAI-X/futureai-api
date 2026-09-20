@@ -1,6 +1,6 @@
 # FutureAI API 应用 + 数据库
 #
-# 部署位置: /opt/stacks/token-hub/
+# 部署位置: /opt/stacks/futureai-api/
 #
 # 前置（一次性，见 deploy/README.md）:
 #   docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
@@ -23,7 +23,7 @@
 
 # ⚠️ 项目名必须和开发用的那一份（仓库根目录的 docker-compose.yml）区分开。
 #
-# 项目名默认取目录名，而两边的目录名都是 token-hub —— 于是容器名和数据卷名
+# 项目名默认取目录名，而两边的目录名都是 futureai-api —— 于是容器名和数据卷名
 # 会完全撞上。如果在同一台机器上同时跑过这两份（比如买服务器之前先在本机
 # 试跑一遍生产配置），生产库会与开发库共用同一个数据卷，
 # 症状是用开发库的密码去开生产库，报一个与密码无关的认证错误，极难排查。
@@ -31,14 +31,14 @@
 # 注意 container_name 是**显式指定**的，优先级高于项目名前缀，
 # 因此两边都不能写死同一个名字（下面应用容器刻意不设 container_name，
 # 交给 compose 按项目名自动生成）。
-name: token-hub-prod
+name: futureai-api-prod
 
 services:
-  token-hub:
-    image: token-hub:${TOKEN_HUB_TAG:?TOKEN_HUB_TAG 必须设置为具体标签，详见 NOTES.md}
-    # 刻意不写 container_name：写了就会与开发栈的 token-hub 撞名，
+  futureai-api:
+    image: futureai-api:${FUTUREAI_API_TAG:?FUTUREAI_API_TAG 必须设置为具体标签，详见 NOTES.md}
+    # 刻意不写 container_name：写了就会与开发栈的 futureai-api 撞名，
     # 而同机跑过开发栈后生产会直接报 "container name is already in use"。
-    # 不写时 compose 会按项目名生成 token-hub-prod-token-hub-1，天然不冲突。
+    # 不写时 compose 会按项目名生成 futureai-api-prod-futureai-api-1，天然不冲突。
     restart: unless-stopped
     env_file: .env
 
@@ -58,7 +58,7 @@ services:
 
       # 容器内要用服务名 postgres，而不是 localhost。
       SQL_DSN: >-
-        postgres://${POSTGRES_USER:-token_hub}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}@postgres:5432/${POSTGRES_DB:-token_hub}?sslmode=disable
+        postgres://${POSTGRES_USER:-futureai_api}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}@postgres:5432/${POSTGRES_DB:-futureai_api}?sslmode=disable
 
       # 网关容器在共享网络上的固定地址（见 deploy/gateway/docker-compose.yml）。
       #
@@ -103,9 +103,9 @@ services:
 
   postgres:
     image: postgres:15
-    # 不能叫 token-hub-postgres：那是开发用的 compose 里的名字，
+    # 不能叫 futureai-api-postgres：那是开发用的 compose 里的名字，
     # 容器名在同一个 Docker 守护进程上是全局唯一的，重名会直接启动失败。
-    container_name: token-hub-pg
+    container_name: futureai-api-pg
     restart: unless-stopped
 
     # PostgreSQL 正常关闭需要把内存中的脏页刷盘，默认 10 秒常常不够，
@@ -113,9 +113,9 @@ services:
     stop_grace_period: 60s
 
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-token_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-futureai_api}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}
-      POSTGRES_DB: ${POSTGRES_DB:-token_hub}
+      POSTGRES_DB: ${POSTGRES_DB:-futureai_api}
     volumes:
       - pg_data:/var/lib/postgresql/data
 
@@ -126,7 +126,7 @@ services:
     healthcheck:
       # 应用启动时会跑 AutoMigrate，数据库没就绪就启动会直接失败，
       # 因此这里必须让 depends_on 真正等到可连接。
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-token_hub} -d ${POSTGRES_DB:-token_hub}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-futureai_api} -d ${POSTGRES_DB:-futureai_api}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -150,9 +150,9 @@ volumes:
     #    删库只能靠显式 `docker volume rm`。
     #
     #    首次部署需要先创建（见 deploy/README.md）：
-    #      docker volume create token-hub-prod-data
+    #      docker volume create futureai-api-prod-data
     external: true
-    name: token-hub-prod-data
+    name: futureai-api-prod-data
 
 networks:
   internal:

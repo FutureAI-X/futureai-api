@@ -28,7 +28,7 @@ func getServerKey() string {
 	serverKeyOnce.Do(func() {
 		secret, err := RequireSecret("SECRET_KEY")
 		if err != nil {
-			log.Fatalf("[TOKEN-HUB] [安全] %v", err)
+			log.Fatalf("[FUTUREAI-API] [安全] %v", err)
 		}
 		hash := sha256.Sum256([]byte(secret))
 		serverKey = base64.StdEncoding.EncodeToString(hash[:])

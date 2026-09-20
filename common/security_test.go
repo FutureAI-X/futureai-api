@@ -27,8 +27,8 @@ func TestRequireSecretRejectsEmpty(t *testing.T) {
 func TestRequireSecretRejectsKnownDefaults(t *testing.T) {
 	// 这两个值曾在仓库中作为默认值出现，等同公开
 	for _, weak := range []string{
-		"token-hub-jwt-secret-change-me",
-		"token-hub-secret-change-me",
+		"futureai-api-jwt-secret-change-me",
+		"futureai-api-secret-change-me",
 	} {
 		t.Setenv("TEST_SECRET_KEY", weak)
 		if _, err := RequireSecret("TEST_SECRET_KEY"); err == nil {

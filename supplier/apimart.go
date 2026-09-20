@@ -12,7 +12,7 @@ import (
 	"net/textproto"
 	"regexp"
 
-	"github.com/FutureAI/token-hub/common"
+	"github.com/FutureAI-X/futureai-api/common"
 )
 
 // apimart APIMart 供应商实现

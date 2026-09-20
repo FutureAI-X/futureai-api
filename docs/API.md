@@ -44,7 +44,7 @@ POST /api/auth/login
 
 该密码**不会**写入日志。登录后请立即通过 `PUT /api/user/password` 修改，
 并删除密码文件（容器部署建议直接用环境变量，理由见
-[deploy/token-hub/.env.example](../deploy/token-hub/.env.example)）。
+[deploy/futureai-api/.env.example](../deploy/futureai-api/.env.example)）。
 
 响应：
 
@@ -212,7 +212,7 @@ GET /v1/models
 {
   "object": "list",
   "data": [
-    { "id": "deepseek-v4-flash", "object": "model", "owned_by": "token-hub", "type": "text" }
+    { "id": "deepseek-v4-flash", "object": "model", "owned_by": "futureai-api", "type": "text" }
   ]
 }
 ```
@@ -272,7 +272,7 @@ POST /v1/images/generations
 提交图像生成时带上 `Idempotency-Key` 请求头，可以在窗口内安全重试：
 
 ```bash
-curl -X POST https://token.example.com/v1/images/generations \
+curl -X POST https://futureai.example.com/v1/images/generations \
   -H "Authorization: Bearer sk-xxx" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \

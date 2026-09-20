@@ -24,17 +24,17 @@ func ApplyDebugSetting() {
 
 // SysLog 系统日志
 func SysLog(msg string) {
-	log.Printf("[TOKEN-HUB] %s", msg)
+	log.Printf("[FUTUREAI-API] %s", msg)
 }
 
 // SysError 系统错误日志
 func SysError(msg string) {
-	log.Printf("[TOKEN-HUB] [ERROR] %s", msg)
+	log.Printf("[FUTUREAI-API] [ERROR] %s", msg)
 }
 
 // FatalLog 致命错误日志
 func FatalLog(msg string) {
-	log.Fatalf("[TOKEN-HUB] [FATAL] %s", msg)
+	log.Fatalf("[FUTUREAI-API] [FATAL] %s", msg)
 	os.Exit(1)
 }
 

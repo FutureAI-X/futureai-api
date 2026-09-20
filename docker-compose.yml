@@ -9,7 +9,7 @@
 # 停止: docker compose down
 # 删除数据: docker compose down -v    ← 会清空开发库
 #
-# 生产环境的编排在 deploy/token-hub/ 下，两者刻意分开：
+# 生产环境的编排在 deploy/futureai-api/ 下，两者刻意分开：
 # 那一份不发布任何端口，数据库也不在网关可达的网段上。
 #
 # 安全提示：
@@ -24,18 +24,18 @@
 services:
   postgres:
     image: postgres:15
-    container_name: token-hub-postgres
+    container_name: futureai-api-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-token_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-futureai_api}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置，请勿使用默认密码}
-      POSTGRES_DB: ${POSTGRES_DB:-token_hub}
+      POSTGRES_DB: ${POSTGRES_DB:-futureai_api}
     volumes:
       - pg_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-token_hub} -d ${POSTGRES_DB:-token_hub}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-futureai_api} -d ${POSTGRES_DB:-futureai_api}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -51,16 +51,16 @@ services:
   #   2) 本机跑：go run main.go                -> 页面在 http://localhost:3001
   # 两条可以同时开着，端口不冲突（容器映射到 8080，本机占 3001），
   # 而且连的是同一个数据库。
-  token-hub:
-    image: token-hub:${TOKEN_HUB_TAG:-latest}
+  futureai-api:
+    image: futureai-api:${FUTUREAI_API_TAG:-latest}
     build: .
-    container_name: token-hub
+    container_name: futureai-api
     restart: unless-stopped
     env_file: .env
     environment:
       PORT: "3001"
       SQL_DSN: >-
-        postgres://${POSTGRES_USER:-token_hub}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}@postgres:5432/${POSTGRES_DB:-token_hub}?sslmode=disable
+        postgres://${POSTGRES_USER:-futureai_api}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}@postgres:5432/${POSTGRES_DB:-futureai_api}?sslmode=disable
       # 本地直连，前面没有任何反向代理，因此不信任任何代理头。
       # 留着 .env 里的 127.0.0.1/32 也不会出错，但把 X-Forwarded-For 交给
       # 一个本不存在的代理去解释，没有意义。

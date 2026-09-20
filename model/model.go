@@ -41,7 +41,7 @@ type Model struct {
 	ID int `json:"id" gorm:"primaryKey"`
 
 	// 开发者/提供商名称（兼容旧数据）
-	Owner string `json:"owner" gorm:"size:64;default:token-hub"`
+	Owner string `json:"owner" gorm:"size:64;default:futureai-api"`
 
 	// 名称，全局唯一，用于 API 调用
 	Name string `json:"name" gorm:"uniqueIndex;size:64;not null"`
@@ -199,7 +199,7 @@ func createDefaultModels() error {
 
 	for _, m := range defaultModels {
 		if m.Owner == "" {
-			m.Owner = "token-hub"
+			m.Owner = "futureai-api"
 		}
 		if err := DB.Create(&m).Error; err != nil {
 			return err

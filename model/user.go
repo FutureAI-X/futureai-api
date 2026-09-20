@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/FutureAI/token-hub/common"
+	"github.com/FutureAI-X/futureai-api/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

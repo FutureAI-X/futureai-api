@@ -25,7 +25,7 @@ fi
 # shellcheck disable=SC1091
 set -a && source .env && set +a
 
-: "${TOKEN_HUB_DOMAIN:?未设置 TOKEN_HUB_DOMAIN}"
+: "${FUTUREAI_API_DOMAIN:?未设置 FUTUREAI_API_DOMAIN}"
 
 mkdir -p certs
 
@@ -60,7 +60,7 @@ x509_extensions    = v3_req
 prompt             = no
 
 [dn]
-CN = ${TOKEN_HUB_DOMAIN}
+CN = ${FUTUREAI_API_DOMAIN}
 
 [v3_req]
 basicConstraints = CA:FALSE
@@ -69,7 +69,7 @@ extendedKeyUsage = serverAuth
 subjectAltName   = @alt_names
 
 [alt_names]
-DNS.1 = ${TOKEN_HUB_DOMAIN}
+DNS.1 = ${FUTUREAI_API_DOMAIN}
 EOF
 
 
@@ -77,7 +77,7 @@ EOF
 # 的判断失效，也会让下一次失败看起来像是新问题。
 rm -f certs/fullchain.pem certs/privkey.pem
 
-echo "==> 生成自签证书（SAN: $TOKEN_HUB_DOMAIN）"
+echo "==> 生成自签证书（SAN: $FUTUREAI_API_DOMAIN）"
 
 openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
   -keyout certs/privkey.pem \
@@ -111,7 +111,7 @@ cat <<EOF
   docker compose exec gateway nginx -t
 
 用 curl 验证（-k 跳过自签证书校验；--resolve 让 SNI 和 Host 都是目标域名）:
-  curl -k --resolve ${TOKEN_HUB_DOMAIN}:443:127.0.0.1 https://${TOKEN_HUB_DOMAIN}/health
+  curl -k --resolve ${FUTUREAI_API_DOMAIN}:443:127.0.0.1 https://${FUTUREAI_API_DOMAIN}/health
 
 域名解析生效后，换成正式证书:
   ./scripts/certbot.sh issue

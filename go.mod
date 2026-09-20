@@ -1,4 +1,4 @@
-module github.com/FutureAI/token-hub
+module github.com/FutureAI-X/futureai-api
 
 go 1.27.0
 

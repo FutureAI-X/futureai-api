@@ -23,7 +23,7 @@ web/node_modules
 # 本机构建的二进制与镜像导出包
 *.exe
 *.tar.gz
-/token-hub
+/futureai-api
 /out
 
 # 部署编排与文档，运行时用不到

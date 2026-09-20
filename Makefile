@@ -16,7 +16,7 @@
 ROOT_MODULE := $(shell go list -m)
 WEB_DIR     := web
 
-IMAGE    ?= token-hub
+IMAGE    ?= futureai-api
 TAG      ?= latest
 PLATFORM ?= linux/amd64
 
@@ -40,7 +40,7 @@ run: web
 
 ## build: 构建前端后编译后端二进制
 build: web
-	go build -trimpath -ldflags="-s -w" -o token-hub .
+	go build -trimpath -ldflags="-s -w" -o futureai-api .
 
 ## test: 运行全部测试（根包除外，理由见文件顶部说明）
 test:
@@ -65,4 +65,4 @@ save: docker
 
 ## clean: 清理构建产物
 clean:
-	rm -rf $(WEB_DIR)/dist token-hub
+	rm -rf $(WEB_DIR)/dist futureai-api

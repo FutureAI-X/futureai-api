@@ -35,10 +35,10 @@ docker compose exec gateway nginx -t
 ## 4. 把应用接进共享网络
 
 ```bash
-docker network connect gateway-proxy token-hub
+docker network connect gateway-proxy futureai-api
 ```
 
-网关在 `gateway-proxy` 上，应用在 `token-hub_default` 上，两者不通。这条命令给应用
+网关在 `gateway-proxy` 上，应用在 `futureai-api_default` 上，两者不通。这条命令给应用
 再插一块"网卡"，它原来的网络不受影响。
 
 > ⚠️ **容器重建后这条接线会丢**，网关会突然开始 502。重跑上面这条命令即可。
@@ -47,10 +47,10 @@ docker network connect gateway-proxy token-hub
 ## 5. 访问
 
 ```bash
-curl -k --resolve token.example.com:443:127.0.0.1 https://token.example.com/health
+curl -k --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/health
 # {"status":"ok"}
 
-curl -k -s --resolve token.example.com:443:127.0.0.1 https://token.example.com/ | head -3
+curl -k -s --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/ | head -3
 # HTML 页面（<script src="/assets/index-xxx.js"> 开头）
 ```
 
@@ -61,18 +61,18 @@ curl -k -s --resolve token.example.com:443:127.0.0.1 https://token.example.com/ 
 浏览器访问要先改 hosts（**管理员权限**）：
 
 ```powershell
-"127.0.0.1 token.example.com" | Add-Content "$env:SystemRoot\System32\drivers\etc\hosts"
+"127.0.0.1 futureai.example.com" | Add-Content "$env:SystemRoot\System32\drivers\etc\hosts"
 ipconfig /flushdns
 ```
 
-然后打开 **https://token.example.com**。证书警告是自签证书的正常表现，点「继续前往」。
+然后打开 **https://futureai.example.com**。证书警告是自签证书的正常表现，点「继续前往」。
 
 ---
 
 ## 清理
 
 ```bash
-docker network disconnect gateway-proxy token-hub
+docker network disconnect gateway-proxy futureai-api
 cd deploy/gateway && docker compose down
 docker network rm gateway-proxy
 ```

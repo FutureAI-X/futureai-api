@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/FutureAI/token-hub/common"
-	"github.com/FutureAI/token-hub/model"
-	"github.com/FutureAI/token-hub/supplier"
+	"github.com/FutureAI-X/futureai-api/common"
+	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/supplier"
 	"github.com/gin-gonic/gin"
 )
 

@@ -48,7 +48,7 @@ ports:
 容器之间默认**互相看不见**。只有接进同一个网络才能通信。
 
 接进同一个网络后，Docker 会提供一个内置 DNS，让容器可以用**服务名**互相访问 ——
-所以 token-hub 的连接串里能直接写 `postgres`，网关能直接写 `token-hub:3001`。
+所以 futureai-api 的连接串里能直接写 `postgres`，网关能直接写 `futureai-api:3001`。
 
 Docker 还会给每个容器分配一个 IP。我们的网关用了**固定 IP** `172.20.0.2`，
 因为下游服务要靠这个地址判断"请求是不是网关发来的"（见 `TRUSTED_PROXIES`）。
@@ -88,7 +88,7 @@ Nginx 收到请求后，替客户端去访问后端，再把结果返回。
 同时服务多个域名，靠请求里的域名决定转给谁：
 
 ```
-token.example.com     ──> token-hub:3001
+futureai.example.com    ──> futureai-api:3001
 另一个域名.example.com  ──> 另一个服务:端口
 ```
 
@@ -111,7 +111,7 @@ HTTPS 的加解密在网关这一层做完，转发给后端时用普通 HTTP。
 HTTPS 的前提是：**浏览器得确认它连的真是你的服务器**，而不是中间有人在冒充。
 这个确认靠证书。
 
-流程是：服务器出示证书说"我是 token.example.com"，证书上有一个**签发者**的签名。
+流程是：服务器出示证书说"我是 futureai.example.com"，证书上有一个**签发者**的签名。
 
 ### CA 与浏览器的信任列表
 
@@ -121,8 +121,8 @@ HTTPS 的前提是：**浏览器得确认它连的真是你的服务器**，而�
 我们本地测试用的**自签证书**，签发者是它自己：
 
 ```
-subject = CN=token.example.com
-issuer  = CN=token.example.com     ← 自己签自己
+subject = CN=futureai.example.com
+issuer  = CN=futureai.example.com     ← 自己签自己
 ```
 
 自己给自己担保，自然不在名单里 → 浏览器报 `ERR_CERT_AUTHORITY_INVALID`。
@@ -140,9 +140,9 @@ issuer  = CN=token.example.com     ← 自己签自己
 不能随便给谁签，否则任何人都能申请 `google.com` 的证书。验证方式是：
 
 ```
-1. 你申请 token.example.com 的证书
+1. 你申请 futureai.example.com 的证书
 2. 它给你一串随机码，要求你放到
-   http://token.example.com/.well-known/acme-challenge/<码>
+   http://futureai.example.com/.well-known/acme-challenge/<码>
 3. 它真的去访问这个地址
 4. 拿到了 → 说明你能控制这个域名 → 签发
 ```
@@ -162,7 +162,7 @@ issuer  = CN=token.example.com     ← 自己签自己
 
 ### 域名怎么变成 IP
 
-你在浏览器输入 `token.example.com`，机器得先知道它对应哪个 IP ——
+你在浏览器输入 `futureai.example.com`，机器得先知道它对应哪个 IP ——
 这个查询过程叫 DNS 解析。
 
 ### A 记录
@@ -171,16 +171,16 @@ issuer  = CN=token.example.com     ← 自己签自己
 
 | 类型 | 主机记录 | 值 |
 |---|---|---|
-| A | token | 1.2.3.4 |
+| A | futureai | 1.2.3.4 |
 
-主机记录填 `token`，配合域名 `example.com` 就是 `token.example.com`。
+主机记录填 `futureai`，配合域名 `example.com` 就是 `futureai.example.com`。
 
 ### 为什么"解析生效"需要等
 
 这条记录要同步到全球的 DNS 服务器，各家缓存策略不同，可能几分钟到几小时。
 没生效就去签证书会失败，因为验证服务器找不到你的机器。
 
-验证：`ping -c 1 token.example.com`，看返回的 IP 对不对。
+验证：`ping -c 1 futureai.example.com`，看返回的 IP 对不对。
 
 ---
 
@@ -206,11 +206,11 @@ issuer  = CN=token.example.com     ← 自己签自己
 
 ```bash
 # 这样不行：curl 连 127.0.0.1，不发 SNI，nginx 不知道该用哪个 server
-curl -k -H "Host: token.example.com" https://127.0.0.1/health
+curl -k -H "Host: futureai.example.com" https://127.0.0.1/health
 
-# 这样可以：--resolve 让 curl 认为域名就是 token.example.com，
+# 这样可以：--resolve 让 curl 认为域名就是 futureai.example.com，
 # SNI 和 Host 都对了
-curl -k --resolve token.example.com:443:127.0.0.1 https://token.example.com/health
+curl -k --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/health
 ```
 
 这就是文档里反复强调"必须用 `--resolve`"的原因。

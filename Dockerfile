@@ -80,7 +80,7 @@ COPY . .
 COPY --from=web /build/web/dist ./web/dist
 
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags="-s -w" -o /out/token-hub .
+    go build -trimpath -ldflags="-s -w" -o /out/futureai-api .
 
 
 # ---------------------------------------------------------------------------
@@ -109,11 +109,11 @@ RUN apk add --no-cache ca-certificates tzdata \
 ARG TZ=Asia/Shanghai
 ENV TZ=$TZ
 
-COPY --from=build /out/token-hub /usr/local/bin/token-hub
+COPY --from=build /out/futureai-api /usr/local/bin/futureai-api
 
 # 以非 root 运行。注意这带来一个副作用：程序把 root 初始密码写到工作目录
 # 时会因权限不足而只记一条日志。容器部署请改用 INITIAL_ROOT_PASSWORD
-# 环境变量传入初始密码，见 deploy/token-hub/.env.example。
+# 环境变量传入初始密码，见 deploy/futureai-api/.env.example。
 USER 10001:10001
 WORKDIR /app
 
@@ -125,4 +125,4 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD wget -qO- http://127.0.0.1:3001/health || exit 1
 
-ENTRYPOINT ["/usr/local/bin/token-hub"]
+ENTRYPOINT ["/usr/local/bin/futureai-api"]

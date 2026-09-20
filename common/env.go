@@ -23,8 +23,8 @@ func ensureEnvLoaded() {
 // insecureDefaultSecrets 仓库中出现过的示例/历史默认密钥。
 // 任何一项仍在生效都意味着该密钥实际是公开的，必须视为未配置。
 var insecureDefaultSecrets = map[string]struct{}{
-	"token-hub-jwt-secret-change-me": {},
-	"token-hub-secret-change-me":     {},
+	"futureai-api-jwt-secret-change-me": {},
+	"futureai-api-secret-change-me":     {},
 }
 
 // MinSecretLen 密钥最小长度。32 字符 ≈ 128 位熵（十六进制编码时）。

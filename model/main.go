@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FutureAI/token-hub/common"
+	"github.com/FutureAI-X/futureai-api/common"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

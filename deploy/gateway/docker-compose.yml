@@ -32,7 +32,7 @@ services:
       #
       # ⚠️ 以后在 .env 里加了新域名，记得同步加到这里，否则模板里
       #    对应的 ${NEW_DOMAIN} 不会被替换。
-      NGINX_ENVSUBST_FILTER: "^TOKEN_HUB_DOMAIN$"
+      NGINX_ENVSUBST_FILTER: "^FUTUREAI_API_DOMAIN$"
     volumes:
       # 模板目录。入口脚本会把它渲染到 /etc/nginx/conf.d/ 下。
       - ./templates:/etc/nginx/templates:ro

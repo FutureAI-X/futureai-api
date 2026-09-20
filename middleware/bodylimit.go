@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/FutureAI/token-hub/common"
+	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/gin-gonic/gin"
 )
 

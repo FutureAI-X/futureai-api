@@ -1,13 +1,13 @@
 # 部署
 
-部署 **token-hub**：一个 Nginx 容器网关做 TLS 终止和域名分流，应用跑在它后面。
+部署 **futureai-api**：一个 Nginx 容器网关做 TLS 终止和域名分流，应用跑在它后面。
 
 > 📖 **遇到不认识的词先查 [GLOSSARY.md](GLOSSARY.md)** ——
 > 镜像/容器、反向代理、证书与 CA、Let's Encrypt、A 记录、SNI、cron 都有简短说明。
 > 不用提前读，卡住了再查。
 
 ```
-公网 ──80/443──> 网关(nginx) ──> token-hub:3001 ──> postgres
+公网 ──80/443──> 网关(nginx) ──> futureai-api:3001 ──> postgres
 ```
 
 应用和数据库都不发布宿主机端口 —— 只有网关能访问它们。
@@ -25,7 +25,7 @@
 | 0 | 服务器 | 建共享网络、放行端口 |
 | 1 | **本机** | 构建镜像、把文件传上去 |
 | 2 | 服务器 | 起网关 |
-| 3 | 服务器 | 起 token-hub |
+| 3 | 服务器 | 起 futureai-api |
 | 4 | 服务器 | 验证 |
 | 5 | 服务器 | **有域名之后**换正式证书 |
 
@@ -78,7 +78,7 @@ bash deploy/build-image.sh linux/amd64          # 用第 0 步查到的架构
 > 直接 `./` 会报 `Permission denied`。`bash <脚本>` 没有这个问题。
 
 **预期看到**：最后打印 `完成，镜像包 14M，标签 20260915225600`，并在仓库根目录生成
-`token-hub-20260915225600-amd64.tar.gz`。
+`futureai-api-20260915225600-amd64.tar.gz`。
 
 标签默认取构建时刻（年月日时分秒），所以**你实际打印出来的数字和这里不会一样**。
 本手册后面统一拿 `20260915225600` 当占位符，出现这串数字的地方都换成你的那一个。
@@ -87,7 +87,7 @@ bash deploy/build-image.sh linux/amd64          # 用第 0 步查到的架构
 ```bash
 # 把两个配置目录和镜像都传上去（文件名里的 20260915225600 换成你的标签）
 #
-# ⚠️ 刻意逐个列出要传的文件，而不是 `scp -r deploy/gateway deploy/token-hub`：
+# ⚠️ 刻意逐个列出要传的文件，而不是 `scp -r deploy/gateway deploy/futureai-api`：
 #    后者会把本机的 certs/（含私钥）、logs/、.env 一起带上服务器。
 #    后果不小：本机那张占位证书传过去之后，第 2 步的 self-signed.sh
 #    会因为「证书已存在」直接跳过并返回 0，你会以为这步失败了、
@@ -96,11 +96,11 @@ scp deploy/gateway/docker-compose.yml deploy/gateway/.env.example \
     <user>@<server>:/opt/stacks/gateway/
 scp -r deploy/gateway/templates deploy/gateway/snippets deploy/gateway/scripts \
     <user>@<server>:/opt/stacks/gateway/
-scp deploy/token-hub/docker-compose.yml deploy/token-hub/.env.example \
-    <user>@<server>:/opt/stacks/token-hub/
-scp deploy/backup.sh deploy/restore.sh <user>@<server>:/opt/stacks/token-hub/
+scp deploy/futureai-api/docker-compose.yml deploy/futureai-api/.env.example \
+    <user>@<server>:/opt/stacks/futureai-api/
+scp deploy/backup.sh deploy/restore.sh <user>@<server>:/opt/stacks/futureai-api/
 
-scp token-hub-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
+scp futureai-api-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
 ```
 
 **预期看到**：`scp` 会打印传输进度，没有报错就是成功。
@@ -125,11 +125,11 @@ vi .env
 `vi` 会打开一个编辑器。要改的是这两行：
 
 ```
-TOKEN_HUB_DOMAIN=token.example.com      ← 改成你自己的域名
+FUTUREAI_API_DOMAIN=futureai.example.com      ← 改成你自己的域名
 ACME_EMAIL=admin@example.com            ← 改成你的邮箱（证书到期提醒会发这里）
 ```
 
-> **域名还没买？** 先用默认的 `token.example.com` 别动，能跑通前面的流程，
+> **域名还没买？** 先用默认的 `futureai.example.com` 别动，能跑通前面的流程，
 > 只是后面签不了正式证书。等买了域名再回来改，然后 `docker compose up -d --force-recreate`。
 
 改完保存退出（`vi` 的退出是依次按 `Esc`、`:wq`、回车），然后：
@@ -158,39 +158,39 @@ docker compose exec gateway nginx -t
 先验证能省掉一轮瞎猜。
 
 ```bash
-curl -k --resolve token.example.com:443:127.0.0.1 https://token.example.com/health
+curl -k --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/health
 ```
 
 **预期看到**：`502 Bad Gateway`。**这是对的** —— 后面的应用还没起。
 
-> **为什么命令这么长**：`--resolve token.example.com:443:127.0.0.1` 的意思是
-> "这次请求把 `token.example.com` 当作 `127.0.0.1`"。这样 curl 发出的
+> **为什么命令这么长**：`--resolve futureai.example.com:443:127.0.0.1` 的意思是
+> "这次请求把 `futureai.example.com` 当作 `127.0.0.1`"。这样 curl 发出的
 > **SNI 和 Host 都是真实域名**，才能走到网关里对应的那个 server 块。
 > 直接写 `https://127.0.0.1/` 会因为域名对不上被拒绝握手。
 
 ---
 
-## 3. 服务器 · 起 token-hub
+## 3. 服务器 · 起 futureai-api
 
 **这一步在做什么**：把镜像加载进来，配好密钥，启动应用和它的数据库。
 
 ```bash
 # 20260915225600 换成第 1 步记下的那个标签
-gunzip -c /tmp/token-hub-20260915225600-amd64.tar.gz | docker load
+gunzip -c /tmp/futureai-api-20260915225600-amd64.tar.gz | docker load
 ```
 
-**预期看到**：`Loaded image: token-hub:20260915225600` 与 `Loaded image: token-hub:latest`
+**预期看到**：`Loaded image: futureai-api:20260915225600` 与 `Loaded image: futureai-api:latest`
 —— 上面这条命令 load 进来的镜像带这两个标签，数字仍是第 1 步那个。
 
 ```bash
-cd /opt/stacks/token-hub
+cd /opt/stacks/futureai-api
 cp .env.example .env
 chmod 600 .env
 
 # 建数据卷。compose 里把它声明成 external（防 `docker compose down -v` 误删生产库），
 # 因此 compose 不会替你创建，必须先手工建好，否则 up 的时候会报
 # "external volume ... not found"。
-docker volume create token-hub-prod-data
+docker volume create futureai-api-prod-data
 
 # 给备份脚本加执行位（如果 scp 时没带上）
 chmod +x backup.sh restore.sh
@@ -215,11 +215,11 @@ POSTGRES_PASSWORD=        ← 粘上面第三个
 JWT_SECRET=               ← 粘上面第一个
 SECRET_KEY=               ← 粘上面第二个
 INITIAL_ROOT_PASSWORD=    ← 自己设一个管理员初始密码，登录时用
-TOKEN_HUB_TAG=            ← 第 1 步打镜像时打印的标签，形如 20260915225600
+FUTUREAI_API_TAG=            ← 第 1 步打镜像时打印的标签，形如 20260915225600
 ```
 
-> **`TOKEN_HUB_TAG` 填错会起不来**：它决定跑哪个版本的镜像，要和第 1 步打印的标签
-> **一字不差**，否则 `docker compose up -d` 会报 `image "token-hub:xxx" not found`。
+> **`FUTUREAI_API_TAG` 填错会起不来**：它决定跑哪个版本的镜像，要和第 1 步打印的标签
+> **一字不差**，否则 `docker compose up -d` 会报 `image "futureai-api:xxx" not found`。
 > 第一次部署想先跑通流程，也可以填 `latest`（打镜像时顺带打了这个标签）；
 > 但升级和回滚要填具体标签，理由见本机仓库的 [NOTES.md](NOTES.md) —— 它不在服务器上。
 
@@ -231,7 +231,7 @@ TOKEN_HUB_TAG=            ← 第 1 步打镜像时打印的标签，形如 2026
 
 ```bash
 docker compose up -d
-docker compose logs -f token-hub
+docker compose logs -f futureai-api
 ```
 
 **预期看到**（按 `Ctrl+C` 退出日志）：
@@ -251,13 +251,13 @@ FutureAI API started on port 3001
 **这一步在做什么**：确认三层（网关 → 应用 → 数据库）真的打通了。
 
 ```bash
-curl -k --resolve token.example.com:443:127.0.0.1 https://token.example.com/health
+curl -k --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/health
 # 预期: {"status":"ok"}
 
-curl -k -s --resolve token.example.com:443:127.0.0.1 https://token.example.com/ | head -3
+curl -k -s --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/ | head -3
 # 预期: <!doctype html> ... 开头的一段 HTML
 
-curl -k -s --resolve token.example.com:443:127.0.0.1 https://token.example.com/api/nope
+curl -k -s --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/api/nope
 # 预期: {"error":{"message":"Not found",...}}   —— JSON，不是 HTML
 ```
 
@@ -267,11 +267,11 @@ curl -k -s --resolve token.example.com:443:127.0.0.1 https://token.example.com/a
 
 **这项最容易漏，后果也最严重。** 它决定了应用能不能认出用户的真实 IP。
 
-从外部（你自己的电脑）打开 `https://token.example.com`，故意输错几次密码，
+从外部（你自己的电脑）打开 `https://futureai.example.com`，故意输错几次密码，
 然后在服务器上看：
 
 ```bash
-docker compose logs token-hub | grep -i login
+docker compose logs futureai-api | grep -i login
 ```
 
 | 日志里的来源 IP | 含义 |
@@ -282,10 +282,10 @@ docker compose logs token-hub | grep -i login
 没生效的话，**所有用户会被登录限流当成同一个人** —— 任意几次失败就锁死所有人，
 而现象看起来像"密码错了"，很难联想到限流。
 
-修法：检查 `deploy/token-hub/.env` 里的 `GATEWAY_IP` 是不是 `172.20.0.2`，
+修法：检查 `deploy/futureai-api/.env` 里的 `GATEWAY_IP` 是不是 `172.20.0.2`，
 以及 `deploy/gateway/docker-compose.yml` 里的 `ipv4_address` 是不是同一个值。
 
-**最后**：浏览器登录 `https://token.example.com`，用户名 `root`、
+**最后**：浏览器登录 `https://futureai.example.com`，用户名 `root`、
 密码是你在第 3 步设的 `INITIAL_ROOT_PASSWORD`。**登录后立即改密码**，
 并把 `.env` 里 `INITIAL_ROOT_PASSWORD` 那行清空。
 
@@ -305,16 +305,16 @@ docker compose logs token-hub | grep -i login
 
 | 类型 | 主机记录 | 值 |
 |---|---|---|
-| A | token | 你的服务器公网 IP |
+| A | futureai | 你的服务器公网 IP |
 
-"A 记录"就是"这个域名指向哪个 IP"。上面的 `token` 对应 `token.example.com`。
+"A 记录"就是"这个域名指向哪个 IP"。上面的 `futureai` 对应 `futureai.example.com`。
 
 ⚠️ 这里填的域名要和 `deploy/gateway/.env` 里**完全一致**，否则证书验证会失败。
 
 **2. 解析已生效**
 
 ```bash
-ping -c 1 token.example.com
+ping -c 1 futureai.example.com
 ```
 
 **预期看到**：返回的 IP 是你的服务器公网 IP。刚配好可能要等几分钟到几小时（DNS 缓存）。
@@ -343,12 +343,12 @@ Let's Encrypt 必须先确认"这个域名确实指向你这台机器"，
 ### 验证
 
 ```bash
-curl -I https://token.example.com/health
+curl -I https://futureai.example.com/health
 ```
 
 注意这次**没有 `-k` 了** —— 正式证书浏览器天然信任。应该返回 `HTTP/2 200`。
 
-浏览器打开 `https://token.example.com`，地址栏应该是锁头图标、没有警告。
+浏览器打开 `https://futureai.example.com`，地址栏应该是锁头图标、没有警告。
 
 ### 自动续期
 
@@ -366,7 +366,7 @@ sudo crontab -e
 17 3 * * * cd /opt/stacks/gateway && ./scripts/certbot.sh renew >> /var/log/certbot-renew.log 2>&1
 
 # 数据库备份（同样需要 sudo，理由同上）
-30 3 * * * /opt/stacks/token-hub/backup.sh >> /var/log/token-hub-backup.log 2>&1
+30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
 ```
 
 保存退出（`nano` 是 `Ctrl+O` 回车，再 `Ctrl+X`）。
@@ -397,7 +397,7 @@ cd /opt/stacks/gateway && ./scripts/certbot.sh renew   # 手动跑一次，不�
 
 ## 以后要再加一个服务
 
-当前只部署了 token-hub。这台机器以后还要放别的服务，做法是**四处改动**：
+当前只部署了 futureai-api。这台机器以后还要放别的服务，做法是**四处改动**：
 
 **1. 那个服务的 compose 接进共享网络**（保留它自己的默认网络用来连数据库）：
 
@@ -417,7 +417,7 @@ networks:
 **2. 删掉它的 `ports:`** —— 网关通过共享网络直连容器，发布到宿主机反而让它能被绕过网关访问。
 
 **3. 网关加一个 server 块** —— 复制 [deploy/gateway/templates/default.conf.template](gateway/templates/default.conf.template)
-里 token-hub 那个块，改四处：`server_name`、`access_log` 文件名、`set $xxx_up`（`服务名:端口`）、
+里 futureai-api 那个块，改四处：`server_name`、`access_log` 文件名、`set $xxx_up`（`服务名:端口`）、
 以及流式服务需要的超时设置。**模板文件末尾有逐条说明**。
 
 **4. `deploy/gateway/.env` 加域名，并同步改 `docker-compose.yml` 里的 `NGINX_ENVSUBST_FILTER`** ——

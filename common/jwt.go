@@ -21,7 +21,7 @@ func getJWTSecret() []byte {
 	jwtOnce.Do(func() {
 		secret, err := RequireSecret("JWT_SECRET")
 		if err != nil {
-			log.Fatalf("[TOKEN-HUB] [安全] %v", err)
+			log.Fatalf("[FUTUREAI-API] [安全] %v", err)
 		}
 		jwtSecret = []byte(secret)
 	})
@@ -59,7 +59,7 @@ func GenerateToken(userID int, username string, role int, tokenVersion int) (str
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expireTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "token-hub",
+			Issuer:    "futureai-api",
 		},
 	}
 
@@ -83,7 +83,7 @@ func ParseToken(tokenString string) (*Claims, error) {
 		},
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithExpirationRequired(),
-		jwt.WithIssuer("token-hub"),
+		jwt.WithIssuer("futureai-api"),
 	)
 
 	if err != nil {

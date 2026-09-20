@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/FutureAI/token-hub/common"
-	"github.com/FutureAI/token-hub/controller"
-	"github.com/FutureAI/token-hub/middleware"
-	"github.com/FutureAI/token-hub/model"
-	"github.com/FutureAI/token-hub/router"
-	"github.com/FutureAI/token-hub/webui"
+	"github.com/FutureAI-X/futureai-api/common"
+	"github.com/FutureAI-X/futureai-api/controller"
+	"github.com/FutureAI-X/futureai-api/middleware"
+	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/router"
+	"github.com/FutureAI-X/futureai-api/webui"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )

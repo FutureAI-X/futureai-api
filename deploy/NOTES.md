@@ -30,14 +30,14 @@
 
 ```nginx
 resolver 127.0.0.11 valid=10s ipv6=off;
-set $token_hub_up "token-hub:3001";
-proxy_pass http://$token_hub_up;
+set $futureai_api_up "futureai-api:3001";
+proxy_pass http://$futureai_api_up;
 ```
 
 而不是常见的：
 
 ```nginx
-upstream backend { server token-hub:3001; }
+upstream backend { server futureai-api:3001; }
 ```
 
 **原因**：nginx 对 `upstream` 块里的主机名**只在启动时解析一次**。容器重建换了 IP 之后，
@@ -95,26 +95,26 @@ nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启�
 
 ```bash
 # 1. HSTS 已下发
-curl -sI https://token.example.com/api/pricing | grep -i strict-transport
+curl -sI https://futureai.example.com/api/pricing | grep -i strict-transport
 
 # 2. 前端资源长缓存、index.html 不缓存
-curl -sI https://token.example.com/ | grep -i cache-control              # no-store
-curl -sI https://token.example.com/assets/<某个文件名> | grep -i cache-control
+curl -sI https://futureai.example.com/ | grep -i cache-control              # no-store
+curl -sI https://futureai.example.com/assets/<某个文件名> | grep -i cache-control
 #    -> public, max-age=31536000, immutable
 
 # 3. 凭证不接受走 URL（应返回 401）
 curl -s -o /dev/null -w '%{http_code}\n' \
-     "https://token.example.com/v1/models?token=sk-anything"
+     "https://futureai.example.com/v1/models?token=sk-anything"
 
 # 4. 上传 10MB 文件不应出现 413
 curl -s -o /dev/null -w '%{http_code}\n' \
      -H "Authorization: Bearer sk-xxx" \
-     -F "file=@10mb.png" https://token.example.com/v1/uploads/images
+     -F "file=@10mb.png" https://futureai.example.com/v1/uploads/images
 
 # 5. 请求体限制生效：超大 JSON 应返回 413（这是无需认证就能打的接口）
 head -c 3000000 /dev/zero | tr '\0' 'a' > /tmp/big.txt
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-     https://token.example.com/api/auth/login \
+     https://futureai.example.com/api/auth/login \
      -H 'Content-Type: application/json' --data-binary @/tmp/big.txt
 #    -> 413（若返回 400 或 200，说明中间件没挂上）
 
@@ -141,7 +141,7 @@ curl -m 3 telnet://<服务器IP>:5432
 - [ ] 若服务器**必须经代理**才能访问供应商 API，设置 `OUTBOUND_PROXY`
       （本服务不读 `HTTP_PROXY`/`HTTPS_PROXY`）。设错的表现是所有图像生成
       超时且日志没有任何提示。可以先在容器里验证连通性：
-      `docker compose exec token-hub wget -qO- --timeout=5 <供应商域名>`
+      `docker compose exec futureai-api wget -qO- --timeout=5 <供应商域名>`
 - [ ] 登录后立即修改 root 密码，并清空 `.env` 里的 `INITIAL_ROOT_PASSWORD`。
 - [ ] 证书续期的 cron 已挂上，并且**手动跑一次确认能成功**。
       注意用 `sudo crontab -e`（日志写在 `/var/log/`，普通用户无权限，
@@ -161,20 +161,20 @@ curl -m 3 telnet://<服务器IP>:5432
 ```bash
 # 本机 —— 脚本会打印出本次的标签，形如 20260915225600
 ./deploy/build-image.sh linux/amd64
-scp token-hub-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
+scp futureai-api-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
 
 # 服务器 —— ⚠️ 先备份，再升级
-/opt/stacks/token-hub/backup.sh
+/opt/stacks/futureai-api/backup.sh
 
 TAG=20260915225600
-gunzip -c /tmp/token-hub-$TAG-amd64.tar.gz | docker load
+gunzip -c /tmp/futureai-api-$TAG-amd64.tar.gz | docker load
 
 # 记录本次标签与 commit 的对应关系（回滚时要靠它确定"上一个版本"）
-docker image inspect token-hub:$TAG \
+docker image inspect futureai-api:$TAG \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
 
-cd /opt/stacks/token-hub
-sed -i "s/^TOKEN_HUB_TAG=.*/TOKEN_HUB_TAG=$TAG/" .env
+cd /opt/stacks/futureai-api
+sed -i "s/^FUTUREAI_API_TAG=.*/FUTUREAI_API_TAG=$TAG/" .env
 docker compose up -d
 ```
 
@@ -197,11 +197,11 @@ docker compose up -d
 镜像按标签保留，回滚就是换标签：
 
 ```bash
-cd /opt/stacks/token-hub
-docker image ls token-hub          # 先看还有哪些版本
-docker image inspect token-hub:<标签> \
+cd /opt/stacks/futureai-api
+docker image ls futureai-api          # 先看还有哪些版本
+docker image inspect futureai-api:<标签> \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'   # 对应哪个 commit
-sed -i 's/^TOKEN_HUB_TAG=.*/TOKEN_HUB_TAG=<上一个版本>/' .env
+sed -i 's/^FUTUREAI_API_TAG=.*/FUTUREAI_API_TAG=<上一个版本>/' .env
 docker compose up -d
 ```
 
@@ -209,7 +209,7 @@ docker compose up -d
 > 与索引在回滚后依然留在库里。旧代码通常不认识它们（无害），但如果新版本
 > 对已有列做过类型变更，旧代码可能读不回来。**不确定就先在临时库上试一次**。
 >
-> 数据库本身回滚要用备份：`./restore.sh /opt/backups/token-hub/db-<时间戳>.sql.gz`
+> 数据库本身回滚要用备份：`./restore.sh /opt/backups/futureai-api/db-<时间戳>.sql.gz`
 
 打镜像默认就用构建时刻当标签（`20260915225600`），每次都是一个新版本，
 旧镜像留在服务器上不会被覆盖。想用更直观的版本号就自己指定：
@@ -230,22 +230,22 @@ TAG=v1.2.3 ./deploy/build-image.sh linux/amd64
 
 ```bash
 # 手动跑一次
-sudo /opt/stacks/token-hub/backup.sh
+sudo /opt/stacks/futureai-api/backup.sh
 
 # 挂 cron（必须用 sudo：脚本要读 .env 并写 /opt）
 sudo crontab -e
-30 3 * * * /opt/stacks/token-hub/backup.sh >> /var/log/token-hub-backup.log 2>&1
+30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
 ```
 
 脚本会同时备份数据库和 `.env`。**`.env` 必须一起备份**：
 `SECRET_KEY` 丢了，库里所有供应商 API Key 就永远解不开了，数据库恢复得再好也没用。
 
-保留份数用 `KEEP` 控制：`KEEP=30 /opt/stacks/token-hub/backup.sh`。
+保留份数用 `KEEP` 控制：`KEEP=30 /opt/stacks/futureai-api/backup.sh`。
 
 > ⚠️ **没验证过的备份等于没有备份。** 每季度实际恢复一次：
 >
 > ```bash
-> sudo /opt/stacks/token-hub/restore.sh /opt/backups/token-hub/db-<时间戳>.sql.gz
+> sudo /opt/stacks/futureai-api/restore.sh /opt/backups/futureai-api/db-<时间戳>.sql.gz
 > ```
 >
 > `restore.sh` 会停应用、恢复、再拉起，并要求二次确认。
@@ -256,9 +256,9 @@ sudo crontab -e
 
 ```bash
 cd /opt/stacks/gateway
-tail -f logs/token-hub.access.log      # 网关侧访问日志（已剔除查询串）
+tail -f logs/futureai-api.access.log      # 网关侧访问日志（已剔除查询串）
 
-docker compose -f /opt/stacks/token-hub/docker-compose.yml logs -f token-hub
+docker compose -f /opt/stacks/futureai-api/docker-compose.yml logs -f futureai-api
 ```
 
 **日志必须轮转，否则迟早写满磁盘**（数据库与应用同盘，会一起挂）：
@@ -297,5 +297,5 @@ docker compose -f /opt/stacks/token-hub/docker-compose.yml logs -f token-hub
 | 任务长期停在 `submitted` | 上游一直没返回终态。超过 6 小时会被对账循环退款并打 `[需人工对账]` 日志——拿这个 taskID 去上游核对账单 |
 | 用户投诉「扣了积分没出图」 | 先看任务状态：`call_fail` + 日志里的 `[SUBMIT_UNKNOWN]` 表示提交结果不确定（已退款）。频繁出现说明上游不稳或提交超时太短 |
 | 本地/生产都起不来，报 `env file not found` | 没做 `cp .env.example .env`，`.env` 被 gitignore 了 |
-| 生产容器报 `container name "/token-hub" is already in use` | 同机跑过开发栈。生产 compose 已不再写死 `container_name`，若仍报错说明服务器上是旧版编排文件 |
+| 生产容器报 `container name "/futureai-api" is already in use` | 同机跑过开发栈。生产 compose 已不再写死 `container_name`，若仍报错说明服务器上是旧版编排文件 |
 | 网关起来后又因 `Address already in use` 挂掉 | 建网络时漏了 `--ip-range 172.20.128.0/17` |

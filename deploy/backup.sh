@@ -3,21 +3,21 @@
 # 备份 FutureAI API 的数据库与配置。
 #
 # 用法（在服务器上，从仓库的 deploy/ 目录或在服务器上的任意位置调用）:
-#   ./backup.sh                 # 备份到 /opt/backups/token-hub
+#   ./backup.sh                 # 备份到 /opt/backups/futureai-api
 #   BACKUP_DIR=/data/bak ./backup.sh
 #   KEEP=30 ./backup.sh         # 保留最近 30 份（默认 14）
 #
 # 挂 cron（root 用户，因为要读 .env 并写 /opt）:
 #   sudo crontab -e
-#   30 3 * * * /opt/stacks/token-hub/backup.sh >> /var/log/token-hub-backup.log 2>&1
+#   30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
 #
 # ⚠️ 没验证过的备份等于没有备份。改完 schema 或升级之后，
 #    请按 NOTES.md 的步骤实际恢复一次（见 restore.sh）。
 
 set -euo pipefail
 
-STACK_DIR="${STACK_DIR:-/opt/stacks/token-hub}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/backups/token-hub}"
+STACK_DIR="${STACK_DIR:-/opt/stacks/futureai-api}"
+BACKUP_DIR="${BACKUP_DIR:-/opt/backups/futureai-api}"
 KEEP="${KEEP:-14}"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
 ENV_FILE="$STACK_DIR/.env"
@@ -35,8 +35,8 @@ read_env() {
   sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | tr -d "\"'"
 }
 
-PG_USER="$(read_env POSTGRES_USER)"; PG_USER="${PG_USER:-token_hub}"
-PG_DB="$(read_env POSTGRES_DB)"; PG_DB="${PG_DB:-token_hub}"
+PG_USER="$(read_env POSTGRES_USER)"; PG_USER="${PG_USER:-futureai_api}"
+PG_DB="$(read_env POSTGRES_DB)"; PG_DB="${PG_DB:-futureai_api}"
 
 # mkdir -p 是必须的：没有它时重定向会失败，而 cron 里的失败
 # 只会进 cron 邮件，表现是「以为有备份，其实一个都没有」。

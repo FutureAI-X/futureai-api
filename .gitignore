@@ -33,9 +33,9 @@ root_initial_password.txt
 
 # 镜像导出包（deploy/build-image.sh 的产物，落在仓库根目录）
 *.tar.gz
-# 开头的斜杠是必须的：不带斜杠的 "token-hub" 会匹配任意层级，
-# 把 deploy/token-hub/ 也一并忽略掉。
-/token-hub
+# 开头的斜杠是必须的：不带斜杠的 "futureai-api" 会匹配任意层级，
+# 把 deploy/futureai-api/ 也一并忽略掉。
+/futureai-api
 
 # Editor/IDE
 # .idea/

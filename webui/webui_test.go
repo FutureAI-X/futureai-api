@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	indexBody = "<!doctype html><html><body>token-hub</body></html>"
-	jsBody    = "console.log('token hub')"
+	indexBody = "<!doctype html><html><body>futureai-api</body></html>"
+	jsBody    = "console.log('futureai api')"
 	svgBody   = "<svg></svg>"
 )
 
