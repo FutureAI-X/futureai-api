@@ -54,7 +54,7 @@ upstream backend { server futureai-api:3001; }
 
 nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启动失败** ——
 不是某个域名 502，而是整个网关起不来。所以正式证书签发之前，必须先跑一次
-`scripts/self-signed.sh` 放一对证书占位。（这正是 [README 第 2 步](README.md#2-服务器--起网关)那条注意事项。）
+`scripts/self-signed.sh` 放一对证书占位。（这正是 [README 第 3.5 步](README.md#35-生成自签证书)那条注意事项。）
 
 浏览器在自签阶段会报 `ERR_CERT_AUTHORITY_INVALID`。**这不是配错了**，而恰恰说明前面的环节都对：
 
@@ -69,7 +69,7 @@ nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启�
 
 ## TRUSTED_PROXIES 为什么这么配
 
-**验证方法在 [README 第 4 步](README.md#4-服务器--验证)**，这里只讲背后的取舍。
+**验证方法在 [README 第 5.4 步](README.md#54-确认-trusted_proxies-生效)**，这里只讲背后的取舍。
 
 `X-Forwarded-For` 的可信度完全取决于「谁写的这条头」。网关用
 `$proxy_add_x_forwarded_for` 把真实客户端 IP **追加**到链尾，而 Gin 从右往左
