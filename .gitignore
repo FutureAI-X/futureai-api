@@ -25,7 +25,11 @@ go.work
 go.work.sum
 
 # env file
+# .env.* 一并忽略，是为了盖住 .env.bak / .env.local 这类临时副本 ——
+# 它们同样含密钥，而 .env 未被 git 跟踪，一旦误提交没有任何东西能兜底。
 .env
+.env.*
+!.env.example
 
 # 首次启动时生成的 root 初始密码。程序在 users 表为空时写入，
 # 权限虽然是 0600，但误提交到仓库就等于把管理员密码公开了。
