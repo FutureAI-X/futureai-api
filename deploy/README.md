@@ -239,7 +239,7 @@ docker compose logs -f token-hub
 ```
 using PostgreSQL as database
 database migration started
-Token Hub started on port 3001
+FutureAI API started on port 3001
 ```
 
 如果卡在 `database migration` 或直接退出，多半是 `POSTGRES_PASSWORD` 填错了。

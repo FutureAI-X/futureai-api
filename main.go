@@ -163,7 +163,7 @@ func main() {
 
 	// 在独立 goroutine 中监听，主 goroutine 负责等待退出信号
 	go func() {
-		common.SysLogf("Token Hub started on port %s", port)
+		common.SysLogf("FutureAI API started on port %s", port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.FatalLog("failed to start server: " + err.Error())
 		}
@@ -196,5 +196,5 @@ func main() {
 		common.SysError("关闭数据库连接失败: " + err.Error())
 	}
 
-	common.SysLog("Token Hub 已退出")
+	common.SysLog("FutureAI API 已退出")
 }

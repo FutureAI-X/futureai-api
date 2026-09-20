@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 在本机构建 Token Hub 镜像，并导出成可直接传到服务器的压缩包。
+# 在本机构建 FutureAI API 镜像，并导出成可直接传到服务器的压缩包。
 #
 # 用法:
 #   ./deploy/build-image.sh                  # 默认 linux/amd64

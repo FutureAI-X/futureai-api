@@ -43,7 +43,7 @@ limit_req_zone $binary_remote_addr zone=token_hub_login:10m rate=30r/m;
 #
 # 刻意使用 $uri 而非 $request：
 # $request 形如 "GET /v1/models?foo=bar"，会把查询串写进日志。
-# Token Hub 已不接受 URL 中的凭证，但查询串仍可能含业务参数，
+# FutureAI API 已不接受 URL 中的凭证，但查询串仍可能含业务参数，
 # 不应落入日志或流向日志聚合平台。
 log_format edge '$remote_addr - $remote_user [$time_local] '
                 '"$request_method $uri $server_protocol" '

@@ -855,10 +855,10 @@ export function Home() {
         <div className='mx-auto flex max-w-6xl flex-col items-center gap-4 text-center'>
           <div className='flex items-center gap-2'>
             <span>⚡</span>
-            <span className='text-sm font-semibold'>Token Hub</span>
+            <span className='text-sm font-semibold'>FutureAI API</span>
           </div>
           <p className='text-muted-foreground text-xs'>下一代 LLM 网关和 AI 资产管理系统</p>
-          <p className='text-muted-foreground/60 text-xs'>© 2026 Token Hub. 基于 Go + Gin + React 构建</p>
+          <p className='text-muted-foreground/60 text-xs'>© 2026 FutureAI API. 基于 Go + Gin + React 构建</p>
         </div>
       </footer>
     </div>

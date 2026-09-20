@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 备份 Token Hub 的数据库与配置。
+# 备份 FutureAI API 的数据库与配置。
 #
 # 用法（在服务器上，从仓库的 deploy/ 目录或在服务器上的任意位置调用）:
 #   ./backup.sh                 # 备份到 /opt/backups/token-hub

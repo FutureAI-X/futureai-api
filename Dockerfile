@@ -1,5 +1,5 @@
 # ============================================================================
-# Token Hub — 生产镜像
+# FutureAI API — 生产镜像
 #
 # 三段式：前端构建 → 后端编译 → 运行时。
 # 前端产物通过 go:embed 编进二进制，因此最终镜像里同时装着前端页面与 API，
@@ -95,7 +95,7 @@ FROM alpine:3.22
 # 没有它时只能在时间戳标签之间猜测。
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.revision=$GIT_SHA \
-      org.opencontainers.image.title="Token Hub"
+      org.opencontainers.image.title="FutureAI API"
 
 # ca-certificates：调用上游供应商 API 需要信任根证书
 # tzdata：        日志时间戳按本地时区输出

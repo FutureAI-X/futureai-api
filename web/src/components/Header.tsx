@@ -40,7 +40,7 @@ export function Header({ leftExtra }: HeaderProps) {
               <div className='flex size-7 shrink-0 items-center justify-center transition-all duration-300 group-hover:scale-105'>
                 <span className='text-lg'>⚡</span>
               </div>
-              <span className='text-sm font-semibold tracking-tight'>Token Hub</span>
+              <span className='text-sm font-semibold tracking-tight'>FutureAI API</span>
             </a>
           </div>
 

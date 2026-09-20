@@ -60,7 +60,7 @@ export function Login() {
         <div className='mb-8 text-center'>
           <a href='/' className='inline-flex items-center gap-2.5'>
             <span className='text-2xl'>⚡</span>
-            <span className='text-xl font-bold tracking-tight'>Token Hub</span>
+            <span className='text-xl font-bold tracking-tight'>FutureAI API</span>
           </a>
         </div>
 
@@ -69,7 +69,7 @@ export function Login() {
           <div className='mb-6'>
             <h2 className='text-2xl font-semibold tracking-tight'>登录</h2>
             <p className='text-muted-foreground mt-2 text-sm'>
-              使用您的账号登录 Token Hub
+              使用您的账号登录 FutureAI API
             </p>
           </div>
 
