@@ -1,6 +1,6 @@
 # 在本地跑 Nginx 网关
 
-验证生产架构（域名分流 + TLS）用。日常开发见 [DEVELOPMENT.md](DEVELOPMENT.md)，
+验证生产架构（域名分流 + TLS）用。日常开发见 [DEV.md](DEV.md)，
 只想验证镜像见 [DOCKER.md](DOCKER.md)。
 
 ---

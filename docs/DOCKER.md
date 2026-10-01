@@ -1,6 +1,6 @@
 # 打包镜像 & 用 Docker 在本地跑
 
-日常改代码看 [DEVELOPMENT.md](DEVELOPMENT.md)。
+日常改代码看 [DEV.md](DEV.md)。
 部署到服务器看 [../deploy/README.md](../deploy/README.md)。
 
 **这份讲**：把项目打包成镜像、用 Docker Desktop 跑起来 —— 也是发版前验证镜像的方式。
@@ -49,12 +49,13 @@ ls .env
 cp .env.example .env
 ```
 
-`.env` 被 gitignore，干净 clone 上没有这个文件；缺了它 `docker compose`
-会直接报 `env file ... not found`。
+`.env` 被 gitignore，干净 clone 上没有这个文件。缺了它 `docker compose`
+解析配置时就会失败：`required variable POSTGRES_PASSWORD is missing a value`
+（插值发生在选择启动哪个服务之前，所以只起单个服务也一样报）。
 
 ### 1.4 填好三处密钥
 
-按 [DEVELOPMENT.md](DEVELOPMENT.md) 的 3.2 ~ 3.5 填
+按 [DEV.md](DEV.md) 的 2.1 ~ 2.2 填
 `POSTGRES_PASSWORD` / `JWT_SECRET` / `SECRET_KEY`。
 
 后两项留空的话服务会拒绝启动 —— 这是刻意的 fail-closed。
