@@ -100,10 +100,10 @@ docker network connect gateway-proxy futureai-api
 ## 六 访问
 
 ```bash
-curl -k --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/health
+curl -k --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/health
 # {"status":"ok"}
 
-curl -k -s --resolve futureai.example.com:443:127.0.0.1 https://futureai.example.com/ | head -3
+curl -k -s --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/ | head -3
 # HTML 页面（<script src="/assets/index-xxx.js"> 开头）
 ```
 
@@ -115,16 +115,16 @@ curl -k -s --resolve futureai.example.com:443:127.0.0.1 https://futureai.example
 
 ```powershell
 # Windows
-"127.0.0.1 futureai.example.com" | Add-Content "$env:SystemRoot\System32\drivers\etc\hosts"
+"127.0.0.1 futureaiapi.com" | Add-Content "$env:SystemRoot\System32\drivers\etc\hosts"
 ipconfig /flushdns
 ```
 
 ```bash
 # macOS / Linux
-echo "127.0.0.1 futureai.example.com" | sudo tee -a /etc/hosts
+echo "127.0.0.1 futureaiapi.com" | sudo tee -a /etc/hosts
 ```
 
-然后打开 **https://futureai.example.com**。证书警告是自签证书的正常表现，点「继续前往」。
+然后打开 **https://futureaiapi.com**。证书警告是自签证书的正常表现，点「继续前往」。
 
 ---
 

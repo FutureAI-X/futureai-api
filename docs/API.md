@@ -272,7 +272,7 @@ POST /v1/images/generations
 提交图像生成时带上 `Idempotency-Key` 请求头，可以在窗口内安全重试：
 
 ```bash
-curl -X POST https://futureai.example.com/v1/images/generations \
+curl -X POST https://futureaiapi.com/v1/images/generations \
   -H "Authorization: Bearer sk-xxx" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \

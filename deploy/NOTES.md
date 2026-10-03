@@ -54,7 +54,7 @@ upstream backend { server futureai-api:3001; }
 
 nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启动失败** ——
 不是某个域名 502，而是整个网关起不来。所以正式证书签发之前，必须先跑一次
-`scripts/self-signed.sh` 放一对证书占位。（这正是 [README 第 3.5 步](README.md#35-生成自签证书)那条注意事项。）
+`scripts/self-signed.sh` 放一对证书占位。（这正是 [README 第 3.2 步](README.md#32-生成自签证书)那条注意事项。）
 
 浏览器在自签阶段会报 `ERR_CERT_AUTHORITY_INVALID`。**这不是配错了**，而恰恰说明前面的环节都对：
 
@@ -69,7 +69,7 @@ nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启�
 
 ## TRUSTED_PROXIES 为什么这么配
 
-**验证方法在 [README 第 5.4 步](README.md#54-确认-trusted_proxies-生效)**，这里只讲背后的取舍。
+**验证方法在 [README 第 5.2 步](README.md#52-确认-trusted_proxies-生效)**，这里只讲背后的取舍。
 
 `X-Forwarded-For` 的可信度完全取决于「谁写的这条头」。网关用
 `$proxy_add_x_forwarded_for` 把真实客户端 IP **追加**到链尾，而 Gin 从右往左
@@ -95,26 +95,26 @@ nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启�
 
 ```bash
 # 1. HSTS 已下发
-curl -sI https://futureai.example.com/api/pricing | grep -i strict-transport
+curl -sI https://futureaiapi.com/api/pricing | grep -i strict-transport
 
 # 2. 前端资源长缓存、index.html 不缓存
-curl -sI https://futureai.example.com/ | grep -i cache-control              # no-store
-curl -sI https://futureai.example.com/assets/<某个文件名> | grep -i cache-control
+curl -sI https://futureaiapi.com/ | grep -i cache-control              # no-store
+curl -sI https://futureaiapi.com/assets/<某个文件名> | grep -i cache-control
 #    -> public, max-age=31536000, immutable
 
 # 3. 凭证不接受走 URL（应返回 401）
 curl -s -o /dev/null -w '%{http_code}\n' \
-     "https://futureai.example.com/v1/models?token=sk-anything"
+     "https://futureaiapi.com/v1/models?token=sk-anything"
 
 # 4. 上传 10MB 文件不应出现 413
 curl -s -o /dev/null -w '%{http_code}\n' \
      -H "Authorization: Bearer sk-xxx" \
-     -F "file=@10mb.png" https://futureai.example.com/v1/uploads/images
+     -F "file=@10mb.png" https://futureaiapi.com/v1/uploads/images
 
 # 5. 请求体限制生效：超大 JSON 应返回 413（这是无需认证就能打的接口）
 head -c 3000000 /dev/zero | tr '\0' 'a' > /tmp/big.txt
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-     https://futureai.example.com/api/auth/login \
+     https://futureaiapi.com/api/auth/login \
      -H 'Content-Type: application/json' --data-binary @/tmp/big.txt
 #    -> 413（若返回 400 或 200，说明中间件没挂上）
 
@@ -147,6 +147,8 @@ curl -m 3 telnet://<服务器IP>:5432
       注意用 `sudo crontab -e`（日志写在 `/var/log/`，普通用户无权限，
       cron 会静默失败直到证书过期、网站打不开才发现）。
 - [ ] 备份 cron 已挂上，并**实际跑一次 `restore.sh` 验证备份可用**。
+- [ ] 网关日志的清理 cron 已挂上（[README 第 6.6 步](README.md#66-挂定时任务三条一条都不能少)的第三条）。
+      这条最容易漏，而它是唯一会无限增长的日志 —— 写满磁盘会把同盘的数据库一起拖死。
 - [ ] 确认**只有网关一个入口**。根目录的 `docker-compose.yml` 是开发用的，
       它把应用端口发布到宿主机；别把它跑在公网机器上。
 - [ ] 确认本次是**单实例部署**。限流器与任务对账状态都在进程内存里，
@@ -264,15 +266,11 @@ docker compose -f /opt/stacks/futureai-api/docker-compose.yml logs -f futureai-a
 **日志必须轮转，否则迟早写满磁盘**（数据库与应用同盘，会一起挂）：
 
 - 容器日志：两份 compose 都已设 `logging.options.max-size=10m / max-file=3`，
-  不需要额外操作。
-- 网关日志：写在宿主机的 `deploy/gateway/logs/` 下，**容器配置管不到它**，
-  需要主机侧清理：
-
-  ```bash
-  # 挂个 cron，保留 14 天
-  sudo crontab -e
-  0 4 * * * find /opt/stacks/gateway/logs -name '*.log' -mtime +14 -delete
-  ```
+  不需要额外操作。它管的是容器的 stdout/stderr。
+- 网关日志：nginx 把访问日志写进挂载到宿主机的 `deploy/gateway/logs/` ——
+  **这是文件，不是容器的 stdout，上面那两个上限管不到它**，
+  必须靠主机侧的定时删除（命令在 [README 第 6.6 步](README.md#66-挂定时任务三条一条都不能少)）。
+  这是整份编排里唯一会无限增长的东西。
 
 上线后一周内留意磁盘：`df -h`、`du -sh /var/lib/docker/containers`。
 
@@ -296,6 +294,6 @@ docker compose -f /opt/stacks/futureai-api/docker-compose.yml logs -f futureai-a
 | 所有图像生成都超时，日志无报错 | 服务器需要代理出网但没设 `OUTBOUND_PROXY`（本服务不读 `HTTP_PROXY`） |
 | 任务长期停在 `submitted` | 上游一直没返回终态。超过 6 小时会被对账循环退款并打 `[需人工对账]` 日志——拿这个 taskID 去上游核对账单 |
 | 用户投诉「扣了积分没出图」 | 先看任务状态：`call_fail` + 日志里的 `[SUBMIT_UNKNOWN]` 表示提交结果不确定（已退款）。频繁出现说明上游不稳或提交超时太短 |
-| 本地/生产都起不来，报 `env file not found` | 没做 `cp .env.example .env`，`.env` 被 gitignore 了 |
+| compose 报 `required variable POSTGRES_PASSWORD is missing a value` | 没做 `cp .env.example .env`，`.env` 被 gitignore 了。插值发生在选服务之前，所以只起单个服务也一样报 |
 | 生产容器报 `container name "/futureai-api" is already in use` | 同机跑过开发栈。生产 compose 已不再写死 `container_name`，若仍报错说明服务器上是旧版编排文件 |
 | 网关起来后又因 `Address already in use` 挂掉 | 建网络时漏了 `--ip-range 172.20.128.0/17` |
