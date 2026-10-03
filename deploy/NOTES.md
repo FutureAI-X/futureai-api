@@ -54,7 +54,7 @@ upstream backend { server futureai-api:3001; }
 
 nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启动失败** ——
 不是某个域名 502，而是整个网关起不来。所以正式证书签发之前，必须先跑一次
-`scripts/self-signed.sh` 放一对证书占位。（这正是 [README 第 3.2 步](README.md#32-生成自签证书)那条注意事项。）
+`scripts/self-signed.sh` 放一对证书占位。（这正是 [README 第 4.4 步](README.md#44-生成自签证书)那条注意事项。）
 
 浏览器在自签阶段会报 `ERR_CERT_AUTHORITY_INVALID`。**这不是配错了**，而恰恰说明前面的环节都对：
 
@@ -69,7 +69,7 @@ nginx 的 `ssl_certificate` 指向的文件不存在时，**进程会直接启�
 
 ## TRUSTED_PROXIES 为什么这么配
 
-**验证方法在 [README 第 5.2 步](README.md#52-确认-trusted_proxies-生效)**，这里只讲背后的取舍。
+**验证方法在 [README 第 6.4 步](README.md#64-确认-trusted_proxies-生效)**，这里只讲背后的取舍。
 
 `X-Forwarded-For` 的可信度完全取决于「谁写的这条头」。网关用
 `$proxy_add_x_forwarded_for` 把真实客户端 IP **追加**到链尾，而 Gin 从右往左
@@ -147,7 +147,7 @@ curl -m 3 telnet://<服务器IP>:5432
       注意用 `sudo crontab -e`（日志写在 `/var/log/`，普通用户无权限，
       cron 会静默失败直到证书过期、网站打不开才发现）。
 - [ ] 备份 cron 已挂上，并**实际跑一次 `restore.sh` 验证备份可用**。
-- [ ] 网关日志的清理 cron 已挂上（[README 第 6.6 步](README.md#66-挂定时任务三条一条都不能少)的第三条）。
+- [ ] 网关日志的清理 cron 已挂上（[README 第 7.6 步](README.md#76-挂定时任务)的第三条）。
       这条最容易漏，而它是唯一会无限增长的日志 —— 写满磁盘会把同盘的数据库一起拖死。
 - [ ] 确认**只有网关一个入口**。根目录的 `docker-compose.yml` 是开发用的，
       它把应用端口发布到宿主机；别把它跑在公网机器上。
@@ -269,7 +269,7 @@ docker compose -f /opt/stacks/futureai-api/docker-compose.yml logs -f futureai-a
   不需要额外操作。它管的是容器的 stdout/stderr。
 - 网关日志：nginx 把访问日志写进挂载到宿主机的 `deploy/gateway/logs/` ——
   **这是文件，不是容器的 stdout，上面那两个上限管不到它**，
-  必须靠主机侧的定时删除（命令在 [README 第 6.6 步](README.md#66-挂定时任务三条一条都不能少)）。
+  必须靠主机侧的定时删除（命令在 [README 第 7.6 步](README.md#76-挂定时任务)）。
   这是整份编排里唯一会无限增长的东西。
 
 上线后一周内留意磁盘：`df -h`、`du -sh /var/lib/docker/containers`。

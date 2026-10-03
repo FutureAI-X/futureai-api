@@ -3,85 +3,106 @@
 部署 **futureai-api**：一个 Nginx 容器做网关，负责 TLS 终止和域名分流，
 应用跑在它后面。
 
+---
+
+## 一 开始之前
+
+### 1.1 这份文档做什么
+
 ```
 公网 ──80/443──> 网关(nginx) ──> futureai-api:3001 ──> postgres
 ```
 
 应用和数据库都**不发布宿主机端口** —— 只有网关能访问它们。
 
-**全文约定**
+本文只讲照着敲的步骤。为什么这么设计，见 [NOTES.md](NOTES.md)。
+
+### 1.2 全文约定
 
 | 写法 | 换成 |
 |---|---|
 | `<user>@<server>` | 你的登录信息，如 `root@1.2.3.4` |
-| `20260915225600` | 第 2.2 步打印出来的实际标签 |
-| 标题里的 `服务器` / `本机` | 这一节在哪台机器上执行 |
+| `20260915225600` | 第 3.2 步打印出来的实际标签 |
+| 章节标题里的 `服务器` / `本机` | 这一章在哪台机器上执行 |
 
-**相关文档**
+### 1.3 相关文档
 
-- 遇到不认识的词（镜像、反向代理、证书与 CA、A 记录、SNI、cron）→ [GLOSSARY.md](GLOSSARY.md)
-- 为什么这么设计、上线自检清单、升级/回滚/备份、排查表 → [NOTES.md](NOTES.md)
-- 本文只讲照着敲的步骤。
+| 我想… | 看 |
+|---|---|
+| 搞懂不认识的词（镜像、反向代理、证书与 CA、A 记录、SNI、cron） | [GLOSSARY.md](GLOSSARY.md) |
+| 知道为什么这么设计 | [NOTES.md](NOTES.md#为什么是这套结构) |
+| 上线前逐项自检 | [NOTES.md](NOTES.md#上线自检清单) |
+| 升级 / 回滚 / 备份 | [NOTES.md](NOTES.md#升级) |
+| 出问题了 | [NOTES.md](NOTES.md#排查表) |
 
-**路线**
+### 1.4 部署路线
 
-| 节 | 在哪台机器 | 做什么 |
+| 章 | 在哪台机器 | 做什么 |
 |---|---|---|
-| 一 | 服务器 | 一次性准备：建目录、建网络、放行端口 |
-| 二 | 本机 | 构建镜像并上传到服务器 |
-| 三 | 服务器 | 起网关 |
-| 四 | 服务器 | 起应用和数据库 |
-| 五 | 服务器 | 验证三层打通、登录改密 |
-| 六 | 服务器 | 有域名后换正式证书、挂定时任务 |
-| 七 | 服务器 | （以后）再往这台机器上加服务 |
+| 一 | — | 开始之前（你正在读） |
+| 二 | 服务器 | 一次性准备：建目录、建网络、放行端口 |
+| 三 | 本机 | 构建镜像并上传到服务器 |
+| 四 | 服务器 | 起网关 |
+| 五 | 服务器 | 起应用和数据库 |
+| 六 | 服务器 | 验证三层打通、登录改密 |
+| 七 | 服务器 | 有域名后换正式证书、挂定时任务 |
+| 八 | 服务器 | （以后）再往这台机器上加服务 |
 
-**一到五做完就是一个可用的部署**（自签证书，浏览器会警告）。
-六是把域名和正式证书接上。第七节现在用不到。
+**一到六做完就是一个可用的部署**（自签证书，浏览器会警告）。
+七是把域名和正式证书接上。第八章现在用不到。
 
 ---
 
-## 一 服务器：一次性准备
+## 二 服务器：一次性准备
 
-### 1.1 查 CPU 架构
+### 2.1 查 CPU 架构
 
 ```bash
 uname -m
 ```
 
 `x86_64` → 后面用 `linux/amd64`；`aarch64` → 后面用 `linux/arm64`。
-**记下来**，第 2.1 步要用。
+**记下来**，第 3.1 步要用。
 
-### 1.2 建配置目录和共享网络
+### 2.2 建配置目录
 
 ```bash
 mkdir -p /opt/stacks
+```
 
+网关和应用的配置都放在这个目录下。
+
+### 2.3 建共享网络
+
+```bash
 docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
 ```
 
-网关和应用的配置都放在 `/opt/stacks` 下。共享网络让网关能访问应用。
+网关靠这个网络访问应用。
 
 > ⚠️ `--ip-range` **不能省**。它保证网关的固定 IP `172.20.0.2` 不会被别的容器抢走 ——
 > 网关停机时其他容器如果占了这个地址，网关就再也起不来了。
 
-### 1.3 放行 22 / 80 / 443
+> 报 `already exists` 说明之前建过，直接跳到下一节即可。
+
+### 2.4 放行 22 / 80 / 443
 
 在云服务商的控制台（和服务器上的 `ufw` / `firewalld`，如果有）都放行这三个端口。
 80 和 443 是给网关用的。
 
 ---
 
-## 二 本机：构建镜像并上传
+## 三 本机：构建镜像并上传
 
 > 服务器上不需要源码、不需要 git、不需要装 Go 或 Node。
 
-### 2.1 构建镜像
+### 3.1 构建镜像
 
 ```bash
 bash deploy/build-image.sh linux/amd64
 ```
 
-把 `linux/amd64` 换成第 1.1 步查到的架构。
+把 `linux/amd64` 换成第 2.1 步查到的架构。
 
 > 用 `bash` 前缀而不是 `./`：脚本的执行位依赖 git 里的文件模式，
 > 在部分环境（旧 clone、从压缩包解出的副本）可能没带上，
@@ -98,7 +119,7 @@ bash deploy/build-image.sh linux/amd64
 >
 > 理由见 [../docs/DOCKER.md](../docs/DOCKER.md)。
 
-### 2.2 记下打印出来的标签
+### 3.2 记下镜像标签
 
 **预期看到**：最后一行形如
 
@@ -107,60 +128,89 @@ bash deploy/build-image.sh linux/amd64
 ```
 
 标签默认取构建时刻（年月日时分秒），所以**你实际看到的数字和这里不会一样**。
-本手册后面统一拿 `20260915225600` 当占位符。第 4.1 步和第 4.4 步还要用它，
+本文后面统一拿 `20260915225600` 当占位符。第 5.1 步和第 5.9 步还要用它，
 **先记下来** —— 换了机器就翻不回这一步了。
 
-### 2.3 上传
+### 3.3 上传网关配置
 
 ```bash
-SERVER=<user>@<server>
+scp deploy/gateway/docker-compose.yml deploy/gateway/.env.example \
+    <user>@<server>:/opt/stacks/gateway/
 ```
+
+### 3.4 上传网关的模板、片段与脚本
 
 ```bash
-# 网关配置
-scp deploy/gateway/docker-compose.yml deploy/gateway/.env.example $SERVER:/opt/stacks/gateway/
-
-# 网关的模板、片段与脚本
-scp -r deploy/gateway/templates deploy/gateway/snippets deploy/gateway/scripts $SERVER:/opt/stacks/gateway/
-
-# 应用配置
-scp deploy/futureai-api/docker-compose.yml deploy/futureai-api/.env.example $SERVER:/opt/stacks/futureai-api/
-
-# 备份脚本
-scp deploy/backup.sh deploy/restore.sh $SERVER:/opt/stacks/futureai-api/
-
-# 镜像包（换成第 2.2 步的标签）
-scp futureai-api-20260915225600-amd64.tar.gz $SERVER:/tmp/
+scp -r deploy/gateway/templates deploy/gateway/snippets deploy/gateway/scripts \
+    <user>@<server>:/opt/stacks/gateway/
 ```
 
-`scp` 会打印传输进度，没有报错就是成功。
-
-> ⚠️ 刻意逐个列出要传的文件，而不是 `scp -r deploy/gateway`：
+> ⚠️ 3.3 和 3.4 刻意逐个列出要传的文件，而不是 `scp -r deploy/gateway`：
 > 后者会把本机的 `certs/`（含私钥）、`logs/`、`.env` 一起带上服务器。
-> 后果不小：本机那张占位证书传过去之后，第 3.2 步的 `self-signed.sh`
+> 后果不小：本机那张占位证书传过去之后，第 4.4 步的 `self-signed.sh`
 > 会因为「证书已存在」直接跳过并返回 0，你会以为这步失败了、
 > 或者更糟 —— 真的用了那张域名对不上的证书。
 
+### 3.5 上传应用配置
+
+```bash
+scp deploy/futureai-api/docker-compose.yml deploy/futureai-api/.env.example \
+    <user>@<server>:/opt/stacks/futureai-api/
+```
+
+### 3.6 上传备份脚本
+
+```bash
+scp deploy/backup.sh deploy/restore.sh <user>@<server>:/opt/stacks/futureai-api/
+```
+
+### 3.7 上传镜像包
+
+```bash
+scp futureai-api-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
+```
+
+`20260915225600` 换成第 3.2 步记下的标签。`scp` 会打印传输进度，没有报错就是成功。
+
 ---
 
-## 三 服务器：起网关
+## 四 服务器：起网关
 
 > 网关是全机器唯一占用 80/443 的东西，按域名把请求分给后面的服务。
 
-### 3.1 复制配置
+### 4.1 复制网关配置
 
 ```bash
 cd /opt/stacks/gateway
 cp .env.example .env
 ```
 
-`.env.example` 里的域名和邮箱默认值就是本项目在用的
-（`futureaiapi.com` / `519843007@qq.com`），**不需要编辑**。
+### 4.2 填域名
 
-> 换域名部署时才要改 `FUTUREAI_API_DOMAIN`，改完必须重渲染网关，
-> 否则 nginx 仍用旧域名：`docker compose up -d --force-recreate`。
+```bash
+vi .env
+```
 
-### 3.2 生成自签证书
+确认 `FUTUREAI_API_DOMAIN=` 是 `futureaiapi.com`。
+
+`.env.example` 里的默认值就是它，**通常不用改**。只有换域名部署时才需要改，
+改完还必须重渲染网关，否则 nginx 仍用旧域名：
+
+```bash
+docker compose up -d --force-recreate
+```
+
+### 4.3 填邮箱
+
+同一个文件里的 `ACME_EMAIL=` 默认值也是本项目在用的，**通常不用改**。
+
+它只用于 ACME 注册（证书与账号相关的事务联系）。
+**别指望它做到期提醒** —— Let's Encrypt 已于 2025 年 6 月停发证书到期通知邮件，
+续期只能靠第 7.6 步那条 cron。
+
+`vi` 里依次按 `Esc`、`:wq`、回车保存退出。
+
+### 4.4 生成自签证书
 
 ```bash
 chmod +x scripts/*.sh && ./scripts/self-signed.sh
@@ -172,19 +222,24 @@ chmod +x scripts/*.sh && ./scripts/self-signed.sh
 **预期看到**：脚本会自检，最后打印出证书的 `subject` 和 `DNS:` 域名。
 只看到报错、或没打印这些，就是没生成成功，别往下走。
 
-### 3.3 起网关并验证配置
+### 4.5 起网关
 
 ```bash
 docker compose up -d
+```
+
+### 4.6 验证网关配置
+
+```bash
 docker compose exec gateway nginx -t
 ```
 
 **预期看到**：`nginx: configuration file /etc/nginx/nginx.conf test is successful`。
 
-**`nginx -t` 这步别跳过** —— 网关配置有两百多行，语法错误会让整个网关起不来。
+**这步别跳过** —— 网关配置有两百多行，语法错误会让整个网关起不来。
 先验证能省掉一轮瞎猜。
 
-### 3.4 用 curl 确认网关活着
+### 4.7 确认网关活着
 
 ```bash
 curl -k --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/health
@@ -199,84 +254,116 @@ curl -k --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/health
 
 ---
 
-## 四 服务器：起 futureai-api
+## 五 服务器：起 futureai-api
 
-### 4.1 加载镜像
+### 5.1 加载镜像
 
 ```bash
 gunzip -c /tmp/futureai-api-20260915225600-amd64.tar.gz | docker load
 ```
 
-`20260915225600` 换成第 2.2 步记下的那个标签。
+`20260915225600` 换成第 3.2 步记下的那个标签。
 
 **预期看到**：`Loaded image: futureai-api:20260915225600` 与
 `Loaded image: futureai-api:latest` —— 同一个镜像带这两个标签。
 
-### 4.2 进目录、复制配置、建数据卷
+### 5.2 进入应用目录
 
 ```bash
 cd /opt/stacks/futureai-api
+```
+
+### 5.3 复制配置并收紧权限
+
+```bash
 cp .env.example .env && chmod 600 .env
+```
+
+`.env` 里是密钥，权限收紧到只有属主可读写。
+
+### 5.4 给备份脚本加执行位
+
+```bash
 chmod +x backup.sh restore.sh
+```
+
+scp 没带上执行位时才有必要，加一次无副作用。
+
+### 5.5 建数据卷
+
+```bash
 docker volume create futureai-api-prod-data
 ```
 
-`chmod +x` 只在 scp 没带上执行位时才有必要，加一次无副作用。
-
-数据卷**必须先手工建**：compose 里把它声明成 `external`（防 `docker compose down -v`
+**必须先手工建**：compose 里把它声明成 `external`（防 `docker compose down -v`
 误删生产库），因此 compose 不会替你创建 —— 否则 `up` 时报
 `external volume ... not found`。
 
-### 4.3 生成三个密钥
-
-| 变量 | 作用 | 生成方式 |
-|---|---|---|
-| `JWT_SECRET` | 签发与校验登录 Token 的签名密钥 | `openssl rand -hex 32` |
-| `SECRET_KEY` | 加密数据库里的供应商 API Key 等敏感字段 | `openssl rand -hex 32` |
-| `POSTGRES_PASSWORD` | 数据库密码 | `openssl rand -hex 24` |
+### 5.6 生成 JWT_SECRET
 
 ```bash
-openssl rand -hex 32   # → 粘到 JWT_SECRET=
-openssl rand -hex 32   # → 粘到 SECRET_KEY=
-openssl rand -hex 24   # → 粘到 POSTGRES_PASSWORD=
+openssl rand -hex 32
 ```
 
-后两项留空的话服务会**拒绝启动**（刻意的 fail-closed）。
+复制输出，第 5.9 步粘到 `.env` 的 `JWT_SECRET=`。
 
-> ⚠️ **`SECRET_KEY` 一旦用于加密数据后不可更改，且必须另存一份到密码管理器。**
+它用来签发与校验登录 Token。换掉会让所有已签发的 Token 立即失效。
+
+### 5.7 生成 SECRET_KEY
+
+```bash
+openssl rand -hex 32
+```
+
+复制输出，第 5.9 步粘到 `.env` 的 `SECRET_KEY=`。
+
+> ⚠️ **一旦用于加密数据后不可更改，且必须另存一份到密码管理器。**
 > 它用来加密数据库里的供应商 API Key，改了之后已存的密钥全部解不开、无法恢复。
-> 这正是后面备份要连 `.env` 一起备的原因（见 [NOTES.md](NOTES.md#备份)）。
+> 这正是第 7.6 步的备份要连 `.env` 一起备的原因。
 
-### 4.4 填 .env 的五个值
+### 5.8 生成数据库密码
+
+```bash
+openssl rand -hex 24
+```
+
+复制输出，第 5.9 步粘到 `.env` 的 `POSTGRES_PASSWORD=`。
+
+只能用 hex 或 base64url 这类不含 `@ : / #` 的字符 —— 它会被原样拼进连接串。
+`openssl rand -hex` 生成的就是安全的。
+
+### 5.9 填 .env 的五个值
 
 ```bash
 vi .env
 ```
 
 ```
-POSTGRES_PASSWORD=        ← 粘 4.3 的输出
-JWT_SECRET=               ← 粘 4.3 的输出
-SECRET_KEY=               ← 粘 4.3 的输出
+POSTGRES_PASSWORD=        ← 粘 5.8 的输出
+JWT_SECRET=               ← 粘 5.6 的输出
+SECRET_KEY=               ← 粘 5.7 的输出
 INITIAL_ROOT_PASSWORD=    ← 自己设一个管理员初始密码，登录时用
-FUTUREAI_API_TAG=         ← 第 2.2 步的标签，形如 20260915225600
+FUTUREAI_API_TAG=         ← 第 3.2 步的标签，形如 20260915225600
 ```
 
 `vi` 里依次按 `Esc`、`:wq`、回车保存退出。
 
-> **`FUTUREAI_API_TAG` 要和第 2.2 步的标签一字不差**，否则
+> **`JWT_SECRET` 或 `SECRET_KEY` 留空、过短，服务会拒绝启动** —— 这是刻意的 fail-closed。
+>
+> **`FUTUREAI_API_TAG` 要和第 3.2 步的标签一字不差**，否则
 > `docker compose up -d` 会报 `image "futureai-api:xxx" not found`。
 >
 > ⚠️ **不要图省事填 `latest`** —— 打镜像时确实顺带打了这个标签，但它会在每次
 > `docker load` 时**静默指向新版本**：改了标签 `docker compose up -d` 未必重建容器，
 > 服务器上跑的到底是哪一版就说不清了，回滚也无从下手（见 [NOTES.md](NOTES.md#回滚)）。
 
-### 4.5 起应用和数据库
+### 5.10 起应用和数据库
 
 ```bash
 docker compose up -d
 ```
 
-### 4.6 看启动日志
+### 5.11 看启动日志
 
 ```bash
 docker compose logs -f futureai-api
@@ -290,28 +377,39 @@ database migration started
 FutureAI API started on port 3001
 ```
 
-卡在 `database migration` 或直接退出，多半是 `POSTGRES_PASSWORD` 填错了。
+卡在 `database migration` 或直接退出，多半是 `.env` 里的 `POSTGRES_PASSWORD` 填错了。
 
 ---
 
-## 五 服务器：验证三层是否打通
+## 六 服务器：验证三层是否打通
 
-### 5.1 三项检查
+### 6.1 应用健康检查
 
 ```bash
-# 1. 应用健康检查 → {"status":"ok"}
 curl -k --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/health
+```
 
-# 2. 首页有 HTML → <!doctype html> 开头
+**预期**：`{"status":"ok"}`
+
+### 6.2 首页有 HTML
+
+```bash
 curl -k -s --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/ | head -3
+```
 
-# 3. API 路径的 404 是 JSON → {"error":{"message":"Not found",...}}
+**预期**：`<!doctype html>` 开头的一段 HTML。
+
+### 6.3 API 路径的 404 是 JSON
+
+```bash
 curl -k -s --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/api/nope
 ```
 
+**预期**：`{"error":{"message":"Not found",...}}`
+
 三条都对上，说明网关转发、应用响应、静态页面托管都正常。
 
-### 5.2 确认 TRUSTED_PROXIES 生效
+### 6.4 确认 TRUSTED_PROXIES 生效
 
 **这项最容易漏，后果也最严重** —— 它决定应用能不能认出用户的真实 IP。
 
@@ -333,12 +431,12 @@ docker compose logs futureai-api | grep -i login
 **修法**：核对 `deploy/futureai-api/.env` 里的 `GATEWAY_IP` 与
 `deploy/gateway/docker-compose.yml` 里的 `ipv4_address`，两处都应该是 `172.20.0.2`。
 
-### 5.3 登录并立即改密
+### 6.5 登录并立即改密
 
 浏览器打开 `https://futureaiapi.com`，用户名 `root`，
-密码是第 4.4 步设的 `INITIAL_ROOT_PASSWORD`。
+密码是第 5.9 步设的 `INITIAL_ROOT_PASSWORD`。
 
-### 5.4 清空 .env 里的初始密码
+### 6.6 清空 .env 里的初始密码
 
 ```bash
 vi .env
@@ -348,12 +446,12 @@ vi .env
 
 ---
 
-## 六 服务器：有域名之后换正式证书
+## 七 服务器：有域名之后换正式证书
 
-> 域名还没买、解析还没配好就**跳过整节**，不影响使用 ——
-> 只是浏览器会显示证书警告，点「继续前往」即可。等你有了域名再回来做。
+> 域名还没配好解析就**跳过整章**，不影响使用 ——
+> 只是浏览器会显示证书警告，点「继续前往」即可。等配好了再回来做。
 
-### 6.1 加 A 记录
+### 7.1 加 A 记录
 
 去你买域名的服务商控制台（阿里云、Cloudflare、Namecheap 等），
 找到 DNS 解析设置，加一条记录：
@@ -362,12 +460,11 @@ vi .env
 |---|---|---|
 | A | @ | 你的服务器公网 IP |
 
-「A 记录」就是「这个域名指向哪个 IP」。主机记录填 `@` 表示**域名本身**，
-所以这条让 `futureaiapi.com` 直接指向你的服务器。
+主机记录填 `@` 表示**域名本身**，所以这条让 `futureaiapi.com` 直接指向你的服务器。
 
 > ⚠️ 这里填的域名要和 `deploy/gateway/.env` 里**完全一致**，否则证书验证会失败。
 
-### 6.2 确认解析已生效
+### 7.2 确认解析已生效
 
 ```bash
 ping -c 1 futureaiapi.com
@@ -376,11 +473,11 @@ ping -c 1 futureaiapi.com
 **预期看到**：返回的 IP 是你的服务器公网 IP。
 刚配好可能要等几分钟到几小时（DNS 缓存）。没生效就签不了证书。
 
-### 6.3 确认 80 端口能从公网访问
+### 7.3 确认 80 端口能从公网访问
 
 防火墙和云安全组都要放行 —— Let's Encrypt 需要主动连回来验证。
 
-### 6.4 签发证书
+### 7.4 签发证书
 
 ```bash
 cd /opt/stacks/gateway && ./scripts/certbot.sh issue
@@ -395,17 +492,17 @@ Let's Encrypt 必须先确认「这个域名确实指向你这台机器」，办
 
 **如果报错**：最常见的是解析还没生效、或者 80 端口没放行。
 
-### 6.5 验证（这次不用 `-k`）
+### 7.5 验证证书
 
 ```bash
 curl -I https://futureaiapi.com/health
 ```
 
-正式证书浏览器天然信任，所以去掉 `-k`。**预期看到** `HTTP/2 200`。
+正式证书浏览器天然信任，所以这里**不用** `-k`。**预期看到** `HTTP/2 200`。
 
 浏览器打开应该是锁头图标、没有警告。
 
-### 6.6 挂定时任务（三条，一条都不能少）
+### 7.6 挂定时任务
 
 ```bash
 sudo crontab -e
@@ -419,9 +516,11 @@ sudo crontab -e
 0  4 * * * find /opt/stacks/gateway/logs -name '*.log' -mtime +14 -delete
 ```
 
+**三条，一条都不能少**：
+
 | 时间 | 做什么 | 漏了会怎样 |
 |---|---|---|
-| 每天 3:17 | 检查证书续期 | 证书 90 天过期，网站打不开 |
+| 每天 3:17 | 检查证书续期 | 证书 90 天过期，网站打不开。LE 已停发到期提醒邮件，没有任何预警 |
 | 每天 3:30 | 备份数据库和 `.env` | 出事时没有可恢复的备份 |
 | 每天 4:00 | 删掉 14 天前的网关日志 | **日志无限增长写满磁盘，数据库同盘会一起挂** |
 
@@ -437,20 +536,29 @@ Docker 的日志上限**管不到它**（那只管容器的 stdout/stderr），�
 > 五个字段的含义是 `分 时 日 月 星期`，`*` 表示「都行」。第一次跑 `crontab -e`
 > 会问选哪个编辑器，选 `nano` 最简单，存盘是 `Ctrl+O` 回车、再 `Ctrl+X`。
 
-### 6.7 确认挂上了，并手动跑一次
+### 7.7 确认定时任务已挂上
 
 ```bash
-crontab -l                                          # 应该看到那三行
-cd /opt/stacks/gateway && ./scripts/certbot.sh renew # 不必等到凌晨
+crontab -l
 ```
+
+应该能看到刚才加的那三行。
+
+### 7.8 手动跑一次续期
+
+```bash
+cd /opt/stacks/gateway && ./scripts/certbot.sh renew
+```
+
+不必等到凌晨 —— 手动跑一次才能确认它真的能用，而不是等三个月后才发现不行。
 
 ---
 
-## 七 服务器：以后要再加一个服务
+## 八 服务器：以后要再加一个服务
 
 当前只部署了 futureai-api。这台机器以后还要放别的服务，做法是四处改动。
 
-### 7.1 把那个服务接进共享网络
+### 8.1 把那个服务接进共享网络
 
 在它自己的 `docker-compose.yml` 里加（保留它自己的默认网络用来连数据库）：
 
@@ -467,18 +575,18 @@ networks:
     name: gateway-proxy
 ```
 
-### 7.2 删掉它的 `ports:`
+### 8.2 删掉它的 `ports:`
 
 网关通过共享网络直连容器。发布到宿主机反而让它能被绕过网关访问。
 
-### 7.3 网关加一个 server 块
+### 8.3 网关加一个 server 块
 
 复制 [gateway/templates/default.conf.template](gateway/templates/default.conf.template)
 里 futureai-api 那个块，改四处：`server_name`、`access_log` 文件名、
 `set $xxx_up`（`服务名:端口`）、以及流式服务需要的超时设置。
 **模板文件末尾有逐条说明。**
 
-### 7.4 给流式服务加超时（不是流式就跳过）
+### 8.4 给流式服务加超时（不是流式就跳过）
 
 ```nginx
 proxy_read_timeout 600s;
@@ -489,23 +597,15 @@ proxy_buffering off;
 > 漏了的话长回答会在中途被**静默截断** —— 连接是正常断开的，日志里看不出任何异常，
 > 现象只是「回答到一半卡住」。另外证书要重新签（SAN 里得有新域名）。
 
-### 7.5 在网关 .env 加域名，并同步改 filter
+### 8.5 在网关 .env 加域名，并同步改 filter
 
 `deploy/gateway/.env` 加域名，同时改 `docker-compose.yml` 里的
 `NGINX_ENVSUBST_FILTER`。
 
 漏了后者的话，模板里新写的 `${NEW_DOMAIN}` 不会被替换，nginx 会当成字面量。
 
-### 7.6 重新渲染并验证
+### 8.6 重新渲染并验证
 
 ```bash
 cd /opt/stacks/gateway && docker compose up -d --force-recreate && docker compose exec gateway nginx -t
 ```
-
----
-
-## 接下来
-
-- 上线前逐项自检 → [NOTES.md](NOTES.md#上线自检清单)
-- 升级 / 回滚 / 备份 → [NOTES.md](NOTES.md#升级)
-- 出问题了 → [NOTES.md](NOTES.md#排查表)
