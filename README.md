@@ -1,10 +1,6 @@
 # FutureAI API
 
-下一代LLM网关和AI资产管理系统
-
-前端（React + Vite）的构建产物通过 `go:embed` 编进 Go 二进制，
-因此**一个容器里同时装着前端和后端**，对外只需要一个端口，不需要额外的 Nginx
-托管静态文件 —— 与 new-api、sub2api 的形态一致。
+下一代LLM网关
 
 ## 文档
 
@@ -77,14 +73,3 @@ futureai-api/
     ├── package.json
     └── vite.config.ts
 ```
-
-## 开发计划
-
-- [x] PostgreSQL 数据库集成
-- [x] 模型管理（从数据库读取）
-- [x] 用户认证系统（JWT + bcrypt）
-- [x] API Key 管理
-- [x] 使用量统计
-- [x] 计费系统（预扣费 + 失败退款）
-- [x] 图像生成与图片上传
-- [ ] 缓存
