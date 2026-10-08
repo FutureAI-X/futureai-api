@@ -68,7 +68,7 @@ cp .env.example .env
 `required variable POSTGRES_PASSWORD is missing a value`
 （插值发生在选择启动哪个服务之前，所以只起单个服务也一样报）。
 
-然后按 [DEV.md](DEV.md) 的 2.1 ~ 2.2 填好
+然后按 [DEV.md](DEV.md) 的 1.2 填好
 `POSTGRES_PASSWORD` / `JWT_SECRET` / `SECRET_KEY`。后两项留空的话服务会拒绝启动 ——
 这是刻意的 fail-closed。
 

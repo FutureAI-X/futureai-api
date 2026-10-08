@@ -32,7 +32,7 @@
 
 `.env` 干净 clone 上不存在，缺了它第三节的 `docker compose up -d` 会在解析配置时
 就失败：`required variable POSTGRES_PASSWORD is missing a value`。
-配置方法见 [DEV.md](DEV.md) 第二节，或 [DOCKER.md](DOCKER.md) 第一节。
+配置方法见 [DEV.md](DEV.md) 的 1.2，或 [DOCKER.md](DOCKER.md) 第一节。
 
 ---
 
