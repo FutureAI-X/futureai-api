@@ -197,6 +197,9 @@ func (user *User) ValidateAndFill() error {
 	err := DB.Where("username = ?", user.Username).First(user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 用户不存在时也要付出一次 bcrypt 的代价：直接返回会比
+			// 「用户存在但密码错」快上百毫秒，足以枚举出哪些用户名存在。
+			common.CompareDummyPassword(password)
 			return ErrInvalidCredentials
 		}
 		return err
@@ -343,38 +346,69 @@ func AdjustUserCredits(id int, mode string, value float64) error {
 	}
 
 	return DB.Transaction(func(tx *gorm.DB) error {
-		var expr clause.Expr
-		var remark string
+		// 行级锁读取当前余额：日志里必须记**实际发生的**变动，而不是请求值。
+		// subtract 在余额不足时会被夹到 0（扣不动那么多），过去日志仍记请求值，
+		// 于是「余额只剩 1、管理员扣 100」会写成 -100 而实际只少了 1，
+		// sum(credit_logs) 与余额变化从此对不上。
+		var user User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", id).First(&user).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("用户不存在")
+			}
+			return err
+		}
 
-		// 备注按最短形式输出：值已收敛到业务精度，写死位数只会和实际入账对不上
-		amount := strconv.FormatFloat(value, 'f', -1, 64)
-
+		// actual 是本次调整真正改变的数额（add 取正值，subtract 取被扣掉的部分，
+		// override 取差值的带符号数）。刻意按模式直接算，而不是事后用减法求差：
+		// 浮点减法会引入 0.30000000000000004 这类噪声，写进账本又得再收敛一遍。
+		//
+		// 注意不要顺手把 user.Credits 也收敛一遍：库里允许存在早期残留的
+		// 超精度余额（见 credit.go 的说明），重算会把它悄悄抹掉。
+		var newCredits, actual float64
 		switch mode {
 		case "add":
-			expr = gorm.Expr("credits + ?", value)
-			remark = "管理员增加积分 " + amount
+			actual = value
+			newCredits = user.Credits + value
 		case "subtract":
-			// GREATEST 保证余额不会变成负数
-			expr = gorm.Expr("GREATEST(credits - ?, 0)", value)
-			remark = "管理员扣减积分 " + amount
+			// 与原来的 GREATEST(credits - ?, 0) 等价：余额不会被扣成负数
+			actual = math.Min(value, user.Credits)
+			newCredits = user.Credits - actual
 		case "override":
-			expr = gorm.Expr("?", value)
-			remark = "管理员覆盖积分为 " + amount
+			actual = value - user.Credits
+			newCredits = value
 		default:
 			return errors.New("invalid mode: must be add, subtract, or override")
 		}
 
-		result := tx.Model(&User{}).Where("id = ?", id).Update("credits", expr)
-		if result.Error != nil {
-			return result.Error
+		if err := tx.Model(&User{}).Where("id = ?", id).
+			Update("credits", newCredits).Error; err != nil {
+			return err
 		}
-		if result.RowsAffected == 0 {
-			return errors.New("用户不存在")
+
+		// 没有实际变动（例如把余额覆盖成原值）不写日志：
+		// 记一条「增加 0 积分」只会给对账添噪声。
+		if actual == 0 {
+			return nil
+		}
+
+		// 备注按最短形式输出：写死位数只会和实际入账对不上
+		amount := strconv.FormatFloat(math.Abs(actual), 'f', -1, 64)
+		var remark string
+		switch mode {
+		case "add":
+			remark = "管理员增加积分 " + amount
+		case "subtract":
+			remark = "管理员扣减积分 " + amount
+		case "override":
+			// 覆盖记的是结果值：它才是这次操作想表达的信息，
+			// Credits 列仍记实际差额，两者各司其职
+			remark = "管理员覆盖积分为 " + strconv.FormatFloat(newCredits, 'f', -1, 64)
 		}
 
 		return tx.Create(&CreditLog{
 			UserID:  id,
-			Credits: value,
+			Credits: math.Abs(actual),
 			Type:    CreditLogTypeAdjust,
 			Remark:  remark,
 		}).Error

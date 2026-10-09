@@ -252,7 +252,7 @@ docker compose up -d
 TAG=v1.2.3 ./deploy/build-image.sh linux/amd64
 ```
 
-> 脚本同时会打一个 `latest` 标签指向同一个镜像，方便 `.env` 还是默认值的机器直接跑起来。**但回滚时不要把 `.env` 改回 `latest`**，它只代表最后一次 `docker load` 进来的那个版本，说不清是哪一个。
+> 脚本同时会打一个 `latest` 标签指向同一个镜像，`.env.example` 里的 `FUTUREAI_API_TAG` 刻意留空、不预填它。**不要把 `.env` 填成 `latest`**：它只代表最后一次 `docker load` 进来的那个版本，说不清是哪一个。
 
 ## 8 备份
 
@@ -311,7 +311,7 @@ docker compose -f /opt/stacks/futureai-api/docker-compose.yml logs -f futureai-a
 **日志必须轮转，否则迟早写满磁盘**，而数据库与应用同盘，会一起挂。
 
 - 容器日志：两份 compose 都已设 `logging.options.max-size=10m / max-file=3`，不需要额外操作。它管的是容器的 stdout / stderr。
-- 网关日志：nginx 把访问日志写进挂载到宿主机的 `deploy/gateway/logs/`。**这是文件，不是容器的 stdout，上述上限管不到它**，必须靠主机侧的定时删除，命令见 [README 第 9.1 步](README.md#91-挂定时任务)。这是整份编排里唯一会无限增长的东西。
+- 网关日志：nginx 把访问日志写进挂载到宿主机的 `deploy/gateway/logs/`。**这是文件，不是容器的 stdout，上述上限管不到它**，必须靠主机侧的定时轮转，命令见 [README 第 9.1 步](README.md#91-挂定时任务)。这是整份编排里唯一会无限增长的东西。轮转必须走 `scripts/rotate-logs.sh`：活动日志的 mtime 永远是「刚刚」，用 `find -mtime +14 -delete` 一条也删不掉，而且删掉正在写入的文件并不会立刻释放空间。
 
 上线后一周内留意磁盘：
 
@@ -342,7 +342,7 @@ du -sh /var/lib/docker/containers
 | 正常请求返回 413 | 请求体超过上限（JSON 端点 1MB）。参考图请先用 `/v1/uploads/images` 上传再传 URL，不要 base64 内联 |
 | 所有图像生成都超时，日志无报错 | 服务器需要代理出网但没设 `OUTBOUND_PROXY`（本服务不读 `HTTP_PROXY`） |
 | 任务长期停在 `submitted` | 上游一直没返回终态。超过 6 小时会被对账循环退款并打印 `[需人工对账]` 日志，拿这个 taskID 去上游核对账单 |
-| 用户投诉「扣了积分没出图」 | 先看任务状态：`call_fail` 加日志里的 `[SUBMIT_UNKNOWN]` 表示提交结果不确定（已退款）。频繁出现说明上游不稳，或提交超时太短 |
+| 用户投诉「扣了积分没出图」 | 先看任务状态：停在 `unknown` 且日志里有 `[SUBMIT_UNKNOWN]` 表示提交结果不确定（上游可能已出图并计费，**暂不退款**）——需要人工拿 taskID 去上游核对，超过 6 小时会自动转 `call_fail` 退款并打 `[需人工对账]`。频繁出现说明上游不稳，或提交超时太短 |
 | compose 报 `required variable POSTGRES_PASSWORD is missing a value` | 没执行 `cp .env.example .env`，`.env` 被 gitignore 了。插值发生在选服务之前，所以只起单个服务也一样报 |
 | 生产容器报 `container name "/futureai-api" is already in use` | 同机跑过开发栈。生产 compose 已不再写死 `container_name`，若仍报错说明服务器上是旧版编排文件 |
 | 网关起来后又因 `Address already in use` 挂掉 | 建网络时漏了 `--ip-range 172.20.128.0/17` |

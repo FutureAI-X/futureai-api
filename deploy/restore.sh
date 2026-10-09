@@ -43,14 +43,27 @@ echo
 read -r -p "确认继续？应用容器会先被停止。输入 yes 继续: " answer
 [ "$answer" = "yes" ] || { echo "已取消"; exit 0; }
 
+# 从这里开始，任何失败都必须显式告诉操作者「应用是停着的」：
+# 下面几步一旦中断，脚本随 set -e 退出，而应用容器不会自己起来 ——
+# 静默退出会让人以为「恢复没成功但网站还在」，实际是整站下线。
+on_error() {
+  echo "[$(date '+%F %T')] 错误: 恢复中断，应用容器可能仍处于停止状态。" >&2
+  echo "        处理完上面的报错后，用下面这条命令把应用拉起来：" >&2
+  echo "          docker compose -f $COMPOSE_FILE up -d" >&2
+}
+trap on_error ERR
+
 log "停止应用容器（保留数据库）"
 docker compose -f "$COMPOSE_FILE" stop futureai-api
 
 log "恢复数据库"
+# 备份是 gzip 压缩的（backup.sh 里是 pg_dump | gzip），必须先解压：
+# 把 .sql.gz 直接重定向给 psql，psql 读到的是 gzip 二进制，第一句就报错，
+# 配合 ON_ERROR_STOP 立即中断 —— 而应用已经被停掉了。
 # --clean --if-exists 让 pg_dump 的产物自带 DROP，能覆盖已有的表；
 # ON_ERROR_STOP 保证中途出错立即中断，而不是留下半恢复的状态。
-docker compose -f "$COMPOSE_FILE" exec -T postgres \
-  psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 < "$BACKUP_FILE"
+gunzip -c "$BACKUP_FILE" | docker compose -f "$COMPOSE_FILE" exec -T postgres \
+  psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1
 
 log "恢复完成，重新启动应用"
 

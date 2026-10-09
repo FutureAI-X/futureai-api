@@ -421,7 +421,6 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_rules.description IS '规则描述'`,
 		`COMMENT ON COLUMN credit_rules.status IS '规则状态：1=启用, 2=禁用'`,
 		`COMMENT ON COLUMN credit_rules.ref_image_credits IS '每张参考图消耗的积分，0=不计费'`,
-		`COMMENT ON COLUMN credit_rules.ref_image_params IS '已废弃：参考图统一按标准字段 image_urls 计数，此列不再被读取'`,
 		`COMMENT ON COLUMN credit_rules.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN credit_rules.updated_at IS '记录最后更新时间'`,
 
@@ -453,6 +452,15 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_logs.created_at IS '记录创建时间'`,
 	}
 
+	// credit_rules.ref_image_params 是历史遗留列：老库里有，而新库由 AutoMigrate
+	// 按当前模型建表，压根不会有这一列。无条件执行会每次启动都打一条
+	// `[ERROR] ... column "ref_image_params" ... does not exist`——
+	// 那看起来像是迁移失败，会把真正需要看的报错淹掉。因此先确认列存在再注释。
+	if columnExists("credit_rules", "ref_image_params") {
+		comments = append(comments,
+			`COMMENT ON COLUMN credit_rules.ref_image_params IS '已废弃：参考图统一按标准字段 image_urls 计数，此列不再被读取'`)
+	}
+
 	for _, comment := range comments {
 		if err := DB.Exec(comment).Error; err != nil {
 			// 注释失败不影响正常使用，只记录警告
@@ -461,6 +469,18 @@ func addTableComments() error {
 	}
 
 	return nil
+}
+
+// columnExists 判断当前 schema 下某张表是否存在指定列。
+// 用于对历史遗留列做可选操作：这些列只存在于老库，新库上没有。
+func columnExists(table, column string) bool {
+	var count int64
+	err := DB.Raw(
+		`SELECT COUNT(*) FROM information_schema.columns
+		 WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+		table, column,
+	).Scan(&count).Error
+	return err == nil && count > 0
 }
 
 // CloseDB 关闭数据库连接

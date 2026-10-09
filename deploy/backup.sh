@@ -48,9 +48,15 @@ DB_FILE="$BACKUP_DIR/db-$STAMP.sql.gz"
 ENV_FILE_BAK="$BACKUP_DIR/env-$STAMP.backup"
 
 log "备份数据库 $PG_DB（用户 $PG_USER）→ $DB_FILE"
-docker compose -f "$COMPOSE_FILE" exec -T postgres \
-  pg_dump -U "$PG_USER" -d "$PG_DB" --clean --if-exists \
-  | gzip > "$DB_FILE"
+# 用 if ! 捕获管道失败，而不是让 set -e 直接中断脚本：
+# 后者会在「校验产物」那几行之前就退出（这两行是脚本原本想用来兜底的），
+# 同时把重定向已经建好的空 .gz 留在目录里，被后续的轮转当成一份真备份。
+if ! docker compose -f "$COMPOSE_FILE" exec -T postgres \
+      pg_dump -U "$PG_USER" -d "$PG_DB" --clean --if-exists \
+      | gzip > "$DB_FILE"; then
+  rm -f "$DB_FILE"
+  fail "pg_dump 失败，已删除不完整的备份: $DB_FILE"
+fi
 
 # 校验产物非空：pg_dump 失败时管道仍可能产出一个空的 .gz，
 # 而「看起来成功了」的空备份比没有备份更危险。

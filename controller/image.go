@@ -235,17 +235,21 @@ func ImageGenerate(c *gin.Context) {
 
 	// 13. 结果不确定（超时、连接中断、响应读不完整）。
 	//
-	// 这里是个两难：上游可能已经建单并计费，但我们没拿到 task_id，无从查证。
-	// 选择退款，理由是用户确实没有拿到任何东西，收钱不发货比平台承担损失更糟；
-	// 且这条路径被限流约束，敞口有限。[SUBMIT_UNKNOWN] 是留给对账的检索标记——
-	// 若这类日志频繁出现，说明上游不稳定或提交超时设置不合理，需要调参。
+	// 这里**不能退款**：上游很可能已经建单并计费，把它当失败处理就是
+	// supplier 层注释点名的那个资损来源——「上游照常出图、用户全额退款」，
+	// 平台净损失。但也确实查不到结果：连 vendor task_id 都没拿到，无从轮询。
+	//
+	// 因此置为非终态的 unknown：不退款、不自动轮询（没有可查的凭据），
+	// 留一个人工核对窗口；超过兜底时限后由对账循环转 call_fail 退款并打
+	// [需人工对账] 告警（见 reconcileOnce 第 2 步）。[SUBMIT_UNKNOWN] 是留给
+	// 事后检索的标记——若频繁出现，说明上游不稳定或提交超时设置不合理。
 	if result.FailureKind == supplier.FailureUnknown {
-		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，已退还积分待人工核对: taskID=%s, userID=%d, vendor=%s, model=%s",
+		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，转入人工核对（暂不退款）: taskID=%s, userID=%d, vendor=%s, model=%s",
 			task.TaskID, userID, vendor.Name, modelName)
-		if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusCallFail, `{"error":"submit result unknown"}`); err != nil {
-			common.SysErrorf("[ImageGenerate] 退还积分失败: taskID=%s, err=%v", task.TaskID, err)
+		if err := model.UpdateTaskStatus(task.TaskID, model.StatusUnknown, `{"pending_manual_review":"submit result unknown"}`); err != nil {
+			common.SysErrorf("[ImageGenerate] 标记任务为 unknown 失败: taskID=%s, err=%v", task.TaskID, err)
 		}
-		c.JSON(http.StatusOK, gin.H{"code": "fail", "message": "上游调用结果不确定，积分已退还"})
+		c.JSON(http.StatusOK, gin.H{"code": "fail", "message": "上游调用结果不确定，任务已转入人工核对，请稍后用 taskId 查询状态"})
 		return
 	}
 
@@ -724,6 +728,38 @@ func reconcileOnce() {
 	wg.Wait()
 }
 
+// imageResultKeys 上游用来承载成图的字段名。
+//
+// 只认这些「结果字段」，而不是「map 里有没有任何非空值」：后者会被
+// revised_prompt 之类的元数据字段骗过，把「其实没有图」误判成已交付。
+var imageResultKeys = []string{"url", "b64_json", "image_url", "images", "data"}
+
+// hasDeliverableImage 判断上游的 completed 结果里是否真的有图。
+//
+// 上游会返回 status=completed 而图片列表为空（内容审核拦截、上游自身故障）。
+// 这不能当成成功：completed 是终态，且不在任何一条对账查询里，
+// 一旦置成 completed，用户拿不到图、积分也永远不会退——钱就一直扣着。
+func hasDeliverableImage(data map[string]interface{}) bool {
+	for _, key := range imageResultKeys {
+		v, ok := data[key]
+		if !ok {
+			continue
+		}
+		switch val := v.(type) {
+		case string:
+			if strings.TrimSpace(val) != "" {
+				return true
+			}
+		case nil:
+			// 键存在但为 null：视为没有内容
+		default:
+			// 数组 / 对象等：非 nil 即认为有内容
+			return true
+		}
+	}
+	return false
+}
+
 // pollOnce 查询一次上游任务状态并据此推进状态机。
 func pollOnce(task model.Task, creds *vendorCredentialCache) {
 	s, ok := creds.supplierFor(task.VendorID)
@@ -740,6 +776,17 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 
 	switch result.Status {
 	case model.StatusCompleted:
+		// 上游说完成了，但结果里没有可用图片：按「上游没有产出」处理并退款。
+		// 不这么做的话任务会停在终态 completed —— 用户没有图，钱却已经扣掉，
+		// 且没有任何后续流程会再碰它。
+		if !hasDeliverableImage(result.Data) {
+			common.SysErrorf("[Reconcile] 上游报告 completed 但未返回图片，按失败退款: taskID=%s", task.TaskID)
+			if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusFailed, `{"error":"upstream completed without image"}`); err != nil {
+				common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
+			}
+			break
+		}
+
 		dataJSON, err := json.Marshal(result.Data)
 		if err != nil {
 			common.SysErrorf("[Reconcile] 结果序列化失败: taskID=%s, err=%v", task.TaskID, err)

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# 用 certbot 为三个域名申请一张 SAN 证书，并部署给网关使用。
+# 用 certbot 为本项目的域名申请证书，并部署给网关使用。
 #
 # 用法:
 #   ./scripts/certbot.sh issue    # 首次签发
 #   ./scripts/certbot.sh renew    # 续期（挂 cron，见 deploy/README.md）
 #
 # 前置条件（缺一不可，否则 HTTP-01 校验必然失败）:
-#   1. 三个域名的 A 记录都已指向本机公网 IP，且已生效
+#   1. FUTUREAI_API_DOMAIN 的 A 记录已指向本机公网 IP，且已生效
 #   2. 80 端口可从公网访问（安全组 / 防火墙都要放行）
 #   3. 网关已经在运行（它负责响应 /.well-known/acme-challenge/）
 #
-# 为什么申请成一张 SAN 证书而不是三张:
-#   三个 server 块共用同一对证书文件，nginx 配置里不用区分；
-#   续期只需要跑一次，不用维护三份到期时间。
+# 域名取自 .env 的 FUTUREAI_API_DOMAIN，写死在一处：
+#   以后往这台机器上加服务时，各自用自己的域名单独签一张证书即可，
+#   不要合成一张 SAN 证书 —— 一个域名要改动就得把全部服务一起重签。
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -80,7 +80,10 @@ case "${1:-}" in
     # certbot 只在确实临近到期时才真正续期；未续期时返回 0 且不改动文件，
     # 下面的复制与 reload 因此是无害的空操作。
     run_certbot renew --webroot -w /var/www/certbot
-    deploy_certs
+    # 尚未签发过正式证书（还在自签阶段）不是错误：deploy_certs 会因为找不到
+    # live 目录而返回 1。直接让它冒出去，这条 cron 就会从挂上那天起每天记一次
+    # 失败，把真正该看的报错淹掉。
+    deploy_certs || echo "==> 尚未签发正式证书（自签阶段），跳过部署"
     ;;
 
   *)

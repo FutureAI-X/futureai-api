@@ -339,3 +339,34 @@ func TestReconcileConcurrencyFitsInBatch(t *testing.T) {
 			maxConcurrentQueries, reconcileBatchSize)
 	}
 }
+
+// ── completed 但没图：必须能识别出来并退款 ──
+
+// 上游返回 status=completed 而图片列表为空时（内容审核拦截、上游故障），
+// 不能当成成功：completed 是终态、不会被任何对账查询捡起，
+// 误判的代价是用户拿不到图而积分永远扣着。
+func TestHasDeliverableImage(t *testing.T) {
+	cases := []struct {
+		name string
+		data map[string]interface{}
+		want bool
+	}{
+		{"apimart 有 url", map[string]interface{}{"url": "https://x/1.png", "b64_json": ""}, true},
+		{"apimart 只有 b64", map[string]interface{}{"url": "", "b64_json": "aGk="}, true},
+		{"apimart 两个都空", map[string]interface{}{"url": "", "b64_json": ""}, false},
+		{"空白字符不算有内容", map[string]interface{}{"url": "   "}, false},
+		{"键存在但为 null", map[string]interface{}{"url": nil}, false},
+		{"完全空 map", map[string]interface{}{}, false},
+		{"nil map", nil, false},
+		{"数组形态", map[string]interface{}{"images": []interface{}{"https://x/1.png"}}, true},
+		{"只有元数据字段不算交付", map[string]interface{}{"url": "", "revised_prompt": "更详细的提示词"}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasDeliverableImage(tc.data); got != tc.want {
+				t.Errorf("hasDeliverableImage(%v) = %v, want %v", tc.data, got, tc.want)
+			}
+		})
+	}
+}

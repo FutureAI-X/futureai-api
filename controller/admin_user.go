@@ -103,6 +103,24 @@ func AdminCreateUser(c *gin.Context) {
 		req.Role = model.RoleCommonUser
 	}
 
+	// 初始积分与调整积分走同一条边界：负数会让新用户一创建就欠费，
+	// 超精度的小数会破坏「库里只有 CreditPrecision 位小数」这个前提——
+	// 这里曾经是唯一一个不做校验的积分入口。
+	if req.Credits < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "初始积分不能为负数",
+		})
+		return
+	}
+	if !model.ValidCreditPrecision(req.Credits) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "积分最多支持 " + strconv.Itoa(model.CreditPrecision) + " 位小数",
+		})
+		return
+	}
+
 	user := model.User{
 		Username:    req.Username,
 		Password:    req.Password,
@@ -166,24 +184,40 @@ func AdminUpdateUser(c *gin.Context) {
 	if req.DisplayName != "" {
 		updates["display_name"] = req.DisplayName
 	}
+
+	var hashedPassword string
 	if req.Password != "" {
 		hashed, err := common.Password2Hash(req.Password)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "密码加密失败"})
 			return
 		}
-		updates["password"] = hashed
+		hashedPassword = hashed
 	}
 
-	if len(updates) == 0 {
+	if len(updates) == 0 && hashedPassword == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "没有需要更新的字段"})
 		return
 	}
 
-	if err := model.UpdateUser(id, updates); err != nil {
-		common.SysErrorf("[AdminUpdateUser] 更新用户失败: id=%d, err=%v", id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "更新用户失败"})
-		return
+	// 改密必须走 UpdatePasswordAndInvalidateTokens，而不是普通的 UpdateUser：
+	// 两者只差一个 token_version 自增，但少了它，管理员用这个端点重置密码后
+	// 被重置者手里的旧令牌仍然有效到自然过期——而同一个系统的专用改密端点
+	// (/users/:id/password) 是作废令牌的，行为不一致会让「踢人下线」落空。
+	if hashedPassword != "" {
+		if err := model.UpdatePasswordAndInvalidateTokens(id, hashedPassword); err != nil {
+			common.SysErrorf("[AdminUpdateUser] 更新密码失败: id=%d, err=%v", id, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "更新用户失败"})
+			return
+		}
+	}
+
+	if len(updates) > 0 {
+		if err := model.UpdateUser(id, updates); err != nil {
+			common.SysErrorf("[AdminUpdateUser] 更新用户失败: id=%d, err=%v", id, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "更新用户失败"})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "用户更新成功"})

@@ -67,6 +67,33 @@ func ValidatePasswordAndHash(password string, hash string) bool {
 	return err == nil
 }
 
+// dummyPasswordHash 与真实密码哈希同代价的诱饵哈希，供 CompareDummyPassword 使用。
+// 延迟生成：bcrypt 一次约 60~100ms，放在包初始化里会平白拖慢启动。
+var (
+	dummyHashOnce sync.Once
+	dummyHash     []byte
+)
+
+// CompareDummyPassword 执行一次与真实校验等价耗时的 bcrypt 比较，丢弃结果。
+//
+// 用途：登录时若用户名不存在就立刻返回，响应会比「用户存在但密码错」快上
+// 60~100ms，攻击者据此就能枚举出哪些用户名存在——统一的错误文案挡得住报文，
+// 挡不住计时侧信道。因此在「用户不存在」这条路径上也跑一次比较把耗时补齐。
+func CompareDummyPassword(password string) {
+	dummyHashOnce.Do(func() {
+		h, err := bcrypt.GenerateFromPassword([]byte("timing-equalizer"), bcrypt.DefaultCost)
+		if err != nil {
+			return
+		}
+		dummyHash = h
+	})
+	// 生成失败时静默跳过：这是防御性措施，不该让登录直接不可用。
+	if len(dummyHash) == 0 {
+		return
+	}
+	_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+}
+
 // GenerateRandomPassword 生成指定长度的随机密码
 func GenerateRandomPassword(length int) string {
 	const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$"

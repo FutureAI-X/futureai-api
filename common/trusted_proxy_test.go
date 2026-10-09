@@ -137,6 +137,28 @@ func TestInvalidTrustedProxiesIsRejected(t *testing.T) {
 	}
 }
 
+// TestValidateTrustedProxiesRejectsCatchAll 是一条关键安全边界：
+// 0.0.0.0/0 语法合法但等于「信任一切」，必须 fail-closed 而不是放行。
+func TestValidateTrustedProxiesRejectsCatchAll(t *testing.T) {
+	for _, bad := range []string{"0.0.0.0/0", "::/0", "0.0.0.0/00"} {
+		if err := ValidateTrustedProxies(ParseTrustedProxies(bad)); err == nil {
+			t.Errorf("%q 等于信任一切（客户端可伪造 XFF），应被拒绝", bad)
+		}
+	}
+}
+
+// TestValidateTrustedProxiesAcceptsRealProxies 正常配置与空值不得被误伤，
+// 否则要么拦不住危险值、要么让正确部署起不来。
+func TestValidateTrustedProxiesAcceptsRealProxies(t *testing.T) {
+	for _, ok := range []string{
+		"", "127.0.0.1/32", "172.20.0.2/32", "10.0.0.0/8", "172.20.0.2/32,10.0.0.0/8",
+	} {
+		if err := ValidateTrustedProxies(ParseTrustedProxies(ok)); err != nil {
+			t.Errorf("%q 应被接受，却报错: %v", ok, err)
+		}
+	}
+}
+
 // TestIsAPIPath 覆盖 API 与前端路由的分界，webui 的 404 行为依赖它。
 func TestIsAPIPath(t *testing.T) {
 	cases := map[string]bool{

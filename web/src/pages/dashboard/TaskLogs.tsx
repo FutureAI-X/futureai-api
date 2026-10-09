@@ -15,8 +15,12 @@ import { CopyButton } from '../../components/CopyButton'
 import { formatCredits } from '../../lib/credits'
 
 const STATUS_CONFIG: Record<string, { label: string; className: string; icon: typeof Clock }> = {
+  pending: { label: '待提交', className: 'bg-gray-500/10 text-gray-600 dark:text-gray-400', icon: Clock },
   submitted: { label: '已提交', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', icon: Clock },
   processing: { label: '处理中', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', icon: Loader2 },
+  // 结果未确认：上游是否出图还不知道，任务留在非终态等对账或人工核对。
+  // 不要并进「已提交」——那会让人以为一切正常，而这类任务需要有人去看。
+  unknown: { label: '结果未确认', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', icon: AlertCircle },
   completed: { label: '已完成', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400', icon: CheckCircle2 },
   failed: { label: '失败', className: 'bg-red-500/10 text-red-600 dark:text-red-400', icon: XCircle },
   cancelled: { label: '已取消', className: 'bg-gray-500/10 text-gray-600 dark:text-gray-400', icon: AlertCircle },
@@ -25,8 +29,10 @@ const STATUS_CONFIG: Record<string, { label: string; className: string; icon: ty
 
 const STATUS_OPTIONS = [
   { value: '', label: '全部状态' },
+  { value: 'pending', label: '待提交' },
   { value: 'submitted', label: '已提交' },
   { value: 'processing', label: '处理中' },
+  { value: 'unknown', label: '结果未确认' },
   { value: 'completed', label: '已完成' },
   { value: 'failed', label: '失败' },
   { value: 'cancelled', label: '已取消' },

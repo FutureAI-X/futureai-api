@@ -197,7 +197,7 @@ docker compose up -d --force-recreate
 
 ### 4.3 填邮箱
 
-同一个文件里的 `ACME_EMAIL=` 默认值也是本项目在用的，**通常不用改**。
+把同一个文件里的 `ACME_EMAIL=` 换成你自己的邮箱，模板里是占位值。
 
 它只用于 ACME 注册（证书与账号相关的事务联系）。**不要指望它做到期提醒**：Let's Encrypt 已于 2025 年 6 月停发证书到期通知邮件，续期只能靠第 9.1 步那条 cron。
 
@@ -501,7 +501,7 @@ sudo crontab -e
 ```
 17 3 * * * cd /opt/stacks/gateway && ./scripts/certbot.sh renew >> /var/log/certbot-renew.log 2>&1
 30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
-0  4 * * * find /opt/stacks/gateway/logs -name '*.log' -mtime +14 -delete
+0  4 * * * cd /opt/stacks/gateway && ./scripts/rotate-logs.sh >> /var/log/rotate-logs.log 2>&1
 ```
 
 **三条，一条都不能少。**
@@ -510,9 +510,11 @@ sudo crontab -e
 |---|---|---|
 | 每天 3:17 | 检查证书续期 | 证书 90 天过期，网站打不开。LE 已停发到期提醒邮件，没有任何预警 |
 | 每天 3:30 | 备份数据库和 `.env` | 出事时没有可恢复的备份 |
-| 每天 4:00 | 删掉 14 天前的网关日志 | **日志无限增长写满磁盘，数据库同盘会一起挂** |
+| 每天 4:00 | 归档并清理网关日志 | **日志无限增长写满磁盘，数据库同盘会一起挂** |
 
 第三条最容易漏。网关日志写在宿主机的 `/opt/stacks/gateway/logs/` 下，Docker 的日志上限**管不到它**（那只管容器的 stdout / stderr），只能靠主机侧清理。
+
+> **注意**：这里必须用 `rotate-logs.sh`，不要改成 `find ... -mtime +14 -delete`。nginx 持有活动日志的打开句柄、而这些文件的 mtime 永远是「刚刚」，`-mtime +14` 一条也匹配不到——那条命令看着像在清理，实际什么都没删，日志照样涨到写满磁盘。脚本的做法是「改名归档 → 让 nginx 重开日志 → 删除过期归档」，三者的顺序都不能少。
 
 `certbot.sh renew` 只在证书快到期时才真正续期，其余时候什么也不做。末尾那串 `>> /var/log/... 2>&1` 是把输出写进日志文件，方便以后回查。
 

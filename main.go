@@ -98,6 +98,11 @@ func main() {
 	// X-Forwarded-For，登录限流可被伪造 IP 绕过。因此默认不信任任何代理头，
 	// 仅在显式配置 TRUSTED_PROXIES 时才信任指定 CIDR。
 	trustedProxies := common.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
+	// 0.0.0.0/0 之类的值语法合法却等于「信任一切」，会让限流可被伪造 IP 绕过，
+	// 因此与密钥校验一样 fail-closed，拒绝启动而不是静默接受。
+	if err := common.ValidateTrustedProxies(trustedProxies); err != nil {
+		common.FatalLog("[安全] " + err.Error())
+	}
 	if err := server.SetTrustedProxies(trustedProxies); err != nil {
 		common.FatalLog("TRUSTED_PROXIES 配置无效: " + err.Error())
 	}
