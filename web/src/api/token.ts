@@ -29,6 +29,8 @@ export interface ApiKey {
    */
   key_prefix: string
   key_suffix: string
+  /** 完整 key 的长度，用于把中间的遮蔽渲染成等长 */
+  key_length: number
   status: number
   created_at: string
 }

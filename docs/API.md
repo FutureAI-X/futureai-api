@@ -63,7 +63,7 @@
 
 `data_key` 是当次会话的 AES-GCM 密钥（base64 的 32 字节），用于解密接口返回的加密字段（如供应商 API Key、一次性展示的完整 API Key）。需要时通过 `X-Data-Key` 请求头携带，不要放进查询串。
 
-> **注意**：API Key 本身**不以明文入库**——`api_keys` 表里只有它的 SHA-256 与用于展示的前后缀。因此 `GET /api/user/tokens` 只返回 `key_prefix` / `key_suffix`（形如 `sk-a1b2c3…xy9z`），不返回完整 key，也不需要 `X-Data-Key`。完整 key 只在创建时的那次响应里出现一次，之后无法再取回（连平台自己也还原不出来）。
+> **注意**：API Key 本身**不以明文入库**——`api_keys` 表里只有它的 SHA-256 与用于展示的前后缀。因此 `GET /api/user/tokens` 只返回 `key_prefix` / `key_suffix` / `key_length`，不返回完整 key，也不需要 `X-Data-Key`。展示时按 `key_length` 把中间垫成等长，形如 `sk-a1b2c3***********************xy9z`（总长与真实 key 一致）。完整 key 只在创建时的那次响应里出现一次，之后无法再取回（连平台自己也还原不出来）。
 
 **令牌有效期**：`token` 为 JWT，24 小时过期。修改密码（无论用户自助还是管理员重置）会立即作废该用户已签发的所有令牌，客户端需重新登录。
 

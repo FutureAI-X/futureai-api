@@ -148,10 +148,14 @@ export function ApiKeys() {
     return () => document.removeEventListener('keydown', handleEsc)
   }, [createOpen, editOpen, deleteOpen, resultOpen])
 
-  // 列表展示：服务端只给前后各几位，中间无法还原
+  // 列表展示：前缀 + 等长星号 + 后缀，占位长度与真实 key 一致。
+  // 服务端只给前后各几位（中间是哈希，不可还原），key_length 用来决定星号个数。
   const formatKey = (k: ApiKey) => {
-    if (!k.key_prefix && !k.key_suffix) return '—'
-    return k.key_suffix ? `${k.key_prefix}…${k.key_suffix}` : k.key_prefix
+    if (!k.key_prefix) return '—'
+    // 短于前后缀之和的历史 key 整体作为前缀返回，此时不补星号
+    if (!k.key_suffix) return k.key_prefix
+    const masked = k.key_length - k.key_prefix.length - k.key_suffix.length
+    return k.key_prefix + '*'.repeat(Math.max(masked, 0)) + k.key_suffix
   }
 
   return (

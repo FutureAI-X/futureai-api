@@ -30,6 +30,8 @@ func GetTokens(c *gin.Context) {
 		// 连平台自己也拿不到，所以这里没有「传 data_key 就返回完整值」的分支。
 		KeyPrefix string `json:"key_prefix"`
 		KeySuffix string `json:"key_suffix"`
+		// KeyLength 让前端能把中间的遮蔽渲染成与真实 key 等长
+		KeyLength int    `json:"key_length"`
 		Status    int    `json:"status"`
 		CreatedAt string `json:"created_at"`
 	}
@@ -41,6 +43,7 @@ func GetTokens(c *gin.Context) {
 			Name:      t.Name,
 			KeyPrefix: t.KeyPrefix,
 			KeySuffix: t.KeySuffix,
+			KeyLength: t.KeyLength,
 			Status:    t.Status,
 			CreatedAt: t.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
@@ -82,6 +85,7 @@ func CreateToken(c *gin.Context) {
 		KeyHash:     hash,
 		KeyPrefix:   prefix,
 		KeySuffix:   suffix,
+		KeyLength:   len(key),
 		Status:      1,
 		ExpiredTime: -1,
 	}

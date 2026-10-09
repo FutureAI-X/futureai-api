@@ -115,6 +115,11 @@ type Token struct {
 	KeyPrefix string `json:"key_prefix" gorm:"size:16"`
 	KeySuffix string `json:"key_suffix" gorm:"size:8"`
 
+	// KeyLength 是完整 key 的长度，只用于把列表里的遮蔽段渲染成等长（星号个数
+	// = 总长 - 前缀 - 后缀），让展示值看起来就是那把 key 的形状。
+	// 它不参与任何认证判断，也无法由哈希反推。
+	KeyLength int `json:"key_length" gorm:"default:0"`
+
 	// 状态：1=启用, 2=禁用, 3=已删除
 	Status int `json:"status" gorm:"default:1"`
 
@@ -163,6 +168,10 @@ const (
 	apiKeyPrefixLen = 8
 	apiKeySuffixLen = 4
 )
+
+// apiKeyStandardLen 是 GenerateTokenKey 产出的 key 的固定长度（"sk-" + 32 位）。
+// 改生成逻辑就要一起改这里；它只用于给历史行补展示长度。
+const apiKeyStandardLen = 3 + 32
 
 // HashAPIKey 计算 API Key 的存储哈希（十六进制 SHA-256）。
 func HashAPIKey(key string) string {

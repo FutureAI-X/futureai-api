@@ -272,9 +272,10 @@ func migrateDB() error {
 // 停在半迁移状态只会产生更难查的故障。回填是幂等的（同一明文哈希相同），
 // 处理完问题重启即可重跑。
 func migrateAPIKeyPlaintext() error {
-	// 全新库没有这一列（模型里已无此字段），已迁移过的库也没有 —— 两种情况都无事可做。
+	// 全新库没有这一列（模型里已无此字段），已迁移过的库也没有。
+	// 但已迁移过的库仍可能需要补展示长度（见 backfillAPIKeyLength）。
 	if !columnExists("api_keys", "key") {
-		return nil
+		return backfillAPIKeyLength()
 	}
 
 	common.SysLog("[迁移] 检测到 api_keys.key 明文列，开始哈希化")
@@ -295,8 +296,8 @@ func migrateAPIKeyPlaintext() error {
 		}
 		prefix, suffix := APIKeyDisplayParts(key)
 		if err := DB.Exec(
-			"UPDATE api_keys SET key_hash = ?, key_prefix = ?, key_suffix = ? WHERE id = ?",
-			HashAPIKey(key), prefix, suffix, row.ID,
+			"UPDATE api_keys SET key_hash = ?, key_prefix = ?, key_suffix = ?, key_length = ? WHERE id = ?",
+			HashAPIKey(key), prefix, suffix, len(key), row.ID,
 		).Error; err != nil {
 			return fmt.Errorf("哈希化 api_keys.id=%d 失败: %w", row.ID, err)
 		}
@@ -304,8 +305,9 @@ func migrateAPIKeyPlaintext() error {
 
 	// 删列之前必须确认没有漏网的行：删了就再也拿不回明文。
 	var remaining int64
-	if err := DB.Raw("SELECT COUNT(*) FROM api_keys WHERE key_hash IS NULL OR key_hash = ''").
-		Scan(&remaining).Error; err != nil {
+	if err := DB.Raw(
+		"SELECT COUNT(*) FROM api_keys WHERE key_hash IS NULL OR key_hash = '' OR key_length IS NULL OR key_length = 0",
+	).Scan(&remaining).Error; err != nil {
 		return fmt.Errorf("校验哈希化结果失败: %w", err)
 	}
 	if remaining > 0 {
@@ -318,6 +320,28 @@ func migrateAPIKeyPlaintext() error {
 	}
 
 	common.SysLogf("[迁移] api_keys 明文列已删除，共迁移 %d 行", len(rows))
+	return nil
+}
+
+// backfillAPIKeyLength 给缺少长度的行补上标准长度。
+//
+// 为什么需要：key_length 是后加的列，只用于列表展示时决定中间垫几个星号。
+// 已经跑过明文迁移的库（明文列已删）无法再从明文量出真实长度，而这些行全部由
+// GenerateTokenKey 生成、长度固定，因此按标准长度补。补的值不参与任何认证判断。
+//
+// 只补「有哈希但没长度」的行，空行与已有关联的行一律不碰，因此可反复执行。
+func backfillAPIKeyLength() error {
+	result := DB.Exec(
+		"UPDATE api_keys SET key_length = ? WHERE (key_length IS NULL OR key_length = 0)"+
+			" AND key_hash IS NOT NULL AND key_hash <> ''",
+		apiKeyStandardLen,
+	)
+	if result.Error != nil {
+		return fmt.Errorf("补充 api_keys.key_length 失败: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		common.SysLogf("[迁移] 补充 api_keys.key_length，共 %d 行", result.RowsAffected)
+	}
 	return nil
 }
 
