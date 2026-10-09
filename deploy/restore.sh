@@ -5,7 +5,7 @@
 # 用法（在服务器上）:
 #   ./restore.sh /opt/backups/futureai-api/db-2026-09-20_030000.sql.gz
 #
-# ⚠️ 这是破坏性操作：会用备份覆盖当前数据库。
+# 注意：这是破坏性操作：会用备份覆盖当前数据库。
 #    脚本会二次确认，并要求先停掉应用容器（否则恢复过程中应用仍在读写，
 #    可能留下不一致的数据）。
 #
@@ -54,7 +54,7 @@ docker compose -f "$COMPOSE_FILE" exec -T postgres \
 
 log "恢复完成，重新启动应用"
 
-# ⚠️ 恢复旧数据后，库里的 schema 可能是旧版本。
+# 注意：恢复旧数据后，库里的 schema 可能是旧版本。
 # 应用启动时会跑 AutoMigrate 把缺的列/索引补上，这一步会在启动阶段完成，
 # 期间服务不可用 —— 属预期行为。
 docker compose -f "$COMPOSE_FILE" up -d

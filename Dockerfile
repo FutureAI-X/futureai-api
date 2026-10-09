@@ -53,7 +53,7 @@ ARG GIT_SHA=unknown
 
 # Go 模块代理。
 #
-# ⚠️ 必须显式设置：构建容器**不继承宿主机的 go env**，默认会去访问
+# 注意：必须显式设置：构建容器**不继承宿主机的 go env**，默认会去访问
 #    proxy.golang.org —— 在国内网络下通常直接不可达，表现为
 #    `dial tcp ...: connect: connection refused`，整个构建失败。
 #    这个坑很隐蔽：如果本地 Docker 缓存还热着，构建会一路走缓存成功，
@@ -73,7 +73,7 @@ RUN go mod download
 
 COPY . .
 
-# ⚠️ 顺序关键：必须在 COPY . . 之后执行。
+# 注意：顺序关键：必须在 COPY . . 之后执行。
 # 因为 .dockerignore 排除了宿主机上的 web/dist（它可能已经过期），
 # Go 的 //go:embed all:web/dist 需要在这里拿到真正刚构建出来的产物，
 # 否则编译直接失败。

@@ -5,7 +5,7 @@
 # 前置（一次性，见 deploy/README.md）:
 #   docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
 #
-#   ⚠️ --ip-range 不能省：网关在 compose 里绑了固定地址 172.20.0.2，
+#   注意：--ip-range 不能省：网关在 compose 里绑了固定地址 172.20.0.2，
 #      没有 ip-range 时这个地址仍可能被后续启动的容器动态占用，
 #      网关会因地址被占而再也起不来。
 #
@@ -13,7 +13,7 @@
 #   cp .env.example .env && chmod 600 .env    # 填写密钥
 #   docker compose up -d
 #
-# ⚠️ 升级前务必先备份数据库（见 NOTES.md 的备份一节）：
+# 注意：升级前务必先备份数据库（见 NOTES.md 的备份一节）：
 #    应用启动时会跑 AutoMigrate，部分变更不可逆，回滚旧镜像不一定能回到旧 schema。
 #
 # 关键点：应用与数据库都不发布任何宿主机端口。
@@ -21,7 +21,7 @@
 # 数据库只挂在本项目的内部网络上，连网关都够不到。
 # 这顺带消除了「PostgreSQL 暴露到公网导致密码哈希与供应商密钥密文被直读」的风险。
 
-# ⚠️ 项目名必须和开发用的那一份（仓库根目录的 docker-compose.yml）区分开。
+# 注意：项目名必须和开发用的那一份（仓库根目录的 docker-compose.yml）区分开。
 #
 # 项目名默认取目录名，而两边的目录名都是 futureai-api —— 于是容器名和数据卷名
 # 会完全撞上。如果在同一台机器上同时跑过这两份（比如买服务器之前先在本机
@@ -62,7 +62,7 @@ services:
 
       # 网关容器在共享网络上的固定地址（见 deploy/gateway/docker-compose.yml）。
       #
-      # ⚠️ 变量名刻意取成 GATEWAY_IP 而不是复用 TRUSTED_PROXIES：
+      # 注意：变量名刻意取成 GATEWAY_IP 而不是复用 TRUSTED_PROXIES：
       #    compose 会用项目目录下的 .env 做插值，而那一份里的 TRUSTED_PROXIES
       #    是宿主机直跑时的形态（127.0.0.1/32），照抄进来会让应用把网关 IP
       #    当成唯一来源，登录限流会把全体用户视为同一人。
@@ -144,7 +144,7 @@ services:
 
 volumes:
   pg_data:
-    # ⚠️ external 是为了防误删：默认的命名卷会被 `docker compose down -v`
+    # 注意：external 是为了防误删：默认的命名卷会被 `docker compose down -v`
     #    连数据一起删掉，而这条命令很容易在「清理环境」时被顺手敲出来。
     #    声明为 external 后 compose 不会自动创建或删除它，
     #    删库只能靠显式 `docker volume rm`。

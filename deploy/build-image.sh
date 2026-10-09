@@ -58,7 +58,7 @@ GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 # 把本机的 GOPROXY 带进构建容器。
 #
-# ⚠️ 构建容器不继承宿主机的 go env。不带过去的话容器会去访问
+# 注意：构建容器不继承宿主机的 go env。不带过去的话容器会去访问
 #    proxy.golang.org，在国内网络下通常不可达，构建直接失败
 #    （`connect: connection refused`）。而这个坑只在缓存失效时才暴露：
 #    本地缓存热着的时候构建能成功，换台机器或改了 Dockerfile 就突然不行。

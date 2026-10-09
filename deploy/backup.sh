@@ -11,7 +11,7 @@
 #   sudo crontab -e
 #   30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
 #
-# ⚠️ 没验证过的备份等于没有备份。改完 schema 或升级之后，
+# 注意：没验证过的备份等于没有备份。改完 schema 或升级之后，
 #    请按 NOTES.md 的步骤实际恢复一次（见 restore.sh）。
 
 set -euo pipefail
