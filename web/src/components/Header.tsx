@@ -9,7 +9,15 @@ interface HeaderProps {
 
 export function Header({ leftExtra }: HeaderProps) {
   const location = useLocation()
+  const [scrolled, setScrolled] = useState(false)
   const [user, setUser] = useState<{ username: string; display_name?: string; role?: string } | null>(null)
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 20)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -29,13 +37,27 @@ export function Header({ leftExtra }: HeaderProps) {
 
   return (
     <header className='pointer-events-none fixed inset-x-0 top-0 z-50'>
-      <div className='pointer-events-auto mx-auto max-w-7xl px-4 pt-0 md:px-6'>
-        <nav className='flex h-16 items-center justify-between px-2'>
+      <div
+        className={cn(
+          'pointer-events-auto mx-auto transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          scrolled ? 'max-w-[52rem] px-3 pt-3' : 'max-w-7xl px-4 pt-0 md:px-6'
+        )}
+      >
+        <nav
+          className={cn(
+            'flex items-center justify-between transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
+            scrolled
+              ? 'bg-background/60 ring-border/50 h-12 rounded-2xl pr-1.5 pl-4 shadow-[0_2px_16px_-6px_rgba(0,0,0,0.08),0_0_0_0.5px_rgba(0,0,0,0.02)] ring-[0.5px] backdrop-blur-2xl dark:shadow-[0_2px_16px_-6px_rgba(0,0,0,0.4)]'
+              : 'h-16 px-2'
+          )}
+        >
           {/* 左侧 */}
           <div className='flex items-center gap-1.5'>
-            <div className='flex size-8 items-center justify-center'>
-              {leftExtra}
-            </div>
+            {leftExtra ? (
+              <div className='flex size-8 items-center justify-center'>
+                {leftExtra}
+              </div>
+            ) : null}
             <a href='/' className='group flex shrink-0 items-center gap-2.5'>
               <div className='flex size-7 shrink-0 items-center justify-center transition-all duration-300 group-hover:scale-105'>
                 <span className='text-lg'>⚡</span>
