@@ -3,7 +3,6 @@ package controller
 import (
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/model"
@@ -25,33 +24,23 @@ func GetTokens(c *gin.Context) {
 	}
 
 	type tokenResponse struct {
-		ID        int    `json:"id"`
-		Name      string `json:"name"`
-		Key       string `json:"key"`
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+		// 只返回前后各几位。库里存的是哈希，完整明文已经不可恢复——
+		// 连平台自己也拿不到，所以这里没有「传 data_key 就返回完整值」的分支。
+		KeyPrefix string `json:"key_prefix"`
+		KeySuffix string `json:"key_suffix"`
 		Status    int    `json:"status"`
 		CreatedAt string `json:"created_at"`
 	}
 
-	// dataKey 从请求头读取而非查询参数：
-	// 查询串会进入访问日志、反向代理日志、浏览器历史与 Referer 头，
-	// 而 data_key 正是用于解密返回的 API Key 的密钥，等同于凭证本身。
-	dataKey := strings.TrimSpace(c.GetHeader("X-Data-Key"))
 	items := make([]tokenResponse, len(tokens))
 	for i, t := range tokens {
-		key := ""
-		if dataKey != "" {
-			// 提供 data_key 时返回加密后的密钥
-			if encrypted, err := common.EncryptWithKey(t.Key, dataKey); err == nil {
-				key = encrypted
-			}
-		} else {
-			// 未提供 data_key 时仅返回脱敏值，不返回明文
-			key = common.MaskSecret(t.Key)
-		}
 		items[i] = tokenResponse{
 			ID:        t.ID,
 			Name:      t.Name,
-			Key:       key,
+			KeyPrefix: t.KeyPrefix,
+			KeySuffix: t.KeySuffix,
 			Status:    t.Status,
 			CreatedAt: t.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
@@ -80,16 +69,19 @@ func CreateToken(c *gin.Context) {
 		return
 	}
 
-	key, err := model.GenerateUniqueTokenKey()
+	key, hash, prefix, suffix, err := model.GenerateTokenKey()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "生成 Key 失败"})
 		return
 	}
 
+	// 入库的只有哈希与前后缀：明文 key 不落库，只在这条响应里出现一次
 	token := model.Token{
 		UserID:      userID.(int),
 		Name:        req.Name,
-		Key:         key,
+		KeyHash:     hash,
+		KeyPrefix:   prefix,
+		KeySuffix:   suffix,
 		Status:      1,
 		ExpiredTime: -1,
 	}
@@ -100,7 +92,8 @@ func CreateToken(c *gin.Context) {
 		return
 	}
 
-	// 用 data_key 加密返回 Key
+	// 创建时是唯一一次能看到完整 key 的机会，用 data_key 加密后返回。
+	// 之后列表接口只会给前后缀（库里也再没有明文可解）。
 	encryptedKey, err := common.EncryptWithKey(key, req.DataKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Key 加密失败"})

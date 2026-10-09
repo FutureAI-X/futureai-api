@@ -48,22 +48,9 @@ export function ApiKeys() {
   const loadKeys = useCallback(async () => {
     setLoading(true)
     try {
-      const dataKey = localStorage.getItem('data_key') || ''
-      const res = await getTokens(dataKey)
-      if (res.success) {
-        // 解密每个 key
-        const decrypted = await Promise.all(
-          (res.data || []).map(async (k) => {
-            try {
-              const plain = await decryptWithKey(k.key, dataKey)
-              return { ...k, key: plain }
-            } catch {
-              return k
-            }
-          })
-        )
-        setKeys(decrypted)
-      }
+      // 列表只返回前后几位：完整 key 存的是哈希，服务端自己也还原不出来
+      const res = await getTokens()
+      if (res.success) setKeys(res.data || [])
     } catch { /* ignore */ }
     finally { setLoading(false) }
   }, [])
@@ -161,9 +148,10 @@ export function ApiKeys() {
     return () => document.removeEventListener('keydown', handleEsc)
   }, [createOpen, editOpen, deleteOpen, resultOpen])
 
-  const maskKey = (key: string) => {
-    if (key.length <= 6) return '•'.repeat(key.length)
-    return key.slice(0, 3) + '•'.repeat(key.length - 6) + key.slice(-3)
+  // 列表展示：服务端只给前后各几位，中间无法还原
+  const formatKey = (k: ApiKey) => {
+    if (!k.key_prefix && !k.key_suffix) return '—'
+    return k.key_suffix ? `${k.key_prefix}…${k.key_suffix}` : k.key_prefix
   }
 
   return (
@@ -217,7 +205,7 @@ export function ApiKeys() {
                     </div>
                   </td>
                   <td className='px-4 py-3'>
-                    <code className='font-mono text-xs break-all'>{maskKey(k.key)}</code>
+                    <code className='font-mono text-xs break-all'>{formatKey(k)}</code>
                   </td>
                   <td className='px-4 py-3'>
                     <span className='text-muted-foreground text-sm'>{k.created_at}</span>

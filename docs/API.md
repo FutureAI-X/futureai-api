@@ -11,7 +11,7 @@
 | `/api/admin` | 管理员 | `Authorization: Bearer <JWT>`（role = 100） |
 | `/v1` | API Key | `Authorization: Bearer sk-...` |
 
-所有凭证仅通过请求头传递，查询参数形式（`?token=` / `?data_key=`）已不再支持：查询串会进入访问日志、反向代理日志、浏览器历史与 `Referer` 头。获取 API Key 列表时请使用 `X-Data-Key` 请求头。
+所有凭证仅通过请求头传递，查询参数形式（`?token=` / `?data_key=`）已不再支持：查询串会进入访问日志、反向代理日志、浏览器历史与 `Referer` 头。`data_key` 需要按需读取密钥类字段时，通过 `X-Data-Key` 请求头携带。
 
 ## 2 公开接口
 
@@ -61,7 +61,9 @@
 }
 ```
 
-`data_key` 是当次会话的 AES-GCM 密钥（base64 的 32 字节），后续读取密钥类字段的接口（如 `GET /api/user/tokens`）需通过 `X-Data-Key` 请求头携带。
+`data_key` 是当次会话的 AES-GCM 密钥（base64 的 32 字节），用于解密接口返回的加密字段（如供应商 API Key、一次性展示的完整 API Key）。需要时通过 `X-Data-Key` 请求头携带，不要放进查询串。
+
+> **注意**：API Key 本身**不以明文入库**——`api_keys` 表里只有它的 SHA-256 与用于展示的前后缀。因此 `GET /api/user/tokens` 只返回 `key_prefix` / `key_suffix`（形如 `sk-a1b2c3…xy9z`），不返回完整 key，也不需要 `X-Data-Key`。完整 key 只在创建时的那次响应里出现一次，之后无法再取回（连平台自己也还原不出来）。
 
 **令牌有效期**：`token` 为 JWT，24 小时过期。修改密码（无论用户自助还是管理员重置）会立即作废该用户已签发的所有令牌，客户端需重新登录。
 
@@ -133,13 +135,15 @@
 | GET | `/api/user/info` | 当前用户信息 |
 | PUT | `/api/user/profile` | 修改昵称 / 邮箱 |
 | PUT | `/api/user/password` | 修改自己的密码 |
-| GET | `/api/user/tokens` | API Key 列表 |
-| POST | `/api/user/tokens` | 新建 API Key |
+| GET | `/api/user/tokens` | API Key 列表（只返回前后缀，见下） |
+| POST | `/api/user/tokens` | 新建 API Key（响应里的完整 key 只此一次） |
 | PUT | `/api/user/tokens/:id` | 修改 API Key |
 | DELETE | `/api/user/tokens/:id` | 删除 API Key |
 | GET | `/api/user/credit-logs` | 积分流水 |
 | GET | `/api/user/task-logs` | 自己的任务记录 |
 | GET | `/api/user/task-logs/:id` | 任务详情 |
+
+**API Key 的可见性**：完整 key 只在 `POST /api/user/tokens` 的响应里出现一次（用 `data_key` 加密），请当场保存。列表接口只给前后各几位，因为库里存的是哈希——这不是策略限制，而是技术上无法还原。忘记保存只能删除重建。
 
 ## 4 OpenAI 兼容接口
 

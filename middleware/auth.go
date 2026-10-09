@@ -164,10 +164,11 @@ func APIAuth() gin.HandlerFunc {
 			return
 		}
 
-		// 将身份信息存入上下文供后续处理使用
+		// 将身份信息存入上下文供后续处理使用。
+		// 刻意不放 key 本身：它已不落库，放进来等于把明文凭证在进程内扩散，
+		// 而没有任何一处代码需要它。
 		c.Set("user_id", token.UserID)
 		c.Set("token_id", token.ID)
-		c.Set("api_key", token.Key)
 
 		c.Next()
 	}

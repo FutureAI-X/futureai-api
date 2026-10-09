@@ -251,8 +251,74 @@ func migrateDB() error {
 		return err
 	}
 
+	// API Key 明文列哈希化并删除。必须在 AutoMigrate 之后（新列由它建出来），
+	// 也必须在开始服务之前完成（旧列是 NOT NULL，留着它新插入会失败）。
+	if err := migrateAPIKeyPlaintext(); err != nil {
+		return err
+	}
+
 	// 添加表和字段注释
 	return addTableComments()
+}
+
+// migrateAPIKeyPlaintext 把 api_keys.key 里的明文迁移成哈希，然后删除该列。
+//
+// 背景：API Key 原先以明文存进 api_keys.key，谁拿到库或备份就直接拿到可用的
+// 用户凭证——而按 deploy/backup.sh 的做法，备份里同时还带着 .env（能解开供应商
+// 密钥），等于一次泄露带走全部凭证。改为只存 SHA-256 之后，拖库拿不到凭证；
+// 代价是完整 key 只在创建时显示这一次。
+//
+// 三步：回填 → 校验无遗漏 → 删列。任何一步失败都返回错误让服务拒绝启动：
+// 停在半迁移状态只会产生更难查的故障。回填是幂等的（同一明文哈希相同），
+// 处理完问题重启即可重跑。
+func migrateAPIKeyPlaintext() error {
+	// 全新库没有这一列（模型里已无此字段），已迁移过的库也没有 —— 两种情况都无事可做。
+	if !columnExists("api_keys", "key") {
+		return nil
+	}
+
+	common.SysLog("[迁移] 检测到 api_keys.key 明文列，开始哈希化")
+
+	type legacyRow struct {
+		ID  int
+		Key string
+	}
+	var rows []legacyRow
+	if err := DB.Raw("SELECT id, key FROM api_keys").Scan(&rows).Error; err != nil {
+		return fmt.Errorf("读取 api_keys 明文失败: %w", err)
+	}
+
+	for _, row := range rows {
+		key := strings.TrimSpace(row.Key)
+		if key == "" {
+			return fmt.Errorf("api_keys.id=%d 的 key 为空，无法哈希化；请人工确认该行后再启动", row.ID)
+		}
+		prefix, suffix := APIKeyDisplayParts(key)
+		if err := DB.Exec(
+			"UPDATE api_keys SET key_hash = ?, key_prefix = ?, key_suffix = ? WHERE id = ?",
+			HashAPIKey(key), prefix, suffix, row.ID,
+		).Error; err != nil {
+			return fmt.Errorf("哈希化 api_keys.id=%d 失败: %w", row.ID, err)
+		}
+	}
+
+	// 删列之前必须确认没有漏网的行：删了就再也拿不回明文。
+	var remaining int64
+	if err := DB.Raw("SELECT COUNT(*) FROM api_keys WHERE key_hash IS NULL OR key_hash = ''").
+		Scan(&remaining).Error; err != nil {
+		return fmt.Errorf("校验哈希化结果失败: %w", err)
+	}
+	if remaining > 0 {
+		return fmt.Errorf("仍有 %d 行未完成哈希化，已中止且**未删除**明文列，请处理后重试", remaining)
+	}
+
+	// 删列会连带删掉它上面的唯一索引（Postgres 行为）。
+	if err := DB.Exec("ALTER TABLE api_keys DROP COLUMN key").Error; err != nil {
+		return fmt.Errorf("删除 api_keys.key 明文列失败: %w", err)
+	}
+
+	common.SysLogf("[迁移] api_keys 明文列已删除，共迁移 %d 行", len(rows))
+	return nil
 }
 
 // creditRuleModelIndex 是 credit_rules.model_id 上唯一索引的名字，
@@ -384,7 +450,12 @@ func addTableComments() error {
 		`COMMENT ON TABLE api_keys IS 'API 密钥表，存储用户 API 访问密钥'`,
 		`COMMENT ON COLUMN api_keys.id IS '密钥唯一标识，自增主键'`,
 		`COMMENT ON COLUMN api_keys.user_id IS '所属用户ID，关联 users 表'`,
-		`COMMENT ON COLUMN api_keys.key IS '密钥，用于 API 认证'`,
+		// 这里不能写 api_keys.key：该列已被 migrateAPIKeyPlaintext 删除，
+		// 老库上再对它执行 COMMENT 会报 "column does not exist"，
+		// 而那看起来像迁移失败，会淹掉真正的错误。
+		`COMMENT ON COLUMN api_keys.key_hash IS 'API Key 的 SHA-256，用于认证查找；明文不落库'`,
+		`COMMENT ON COLUMN api_keys.key_prefix IS 'Key 前缀，仅用于列表展示'`,
+		`COMMENT ON COLUMN api_keys.key_suffix IS 'Key 后缀，仅用于列表展示'`,
 		`COMMENT ON COLUMN api_keys.name IS '密钥名称，便于用户识别'`,
 		`COMMENT ON COLUMN api_keys.status IS '密钥状态：1=启用, 2=禁用, 3=已删除'`,
 		`COMMENT ON COLUMN api_keys.expired_time IS '过期时间戳，-1 表示永不过期'`,

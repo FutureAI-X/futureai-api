@@ -2,6 +2,8 @@ package model
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -92,8 +94,26 @@ type Token struct {
 	// 密钥名称，便于用户识别
 	Name string `json:"name" gorm:"size:64"`
 
-	// 密钥，用于 API 认证，全局唯一
-	Key string `json:"key" gorm:"uniqueIndex;size:64;not null"`
+	// KeyHash API Key 的 SHA-256（十六进制），用于认证时查找。**库里不存明文**。
+	//
+	// 为什么用户凭证要哈希、而供应商密钥是加密：供应商密钥是我们**需要**还原出来
+	// 转发给上游的，只能可逆；用户 API Key 只在认证时比对一次，没有任何环节需要
+	// 读回明文。明文入库意味着「拿到库或备份 = 拿到全部用户凭证」，而备份里本来
+	// 就带着 .env（见 deploy/backup.sh），这一条把那个后果降到只剩上游密钥。
+	//
+	// 用 SHA-256 而不是 bcrypt：key 是 32 位随机字符（约 165 bit 熵），不存在
+	// 字典攻击，慢哈希只会拖慢每个 /v1 请求；而且哈希后仍能建唯一索引直接查，
+	// bcrypt 每行盐不同，根本没法按值查。
+	//
+	// 刻意可空（不带 not null）：唯一索引允许 NULL 并存，存量表在回填之前整列都是
+	// NULL，写成 not null 会让 AutoMigrate 建索引时撞上重复的空值而失败。
+	KeyHash string `json:"-" gorm:"uniqueIndex;size:64"`
+
+	// KeyPrefix / KeySuffix 只用于列表展示（如 sk-a1b2c3…xy9z），让用户能分辨
+	// 是哪一把 Key。代价是把 9 个随机字符暴露给「能读到库」的人，剩余熵仍远超
+	// 可暴力破解的范围。
+	KeyPrefix string `json:"key_prefix" gorm:"size:16"`
+	KeySuffix string `json:"key_suffix" gorm:"size:8"`
 
 	// 状态：1=启用, 2=禁用, 3=已删除
 	Status int `json:"status" gorm:"default:1"`
@@ -137,10 +157,45 @@ func GetTokenByID(id int) (*Token, error) {
 	return &token, nil
 }
 
-// GetTokenByKey 根据 Key 获取 Token
+// apiKeyPrefixLen / apiKeySuffixLen 是列表展示时保留的明文位数。
+// 12 位（含固定的 "sk-" 前缀）足以让用户分辨是哪一把 Key。
+const (
+	apiKeyPrefixLen = 8
+	apiKeySuffixLen = 4
+)
+
+// HashAPIKey 计算 API Key 的存储哈希（十六进制 SHA-256）。
+func HashAPIKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+// APIKeyDisplayParts 切出用于展示的前缀与后缀。
+// 对短于 12 位的 key（历史遗留或人工插入）整体作为前缀返回，
+// 避免切片越界，也避免前后缀重叠导致看起来像把整个 key 打印出来。
+func APIKeyDisplayParts(key string) (prefix, suffix string) {
+	if len(key) <= apiKeyPrefixLen+apiKeySuffixLen {
+		return key, ""
+	}
+	return key[:apiKeyPrefixLen], key[len(key)-apiKeySuffixLen:]
+}
+
+// MaskAPIKey 把前缀与后缀拼成列表展示值，如 sk-a1b2c3…xy9z。
+func MaskAPIKey(prefix, suffix string) string {
+	if prefix == "" && suffix == "" {
+		return ""
+	}
+	if suffix == "" {
+		return prefix
+	}
+	return prefix + "…" + suffix
+}
+
+// GetTokenByKey 按明文 API Key 查找启用中的 Token。
+// 库里只存哈希，因此这里先把明文哈希一次再查——不需要解密，也无从解密。
 func GetTokenByKey(key string) (*Token, error) {
 	var token Token
-	err := DB.Where("key = ? AND status = ?", key, 1).First(&token).Error
+	err := DB.Where("key_hash = ? AND status = ?", HashAPIKey(key), TokenStatusEnabled).First(&token).Error
 	if err != nil {
 		return nil, err
 	}
@@ -162,15 +217,19 @@ func DeleteToken(id int) error {
 	return DB.Model(&Token{}).Where("id = ?", id).Update("status", TokenStatusDeleted).Error
 }
 
-// IsTokenKeyExists 检查 Token Key 是否已存在（排除已删除）
-func IsTokenKeyExists(key string) bool {
+// IsTokenHashExists 检查该哈希是否已被占用（排除已删除）。
+// 注意查的是哈希而不是明文：库里已经没有明文可比。
+func IsTokenHashExists(hash string) bool {
 	var count int64
-	DB.Model(&Token{}).Where("key = ? AND status != ?", key, TokenStatusDeleted).Count(&count)
+	DB.Model(&Token{}).Where("key_hash = ? AND status != ?", hash, TokenStatusDeleted).Count(&count)
 	return count > 0
 }
 
-// GenerateUniqueTokenKey 生成唯一的 Token Key（sk- + 32位小写字母数字）
-func GenerateUniqueTokenKey() (string, error) {
+// GenerateTokenKey 生成一个新的 API Key 及其派生的存储字段。
+//
+// 明文 key **只在这个返回值里出现一次**：调用方返回给用户之后即应丢弃，
+// 之后再也无法从库里还原（这正是本次改造的目的）。
+func GenerateTokenKey() (key, hash, prefix, suffix string, err error) {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	for i := 0; i < 10; i++ { // 最多重试10次
 		result := make([]byte, 32)
@@ -178,12 +237,14 @@ func GenerateUniqueTokenKey() (string, error) {
 			n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
 			result[j] = chars[n.Int64()]
 		}
-		key := "sk-" + string(result)
-		if !IsTokenKeyExists(key) {
-			return key, nil
+		key = "sk-" + string(result)
+		hash = HashAPIKey(key)
+		if !IsTokenHashExists(hash) {
+			prefix, suffix = APIKeyDisplayParts(key)
+			return key, hash, prefix, suffix, nil
 		}
 	}
-	return "", errors.New("failed to generate unique token key")
+	return "", "", "", "", errors.New("failed to generate unique token key")
 }
 
 // ValidateAndFill 验证用户名密码并填充用户信息

@@ -23,20 +23,32 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 export interface ApiKey {
   id: number
   name: string
-  key: string
+  /**
+   * 只有前后各几位。库里存的是 API Key 的哈希，完整明文已不可恢复——
+   * 连服务端也拿不到，因此列表不再有「传 data_key 就返回完整值」这回事。
+   */
+  key_prefix: string
+  key_suffix: string
   status: number
   created_at: string
 }
 
-export function getTokens(dataKey: string) {
-  // data_key 通过请求头传递，避免出现在 URL 查询串中（会进入访问日志/浏览器历史）
-  return request<{ success: boolean; data: ApiKey[] }>(`${BASE}/tokens`, {
-    headers: { 'X-Data-Key': dataKey },
-  })
+/** 创建接口的响应：唯一一次能看到完整 key 的地方 */
+export interface CreatedApiKey {
+  id: number
+  name: string
+  /** 用会话的 data_key 加密后的完整 key，需要在前端解密后展示 */
+  key: string
+  created_at: string
+}
+
+export function getTokens() {
+  // 只返回前后缀，无需 data_key
+  return request<{ success: boolean; data: ApiKey[] }>(`${BASE}/tokens`)
 }
 
 export function createToken(name: string, dataKey: string) {
-  return request<{ success: boolean; message: string; data?: ApiKey }>(`${BASE}/tokens`, {
+  return request<{ success: boolean; message: string; data?: CreatedApiKey }>(`${BASE}/tokens`, {
     method: 'POST',
     body: JSON.stringify({ name, data_key: dataKey }),
   })
