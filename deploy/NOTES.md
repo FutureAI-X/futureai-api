@@ -147,7 +147,7 @@ curl -m 3 telnet://<服务器IP>:5432
 - [ ] 登录后立即修改 root 密码，并清空 `.env` 里的 `INITIAL_ROOT_PASSWORD`。
 - [ ] 证书续期的 cron 已挂上，并且**手动跑过一次确认能成功**。注意用 `sudo crontab -e`：日志写在 `/var/log/`，普通用户无权限，cron 会静默失败，直到证书过期、网站打不开才发现。
 - [ ] 备份 cron 已挂上，并**实际跑一次 `restore.sh` 验证备份可用**。
-- [ ] 网关日志的清理 cron 已挂上，即 [README 第 7.6 步](README.md#76-挂定时任务)的第三条。这条最容易漏，而它是唯一会无限增长的日志，写满磁盘会把同盘的数据库一起拖死。
+- [ ] 网关日志的清理 cron 已挂上，即 [README 第 9.1 步](README.md#91-挂定时任务)的第三条。这条最容易漏，而它是唯一会无限增长的日志，写满磁盘会把同盘的数据库一起拖死。
 - [ ] 确认**只有网关一个入口**。仓库根目录的 `docker-compose.yml` 是开发用的，它把应用端口发布到宿主机，不要把它跑在公网机器上。
 - [ ] 确认本次是**单实例部署**。限流器与任务对账状态都在进程内存中，横向扩到 2 个副本会让限流翻倍宽松，且同一个任务可能被两个实例同时轮询。
 - [ ] 首日观察 HSTS。出厂值已按「首次上线」调成 `max-age=300`，稳定一两天后再改回一年并考虑开启 `includeSubDomains`，见 `snippets/tls.conf`。
@@ -311,7 +311,7 @@ docker compose -f /opt/stacks/futureai-api/docker-compose.yml logs -f futureai-a
 **日志必须轮转，否则迟早写满磁盘**，而数据库与应用同盘，会一起挂。
 
 - 容器日志：两份 compose 都已设 `logging.options.max-size=10m / max-file=3`，不需要额外操作。它管的是容器的 stdout / stderr。
-- 网关日志：nginx 把访问日志写进挂载到宿主机的 `deploy/gateway/logs/`。**这是文件，不是容器的 stdout，上述上限管不到它**，必须靠主机侧的定时删除，命令见 [README 第 7.6 步](README.md#76-挂定时任务)。这是整份编排里唯一会无限增长的东西。
+- 网关日志：nginx 把访问日志写进挂载到宿主机的 `deploy/gateway/logs/`。**这是文件，不是容器的 stdout，上述上限管不到它**，必须靠主机侧的定时删除，命令见 [README 第 9.1 步](README.md#91-挂定时任务)。这是整份编排里唯一会无限增长的东西。
 
 上线后一周内留意磁盘：
 
