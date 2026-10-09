@@ -4,7 +4,7 @@
 
 日常开发见 [DEV.md](DEV.md)，验证镜像见 [DOCKER.md](DOCKER.md)，部署到服务器见 [../deploy/README.md](../deploy/README.md)。
 
-除第 4 章外，各章命令均在仓库根目录执行。
+除第 4、5 章外，各章命令均在仓库根目录执行。
 
 ## 1 准备
 
@@ -32,7 +32,7 @@ docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-
 
 `--ip-range` 不可省略：它保证网关的固定 IP `172.20.0.2` 不被其他容器占用，该地址一旦被占，网关将无法再启动。
 
-> **注意**：报 `already exists` 说明此前建过且未清理，可跳过本章（网络已存在）；若要重建，先执行第 7 章。
+> **注意**：报 `already exists` 说明此前建过且未清理，可跳过本章（网络已存在）；若要重建，先执行第 9 章。
 
 ## 3 起应用容器
 
@@ -44,9 +44,9 @@ docker compose up -d
 
 > **注意**：若要验证发版用的镜像而非本机构建的镜像，先执行 `./deploy/build-image.sh linux/amd64`。该脚本会把镜像 `--load` 进本地，之后的 `up -d` 直接使用它。此操作会在仓库根目录留下约 14MB 的 `.tar.gz`，本机验证用不到，可以删除。
 
-## 4 起网关容器
+## 4 准备网关配置
 
-本章命令在 `deploy/gateway/` 下执行。先进入该目录：
+本章与下一章的命令在 `deploy/gateway/` 下执行。先进入该目录：
 
 ```bash
 cd deploy/gateway
@@ -70,6 +70,8 @@ chmod +x scripts/*.sh
 ./scripts/self-signed.sh
 ```
 
+## 5 起网关容器
+
 启动网关：
 
 ```bash
@@ -88,7 +90,7 @@ docker compose exec gateway nginx -t
 cd ../..
 ```
 
-## 5 把应用接入共享网络
+## 6 把应用接入共享网络
 
 ```bash
 docker network connect gateway-proxy futureai-api
@@ -96,7 +98,7 @@ docker network connect gateway-proxy futureai-api
 
 > **注意**：容器重建后这条连接会丢失，网关会开始返回 502，重跑上述命令即可。执行 `docker compose up -d` 换镜像之后尤其容易遗漏。
 
-## 6 访问验证
+## 7 命令行验证
 
 确认健康检查接口：
 
@@ -116,7 +118,9 @@ curl -k -s --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/
 
 > **注意**：必须使用 `--resolve`，不能使用 `-H "Host: ..."`。curl 连接 IP 地址时不发送 SNI，nginx 会落到拒绝握手的 `default_server` 块，得到的是 TLS 错误而非响应；`--resolve` 会同时设置 SNI 与 Host。
 
-浏览器访问需先修改 hosts，以下操作需要**管理员权限**。
+## 8 浏览器访问
+
+命令行验证通过后，若要继续用浏览器查看页面，需先修改 hosts 文件。以下操作需要**管理员权限**，且会在系统中留下一条记录，第 9 章会要求删除它。
 
 Windows：
 
@@ -136,7 +140,7 @@ echo "127.0.0.1 futureaiapi.com" | sudo tee -a /etc/hosts
 
 随后访问 https://futureaiapi.com。证书警告是自签证书的正常表现，选择继续访问即可。
 
-## 7 清理
+## 9 清理
 
 断开应用与共享网络的连接：
 
@@ -156,11 +160,11 @@ docker network disconnect gateway-proxy futureai-api
 docker network rm gateway-proxy
 ```
 
-最后删除第 6 章加入 hosts 的那一行。
+最后删除第 8 章加入 hosts 的那一行。
 
 > 应用容器会保留。若要一并停止，在仓库根目录执行 `docker compose down`。
 
-## 8 故障排查
+## 10 故障排查
 
 下表按现象列出常见问题。
 
@@ -168,8 +172,8 @@ docker network rm gateway-proxy
 |---|---|
 | 网关反复重启，日志提示证书不存在 | 证书未生成成功，重跑 `./scripts/self-signed.sh` |
 | 网关无法启动，报 `Address already in use` | 建网络时漏了 `--ip-range`，见第 2 章 |
-| 某个域名返回 502 | 对应服务未启动，或未接入共享网络，见第 5 章 |
+| 某个域名返回 502 | 对应服务未启动，或未接入共享网络，见第 6 章 |
 | 修改模板未生效 | 改的是渲染产物。应修改 `templates/default.conf.template`，然后执行 `docker compose up -d --force-recreate` |
 | 浏览器打不开，但 curl 正常 | 系统代理绕过了 hosts，把 `futureaiapi.com` 加入代理的直连规则 |
 
-更深入的排查见 [deploy/NOTES.md](../deploy/NOTES.md#排查表)。
+更深入的排查见 [deploy/NOTES.md](../deploy/NOTES.md#10-排查表)。
