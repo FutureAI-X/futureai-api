@@ -93,7 +93,7 @@ export function Header({ leftExtra }: HeaderProps) {
               )
             })}
             <a
-              href='https://future-ai.feishu.cn/wiki/Gs3Ow9fSfinMpwkCNuschCcYnab'
+              href='https://future-ai.feishu.cn/wiki/P8tuwmPiCiMrRtk5UEYccXDCn6d'
               target='_blank'
               rel='noopener noreferrer'
               className='text-muted-foreground hover:text-foreground rounded-lg px-3 py-1.5 text-sm font-medium transition-colors'
