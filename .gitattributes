@@ -1,5 +1,5 @@
 # 行尾统一。开发在 Windows、部署到 Linux，而这个仓库的部署方式是
-# `scp -r deploy/ <server>:/opt/stacks/` —— 如果脚本在 Windows 上被检出成
+# `scp -r deploy/ <server>:/home/ubuntu/stacks/` —— 如果脚本在 Windows 上被检出成
 # CRLF，传到服务器后会报 `\r: command not found`（或更隐蔽的解析错误）。
 #
 # 这里强制这些文件在**仓库里和工作区里**都是 LF，不受 core.autocrlf 影响。

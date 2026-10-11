@@ -14,6 +14,10 @@
 
 共享网络 `gateway-proxy`（172.20.0.0/16）是手工创建的，没有交给任何 compose 项目管理。由 compose 管理的网络，在项目 `down` 时可能被一并删除，导致服务瞬间失去网络。
 
+**配置放在 `/home/ubuntu/stacks/` 而不是 `/opt`**：`/opt` 属于 root，部署用户（`ubuntu`）在那里既建不了目录也覆盖不了已存在的文件，`scp` 会断在权限上。整套编排里没有任何一处需要 root——镜像在别的机器上构建、容器靠 docker 组启动、备份与日志都写在自己的主目录——唯一需要 `sudo` 的是装 Docker 并加入 docker 组（[README 第 2.1 步](README.md#21-装-docker-并让用户免-sudo)），那一步不做完，后面每条 `docker` 命令都会失败；此外还有目录属主不对时的一次性 `chown`（[第 2.3 步](README.md#23-建配置目录)）。
+
+有一条反直觉的地方：**主目录归你，不等于 Docker 不会在里面造出属于 root 的目录**。挂载源目录不存在时，Docker 会以 root 的身份把它建出来，之后 `rotate-logs.sh` 就没法在里面改名或删除文件——表现是 cron 天天失败而日志照涨。所以会被挂载的目录（`gateway/logs`、`gateway/certbot/www`）都在 [README 第 2.3 步](README.md#23-建配置目录)手工建好，自检项见[第 5 章](#5-上线自检清单)。
+
 ## 2 为什么上游用 resolver + 变量，而不是 upstream 块
 
 网关配置里写的是：
@@ -145,7 +149,14 @@ curl -m 3 telnet://<服务器IP>:5432
       ```
 
 - [ ] 登录后立即修改 root 密码，并清空 `.env` 里的 `INITIAL_ROOT_PASSWORD`。
-- [ ] 证书续期的 cron 已挂上，并且**手动跑过一次确认能成功**。注意用 `sudo crontab -e`：日志写在 `/var/log/`，普通用户无权限，cron 会静默失败，直到证书过期、网站打不开才发现。
+- [ ] 证书续期的 cron 已挂上，并且**手动跑过一次确认能成功**。用普通用户 `crontab -e` 挂（不要 `sudo`），日志写在 `/home/ubuntu/logs/`——确认该目录存在、属主是你的用户，否则 `>>` 会静默失败，直到证书过期、网站打不开才发现。
+- [ ] `/home/ubuntu/stacks` 下**没有 root 属主的目录**：
+
+      ```bash
+      find /home/ubuntu/stacks -not -user "$(id -un)"
+      ```
+
+      应当没有输出。有输出通常是某个挂载目录没手工建、被 Docker 以 root 建了出来（`gateway/logs`、`gateway/certbot/www` 最容易），后果见 [README 第 9.1 步](README.md#91-挂定时任务)那条日志清理 cron——它会一直失败，而日志照涨。
 - [ ] 备份 cron 已挂上，并**实际跑一次 `restore.sh` 验证备份可用**。
 - [ ] 网关日志的清理 cron 已挂上，即 [README 第 9.1 步](README.md#91-挂定时任务)的第三条。这条最容易漏，而它是唯一会无限增长的日志，写满磁盘会把同盘的数据库一起拖死。
 - [ ] 确认**只有网关一个入口**。仓库根目录的 `docker-compose.yml` 是开发用的，它把应用端口发布到宿主机，不要把它跑在公网机器上。
@@ -167,7 +178,7 @@ scp futureai-api-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
 再在服务器上备份。**必须先备份，再升级**：
 
 ```bash
-/opt/stacks/futureai-api/backup.sh
+/home/ubuntu/stacks/futureai-api/backup.sh
 ```
 
 先把标签记进变量，本章后续命令都在同一个终端会话中执行：
@@ -191,7 +202,7 @@ docker image inspect futureai-api:$TAG --format '{{index .Config.Labels "org.ope
 切换标签并重启：
 
 ```bash
-cd /opt/stacks/futureai-api
+cd /home/ubuntu/stacks/futureai-api
 ```
 
 ```bash
@@ -223,7 +234,7 @@ docker compose up -d
 先看还有哪些版本：
 
 ```bash
-cd /opt/stacks/futureai-api
+cd /home/ubuntu/stacks/futureai-api
 ```
 
 ```bash
@@ -253,7 +264,7 @@ docker compose up -d
 数据库本身的回滚要用备份：
 
 ```bash
-./restore.sh /opt/backups/futureai-api/db-<时间戳>.sql.gz
+./restore.sh /home/ubuntu/backups/futureai-api/db-<时间戳>.sql.gz
 ```
 
 打镜像默认用构建时刻当标签（`20260915225600`），每次都是一个新版本，旧镜像留在服务器上不会被覆盖。想用更直观的版本号可以自己指定：
@@ -268,20 +279,20 @@ TAG=v1.2.3 ./deploy/build-image.sh linux/amd64
 
 使用 `deploy/backup.sh`，它会自动建目录、从 `.env` 读库名、轮转旧备份。
 
-手动跑一次（必须用 `sudo`，脚本要读 `.env` 并写 `/opt`）：
+手动跑一次（普通用户即可，脚本读的 `.env` 和写的备份目录都在你自己的主目录下）：
 
 ```bash
-sudo /opt/stacks/futureai-api/backup.sh
+/home/ubuntu/stacks/futureai-api/backup.sh
 ```
 
-挂到 cron：
+挂到 cron（**不要 `sudo`**，见 [README 第 9.1 步](README.md#91-挂定时任务)）：
 
 ```bash
-sudo crontab -e
+crontab -e
 ```
 
 ```crontab
-30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
+30 3 * * * /home/ubuntu/stacks/futureai-api/backup.sh >> /home/ubuntu/logs/futureai-api-backup.log 2>&1
 ```
 
 脚本会同时备份数据库和 `.env`。**`.env` 必须一起备份**：`SECRET_KEY` 丢了，库里所有供应商 API Key 就永远解不开，数据库恢复得再好也没用。
@@ -289,13 +300,13 @@ sudo crontab -e
 保留份数用 `KEEP` 控制：
 
 ```bash
-KEEP=30 /opt/stacks/futureai-api/backup.sh
+KEEP=30 /home/ubuntu/stacks/futureai-api/backup.sh
 ```
 
 > **注意**：没验证过的备份等于没有备份。每季度实际恢复一次：
 
 ```bash
-sudo /opt/stacks/futureai-api/restore.sh /opt/backups/futureai-api/db-<时间戳>.sql.gz
+/home/ubuntu/stacks/futureai-api/restore.sh /home/ubuntu/backups/futureai-api/db-<时间戳>.sql.gz
 ```
 
 `restore.sh` 会停应用、恢复、再拉起，并要求二次确认。
@@ -305,7 +316,7 @@ sudo /opt/stacks/futureai-api/restore.sh /opt/backups/futureai-api/db-<时间戳
 查看网关侧访问日志（已剔除查询串）：
 
 ```bash
-cd /opt/stacks/gateway
+cd /home/ubuntu/stacks/gateway
 ```
 
 ```bash
@@ -315,13 +326,13 @@ tail -f logs/futureai-api.access.log
 查看应用日志：
 
 ```bash
-docker compose -f /opt/stacks/futureai-api/docker-compose.yml logs -f futureai-api
+docker compose -f /home/ubuntu/stacks/futureai-api/docker-compose.yml logs -f futureai-api
 ```
 
 **日志必须轮转，否则迟早写满磁盘**，而数据库与应用同盘，会一起挂。
 
 - 容器日志：两份 compose 都已设 `logging.options.max-size=10m / max-file=3`，不需要额外操作。它管的是容器的 stdout / stderr。
-- 网关日志：nginx 把访问日志写进挂载到宿主机的 `deploy/gateway/logs/`。**这是文件，不是容器的 stdout，上述上限管不到它**，必须靠主机侧的定时轮转，命令见 [README 第 9.1 步](README.md#91-挂定时任务)。这是整份编排里唯一会无限增长的东西。轮转必须走 `scripts/rotate-logs.sh`：活动日志的 mtime 永远是「刚刚」，用 `find -mtime +14 -delete` 一条也删不掉，而且删掉正在写入的文件并不会立刻释放空间。
+- 网关日志：nginx 把访问日志写进挂载到宿主机的 `/home/ubuntu/stacks/gateway/logs/`。**这是文件，不是容器的 stdout，上述上限管不到它**，必须靠主机侧的定时轮转，命令见 [README 第 9.1 步](README.md#91-挂定时任务)。这是整份编排里唯一会无限增长的东西。轮转必须走 `scripts/rotate-logs.sh`：活动日志的 mtime 永远是「刚刚」，用 `find -mtime +14 -delete` 一条也删不掉，而且删掉正在写入的文件并不会立刻释放空间。
 
 上线后一周内留意磁盘：
 

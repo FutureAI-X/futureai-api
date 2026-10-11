@@ -3,7 +3,7 @@
 # 从 backup.sh 产出的备份恢复数据库。
 #
 # 用法（在服务器上）:
-#   ./restore.sh /opt/backups/futureai-api/db-2026-09-20_030000.sql.gz
+#   ./restore.sh /home/ubuntu/backups/futureai-api/db-2026-09-20_030000.sql.gz
 #
 # 注意：这是破坏性操作：会用备份覆盖当前数据库。
 #    脚本会二次确认，并要求先停掉应用容器（否则恢复过程中应用仍在读写，
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 BACKUP_FILE="${1:-}"
-STACK_DIR="${STACK_DIR:-/opt/stacks/futureai-api}"
+STACK_DIR="${STACK_DIR:-/home/ubuntu/stacks/futureai-api}"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
 ENV_FILE="$STACK_DIR/.env"
 

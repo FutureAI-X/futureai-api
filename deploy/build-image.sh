@@ -90,7 +90,7 @@ cat <<EOF
   ssh <user>@<server> 'gunzip -c /tmp/$IMAGE-$TAG-$ARCH.tar.gz | docker load'
 
 然后在服务器上把 .env 指向这个标签并重启:
-  cd /opt/stacks/futureai-api
+  cd /home/ubuntu/stacks/futureai-api
   sed -i 's/^FUTUREAI_API_TAG=.*/FUTUREAI_API_TAG=$TAG/' .env
   docker compose up -d
 

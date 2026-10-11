@@ -1,6 +1,6 @@
 # 边缘网关 —— 全机器唯一占用 80/443 的容器
 #
-# 部署位置: /opt/stacks/gateway/
+# 部署位置: /home/ubuntu/stacks/gateway/
 #
 # 前置（一次性，见 deploy/README.md）:
 #   docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy

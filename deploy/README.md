@@ -20,9 +20,11 @@
 
 | 写法 | 换成 |
 |---|---|
-| `<user>@<server>` | 你的登录信息，如 `root@1.2.3.4` |
+| `<user>@<server>` | 你的登录信息，如 `ubuntu@1.2.3.4` |
 | `20260915225600` | 第 3.2 步打印出来的实际标签 |
 | 章节标题里的 `服务器` / `本机` | 这一章在哪台机器上执行 |
+
+文中的路径一律按「登录用户是 `ubuntu`、主目录是 `/home/ubuntu`」来写，所有 `scp` 的目标都在这个主目录下。换了用户名（`ec2-user`、`debian`、`root`……）就要把全文的 `/home/ubuntu` 一并替换掉，另外 [backup.sh](backup.sh) 与 [restore.sh](restore.sh) 里各有一处 `STACK_DIR` 默认值也要跟着改。
 
 ### 1.3 相关文档
 
@@ -43,7 +45,7 @@
 | 章 | 在哪台机器 | 做什么 |
 |---|---|---|
 | 1 | — | 开始之前（你正在读） |
-| 2 | 服务器 | 一次性准备：建目录、建网络、放行端口 |
+| 2 | 服务器 | 一次性准备：装 Docker、建目录、建网络、放行端口 |
 | 3 | 本机 | 构建镜像并上传到服务器 |
 | 4 | 服务器 | 起网关 |
 | 5 | 服务器 | 起应用和数据库 |
@@ -57,7 +59,52 @@
 
 ## 2 服务器：一次性准备
 
-### 2.1 查 CPU 架构
+### 2.1 装 Docker 并让用户免 sudo
+
+第 2.4 步建网络就要用 `docker`，而本文后面所有 `docker` 命令都不带 `sudo`。这两件事的前提是：这台机器装了 Docker，且当前用户在 `docker` 组里。
+
+先看装没装：
+
+```bash
+docker --version
+```
+
+有版本号就跳过安装，直接做下面的加组。没有的话，在服务器上装（用 Ubuntu 官方源，之后能跟着 `apt upgrade` 一起更新）：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+`docker-compose-plugin` 与 `docker-buildx-plugin` 必须带上：本文用的是 `docker compose`（v2 子命令），不是老的 `docker-compose`。
+
+装完确认三件套都在：
+
+```bash
+docker --version && docker compose version && docker buildx version
+```
+
+再把当前用户加进 `docker` 组，这样后面每条命令都不用 `sudo`：
+
+```bash
+sudo usermod -aG docker ubuntu
+```
+
+> **注意**：`-a` 不能省。`-G` 的含义是「设置附加组」，不带 `-a` 会把 `ubuntu` 此前所属的其它附加组全部踢掉，只留 `docker`。
+
+> **注意**：改完**必须重新登录**才生效——组信息是登录那一刻确定的。开一个新 SSH 会话，`id -nG` 里能看到 `docker`、`docker ps` 不再报 `permission denied`，才算好了。当场用 `newgrp docker` 只对那一个新开的 shell 有效，别拿它当验证。
+
+> **注意**：加入 `docker` 组等于给了这个用户无条件的 root 权限（能挂载任意宿主机目录起容器、能读出任何镜像里的密钥）。这台机器上除了你不要再留其他可登录账号。全文需要 `sudo` 的只剩这一处，以及第 2.3 步那个「目录属主不对时才用得上」的 `chown`。
+
+> 国内拉 `download.docker.com` 慢或不通时，可以改用阿里云等镜像源，或临时走官方脚本 `curl -fsSL https://get.docker.com | sh`——它更快，但 Docker 官方不推荐用于生产，且升级不走 `apt`。
+
+### 2.2 查 CPU 架构
 
 ```bash
 uname -m
@@ -65,15 +112,24 @@ uname -m
 
 `x86_64` → 后面用 `linux/amd64`；`aarch64` → 后面用 `linux/arm64`。**记下来**，第 3.1 步要用。
 
-### 2.2 建配置目录
+### 2.3 建配置目录
 
 ```bash
-mkdir -p /opt/stacks
+mkdir -p /home/ubuntu/stacks/gateway/logs /home/ubuntu/stacks/gateway/certbot/www \
+         /home/ubuntu/stacks/futureai-api /home/ubuntu/logs
 ```
 
-网关和应用的配置都放在这个目录下。
+网关和应用的配置都放在 `/home/ubuntu/stacks/` 下，一个服务一个子目录（第 10 章再往这台机器上加服务时，也是照这个形状加）。`/home/ubuntu/logs/` 放定时任务的输出，见第 9 章。
 
-### 2.3 建共享网络
+**为什么放在主目录而不是 `/opt`**：`/opt` 属于 root，普通用户连 `mkdir` 都过不去，`scp` 传上去的文件也会因权限失败。主目录下的东西本来就归你，这一章之后的所有命令——`scp`、`chmod`、挂 cron——都不需要 `sudo`。
+
+> **注意**：`gateway/logs` 与 `gateway/certbot/www` 必须在这里手工建出来，不能让 Docker 替你建。这两个目录都在网关的挂载列表里（见 [gateway/docker-compose.yml](gateway/docker-compose.yml)），而 Docker 遇到不存在的挂载源目录会**以 root 的身份**创建它——之后 ubuntu 就没法在里面改名或删除文件，第 9 章那条日志清理 cron 会天天失败，而日志照涨。
+>
+> `gateway/certs` 不用在这里建：第 4.4 步的 `self-signed.sh` 会自己 `mkdir` 出来，归你所有。但也**不要**图省事用 `sudo mkdir` 提前建任何一层，那样建出来的目录属主是 root，问题只是换个地方出现。
+
+> **注意**：上面这些目录的属主必须是你自己（`ls -ld /home/ubuntu/stacks /home/ubuntu/logs` 看一眼）。哪一层是 `root root`，就把它改回来：`sudo chown -R ubuntu:ubuntu /home/ubuntu/stacks /home/ubuntu/logs`。
+
+### 2.4 建共享网络
 
 ```bash
 docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy
@@ -85,7 +141,7 @@ docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-
 
 > 报 `already exists` 说明之前建过，直接跳到下一节即可。
 
-### 2.4 放行 22 / 80 / 443
+### 2.5 放行 22 / 80 / 443
 
 在云服务商的控制台（以及服务器上的 `ufw` / `firewalld`，如果有）都放行这三个端口。80 和 443 是给网关用的。
 
@@ -99,7 +155,7 @@ docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-
 bash deploy/build-image.sh linux/amd64
 ```
 
-把 `linux/amd64` 换成第 2.1 步查到的架构。
+把 `linux/amd64` 换成第 2.2 步查到的架构。
 
 > 用 `bash` 前缀而不是 `./`：脚本的执行位依赖 git 里的文件模式，在部分环境（旧 clone、从压缩包解出的副本）可能没带上，直接 `./` 会报 `Permission denied`。`bash <脚本>` 没有这个问题。
 
@@ -132,13 +188,13 @@ docker pull alpine:3.22
 ### 3.3 上传网关配置
 
 ```bash
-scp deploy/gateway/docker-compose.yml deploy/gateway/.env.example <user>@<server>:/opt/stacks/gateway/
+scp deploy/gateway/docker-compose.yml deploy/gateway/.env.example <user>@<server>:/home/ubuntu/stacks/gateway/
 ```
 
 ### 3.4 上传网关的模板、片段与脚本
 
 ```bash
-scp -r deploy/gateway/templates deploy/gateway/snippets deploy/gateway/scripts <user>@<server>:/opt/stacks/gateway/
+scp -r deploy/gateway/templates deploy/gateway/snippets deploy/gateway/scripts <user>@<server>:/home/ubuntu/stacks/gateway/
 ```
 
 > **注意**：3.3 和 3.4 刻意逐个列出要传的文件，而不是 `scp -r deploy/gateway`。后者会把本机的 `certs/`（含私钥）、`logs/`、`.env` 一起带上服务器。后果不小：本机那张占位证书传过去之后，第 4.4 步的 `self-signed.sh` 会因为「证书已存在」直接跳过并返回 0，你会以为这步失败了，或者更糟——真的用了那张域名对不上的证书。
@@ -146,13 +202,13 @@ scp -r deploy/gateway/templates deploy/gateway/snippets deploy/gateway/scripts <
 ### 3.5 上传应用配置
 
 ```bash
-scp deploy/futureai-api/docker-compose.yml deploy/futureai-api/.env.example <user>@<server>:/opt/stacks/futureai-api/
+scp deploy/futureai-api/docker-compose.yml deploy/futureai-api/.env.example <user>@<server>:/home/ubuntu/stacks/futureai-api/
 ```
 
 ### 3.6 上传备份脚本
 
 ```bash
-scp deploy/backup.sh deploy/restore.sh <user>@<server>:/opt/stacks/futureai-api/
+scp deploy/backup.sh deploy/restore.sh <user>@<server>:/home/ubuntu/stacks/futureai-api/
 ```
 
 ### 3.7 上传镜像包
@@ -172,7 +228,7 @@ scp futureai-api-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
 进入网关配置目录，本章以下命令均在此目录执行：
 
 ```bash
-cd /opt/stacks/gateway
+cd /home/ubuntu/stacks/gateway
 ```
 
 复制配置：
@@ -258,7 +314,7 @@ gunzip -c /tmp/futureai-api-20260915225600-amd64.tar.gz | docker load
 ### 5.2 进入应用目录
 
 ```bash
-cd /opt/stacks/futureai-api
+cd /home/ubuntu/stacks/futureai-api
 ```
 
 ### 5.3 复制配置并收紧权限
@@ -461,7 +517,7 @@ ping -c 1 futureaiapi.com
 进入网关目录：
 
 ```bash
-cd /opt/stacks/gateway
+cd /home/ubuntu/stacks/gateway
 ```
 
 签发：
@@ -493,15 +549,17 @@ curl -I https://futureaiapi.com/health
 ### 9.1 挂定时任务
 
 ```bash
-sudo crontab -e
+crontab -e
 ```
+
+**不要加 `sudo`**。脚本和日志都在你自己的主目录下，用当前用户的 crontab 即可；用 root 的 crontab 反而会让日志文件归 root，之后你自己改不动。
 
 在文件末尾加这三行：
 
 ```
-17 3 * * * cd /opt/stacks/gateway && ./scripts/certbot.sh renew >> /var/log/certbot-renew.log 2>&1
-30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
-0  4 * * * cd /opt/stacks/gateway && ./scripts/rotate-logs.sh >> /var/log/rotate-logs.log 2>&1
+17 3 * * * cd /home/ubuntu/stacks/gateway && ./scripts/certbot.sh renew >> /home/ubuntu/logs/certbot-renew.log 2>&1
+30 3 * * * /home/ubuntu/stacks/futureai-api/backup.sh >> /home/ubuntu/logs/futureai-api-backup.log 2>&1
+0  4 * * * cd /home/ubuntu/stacks/gateway && ./scripts/rotate-logs.sh >> /home/ubuntu/logs/rotate-logs.log 2>&1
 ```
 
 **三条，一条都不能少。**
@@ -512,13 +570,15 @@ sudo crontab -e
 | 每天 3:30 | 备份数据库和 `.env` | 出事时没有可恢复的备份 |
 | 每天 4:00 | 归档并清理网关日志 | **日志无限增长写满磁盘，数据库同盘会一起挂** |
 
-第三条最容易漏。网关日志写在宿主机的 `/opt/stacks/gateway/logs/` 下，Docker 的日志上限**管不到它**（那只管容器的 stdout / stderr），只能靠主机侧清理。
+第三条最容易漏。网关日志写在宿主机的 `/home/ubuntu/stacks/gateway/logs/` 下，Docker 的日志上限**管不到它**（那只管容器的 stdout / stderr），只能靠主机侧清理。
 
 > **注意**：这里必须用 `rotate-logs.sh`，不要改成 `find ... -mtime +14 -delete`。nginx 持有活动日志的打开句柄、而这些文件的 mtime 永远是「刚刚」，`-mtime +14` 一条也匹配不到——那条命令看着像在清理，实际什么都没删，日志照样涨到写满磁盘。脚本的做法是「改名归档 → 让 nginx 重开日志 → 删除过期归档」，三者的顺序都不能少。
 
-`certbot.sh renew` 只在证书快到期时才真正续期，其余时候什么也不做。末尾那串 `>> /var/log/... 2>&1` 是把输出写进日志文件，方便以后回查。
+`certbot.sh renew` 只在证书快到期时才真正续期，其余时候什么也不做。末尾那串 `>> /home/ubuntu/logs/... 2>&1` 是把输出写进日志文件，方便以后回查。
 
-> **注意**：必须用 `sudo`。日志写在 `/var/log/` 下，普通用户的 crontab 没有写权限，会静默失败，直到某天证书过期、网站打不开才发现。
+> **注意**：`/home/ubuntu/logs/` 必须先存在（第 2.3 步已建）。`>>` 不会替你建目录，目录不在时整条 cron 静默失败——`crontab -l` 里看着挂好了，实际什么也没跑，直到某天证书过期、网站打不开才发现。
+
+> **注意**：cron 的执行环境很干净，`PATH` 里没有你交互式登录时的那些路径。三条命令都写的是绝对路径或先 `cd` 再执行，所以不受影响；将来往这里加命令时也要照这个写法，不要在 cron 里依赖相对路径或 shell 别名。
 
 > 五个字段的含义是 `分 时 日 月 星期`，`*` 表示「都行」。第一次跑 `crontab -e` 会问选哪个编辑器，选 `nano` 最简单，存盘是 `Ctrl+O` 回车、再 `Ctrl+X`。
 
@@ -533,7 +593,7 @@ crontab -l
 ### 9.3 手动跑一次续期
 
 ```bash
-cd /opt/stacks/gateway
+cd /home/ubuntu/stacks/gateway
 ```
 
 ```bash
@@ -589,7 +649,7 @@ proxy_buffering off;
 ### 10.6 重新渲染并验证
 
 ```bash
-cd /opt/stacks/gateway
+cd /home/ubuntu/stacks/gateway
 ```
 
 ```bash

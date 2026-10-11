@@ -1,6 +1,6 @@
 # FutureAI API 应用 + 数据库
 #
-# 部署位置: /opt/stacks/futureai-api/
+# 部署位置: /home/ubuntu/stacks/futureai-api/
 #
 # 前置（一次性，见 deploy/README.md）:
 #   docker network create --subnet 172.20.0.0/16 --ip-range 172.20.128.0/17 gateway-proxy

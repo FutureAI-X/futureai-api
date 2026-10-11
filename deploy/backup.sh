@@ -3,21 +3,21 @@
 # 备份 FutureAI API 的数据库与配置。
 #
 # 用法（在服务器上，从仓库的 deploy/ 目录或在服务器上的任意位置调用）:
-#   ./backup.sh                 # 备份到 /opt/backups/futureai-api
+#   ./backup.sh                 # 备份到 /home/ubuntu/backups/futureai-api
 #   BACKUP_DIR=/data/bak ./backup.sh
 #   KEEP=30 ./backup.sh         # 保留最近 30 份（默认 14）
 #
-# 挂 cron（root 用户，因为要读 .env 并写 /opt）:
-#   sudo crontab -e
-#   30 3 * * * /opt/stacks/futureai-api/backup.sh >> /var/log/futureai-api-backup.log 2>&1
+# 挂 cron（普通用户即可：.env 与备份目录都在自己的主目录下，不需要 sudo）:
+#   crontab -e
+#   30 3 * * * /home/ubuntu/stacks/futureai-api/backup.sh >> /home/ubuntu/logs/futureai-api-backup.log 2>&1
 #
 # 注意：没验证过的备份等于没有备份。改完 schema 或升级之后，
 #    请按 NOTES.md 的步骤实际恢复一次（见 restore.sh）。
 
 set -euo pipefail
 
-STACK_DIR="${STACK_DIR:-/opt/stacks/futureai-api}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/backups/futureai-api}"
+STACK_DIR="${STACK_DIR:-/home/ubuntu/stacks/futureai-api}"
+BACKUP_DIR="${BACKUP_DIR:-/home/ubuntu/backups/futureai-api}"
 KEEP="${KEEP:-14}"
 COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
 ENV_FILE="$STACK_DIR/.env"
