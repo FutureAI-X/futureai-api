@@ -66,12 +66,7 @@ export function Login() {
 
         {/* 登录卡片 */}
         <div className='bg-card border-border/60 rounded-2xl border p-8 shadow-lg'>
-          <div className='mb-6'>
-            <h2 className='text-2xl font-semibold tracking-tight'>登录</h2>
-            <p className='text-muted-foreground mt-2 text-sm'>
-              使用您的账号登录 FutureAI API
-            </p>
-          </div>
+          <h2 className='mb-6 text-2xl font-semibold tracking-tight'>登录</h2>
 
           <form onSubmit={handleSubmit} className='space-y-4'>
             {/* 错误提示 */}
@@ -165,6 +160,22 @@ export function Login() {
               {isLoading ? '登录中...' : '登录'}
             </button>
           </form>
+        </div>
+
+        {/* 注册说明。本站不开放自助注册，账号随咨询服务发放，
+            因此这里给的是说明 + 咨询入口，而不是一个注册按钮。 */}
+        <div className='border-border/60 bg-muted/30 mt-6 rounded-xl border px-4 py-3 text-center'>
+          <p className='text-muted-foreground text-xs leading-relaxed'>
+            本站点不开放注册入口，购买咨询服务赠送平台账号及等价值积分
+          </p>
+          <a
+            href='https://future-ai.feishu.cn/wiki/P8tuwmPiCiMrRtk5UEYccXDCn6d'
+            target='_blank'
+            rel='noopener noreferrer'
+            className='text-primary mt-1.5 inline-block text-xs font-medium underline underline-offset-4 hover:opacity-80'
+          >
+            了解详情 →
+          </a>
         </div>
 
         {/* 底部链接 */}
