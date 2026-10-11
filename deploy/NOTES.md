@@ -14,7 +14,7 @@
 
 共享网络 `gateway-proxy`（172.20.0.0/16）是手工创建的，没有交给任何 compose 项目管理。由 compose 管理的网络，在项目 `down` 时可能被一并删除，导致服务瞬间失去网络。
 
-**配置放在 `/home/ubuntu/stacks/` 而不是 `/opt`**：`/opt` 属于 root，部署用户（`ubuntu`）在那里既建不了目录也覆盖不了已存在的文件，`scp` 会断在权限上。整套编排里没有任何一处需要 root——镜像在别的机器上构建、容器靠 docker 组启动、备份与日志都写在自己的主目录——唯一需要 `sudo` 的是装 Docker 并加入 docker 组（[README 第 2.1 步](README.md#21-装-docker-并让用户免-sudo)），那一步不做完，后面每条 `docker` 命令都会失败；此外还有目录属主不对时的一次性 `chown`（[第 2.3 步](README.md#23-建配置目录)）。
+**配置放在 `/home/ubuntu/stacks/` 而不是 `/opt`**：`/opt` 属于 root，部署用户（`ubuntu`）在那里既建不了目录也覆盖不了已存在的文件，`scp` 会断在权限上。整套编排里绝大多数操作都不再需要 root——镜像在别的机器上构建、容器靠 docker 组启动、备份与日志都写在自己的主目录。仍然需要 `sudo` 的有四处，各有具体原因：装 Docker 并加入 docker 组（[README 第 2.1 步](README.md#21-装-docker-并让用户免-sudo)），那一步不做完，后面每条 `docker` 命令都会失败；目录属主不对时的一次性 `chown`（[第 2.3 步](README.md#23-建配置目录)）；证书的签发与续期（[第 8.4 步](README.md#84-签发证书)）——certbot 容器以 root 写出的私钥只有 root 读得到，这一步没法退化成普通用户操作。
 
 有一条反直觉的地方：**主目录归你，不等于 Docker 不会在里面造出属于 root 的目录**。挂载源目录不存在时，Docker 会以 root 的身份把它建出来，之后 `rotate-logs.sh` 就没法在里面改名或删除文件——表现是 cron 天天失败而日志照涨。所以会被挂载的目录（`gateway/logs`、`gateway/certbot/www`）都在 [README 第 2.3 步](README.md#23-建配置目录)手工建好，自检项见[第 5 章](#5-上线自检清单)。
 
@@ -149,7 +149,7 @@ curl -m 3 telnet://<服务器IP>:5432
       ```
 
 - [ ] 登录后立即修改 root 密码，并清空 `.env` 里的 `INITIAL_ROOT_PASSWORD`。
-- [ ] 证书续期的 cron 已挂上，并且**手动跑过一次确认能成功**。用普通用户 `crontab -e` 挂（不要 `sudo`），日志写在 `/home/ubuntu/logs/`——确认该目录存在、属主是你的用户，否则 `>>` 会静默失败，直到证书过期、网站打不开才发现。
+- [ ] 证书续期的 cron 已挂上，并且**手动跑过一次确认能成功**。它挂在 **root** 的 crontab 下（`sudo crontab -e`），因为脚本要读只有 root 读得到的私钥；另外两条（备份、日志清理）挂在当前用户的。日志写在 `/home/ubuntu/logs/`——确认该目录存在，否则 `>>` 会静默失败，直到证书过期、网站打不开才发现。
 - [ ] `/home/ubuntu/stacks` 下**没有 root 属主的目录**：
 
       ```bash
@@ -285,7 +285,7 @@ TAG=v1.2.3 ./deploy/build-image.sh linux/amd64
 /home/ubuntu/stacks/futureai-api/backup.sh
 ```
 
-挂到 cron（**不要 `sudo`**，见 [README 第 9.1 步](README.md#91-挂定时任务)）：
+挂到 cron（这条**不要 `sudo`**，作为当前用户挂即可；证书续期那条相反，必须挂到 root 的 crontab，见 [README 第 9.1 步](README.md#91-挂定时任务)）：
 
 ```bash
 crontab -e

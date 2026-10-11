@@ -100,7 +100,7 @@ sudo usermod -aG docker ubuntu
 
 > **注意**：改完**必须重新登录**才生效——组信息是登录那一刻确定的。开一个新 SSH 会话，`id -nG` 里能看到 `docker`、`docker ps` 不再报 `permission denied`，才算好了。当场用 `newgrp docker` 只对那一个新开的 shell 有效，别拿它当验证。
 
-> **注意**：加入 `docker` 组等于给了这个用户无条件的 root 权限（能挂载任意宿主机目录起容器、能读出任何镜像里的密钥）。这台机器上除了你不要再留其他可登录账号。全文需要 `sudo` 的只剩这一处，以及第 2.3 步那个「目录属主不对时才用得上」的 `chown`。
+> **注意**：加入 `docker` 组等于给了这个用户无条件的 root 权限（能挂载任意宿主机目录起容器、能读出任何镜像里的密钥）。这台机器上除了你不要再留其他可登录账号。全文需要 `sudo` 的一共四处，都是刻意的：本步的 `usermod`、第 2.3 步的 `chown`（目录属主不对时才用得上）、第 8.4 步的 `certbot.sh`、以及第 9.1 步挂在 root crontab 下的那条续期任务。后两处的理由见第 8.4 步。
 
 > 国内拉 `download.docker.com` 慢或不通时，可以改用阿里云等镜像源，或临时走官方脚本 `curl -fsSL https://get.docker.com | sh`——它更快，但 Docker 官方不推荐用于生产，且升级不走 `apt`。
 
@@ -523,12 +523,22 @@ cd /home/ubuntu/stacks/gateway
 签发：
 
 ```bash
-./scripts/certbot.sh issue
+sudo ./scripts/certbot.sh issue
 ```
+
+> **注意**：这里**必须**用 `sudo`。certbot 容器以 root 运行，签下来的私钥落在 `certbot/conf/archive/` 下，`archive` 目录是 `root:root 0700`、私钥是 `root:root 0600`。脚本最后一步要读这份私钥复制到 `certs/`，普通用户连 `stat` 都过不去。漏了 `sudo` 的症状很误导：LE 那边明明打印了 `Successfully received certificate`，脚本却报「找不到 …fullchain.pem，证书尚未签发」——证书签成了，只是它读不到。
 
 **它做了什么**：启动一个 certbot 容器向 Let's Encrypt 申请证书。Let's Encrypt 必须先确认「这个域名确实指向你这台机器」，办法是它去访问 `http://你的域名/.well-known/acme-challenge/xxx`，网关返回它要的内容。验证通过后证书下发，脚本自动复制到 `certs/` 并重载网关。
 
 **预期看到**：一串 `Congratulations!` 之类的输出，最后是 `==> 证书已更新，重载网关`。
+
+**已经签成但卡在最后一步时**（脚本报「证书尚未签发」而 LE 显示成功），**不要重跑 `issue`**——重签会消耗 Let's Encrypt 每周 5 张的重复证书额度。改用：
+
+```bash
+sudo ./scripts/certbot.sh renew
+```
+
+它发现证书还没到期就不重新申请，只做「复制 + 重载」这一步。
 
 **如果报错**：最常见的是解析还没生效，或者 80 端口没放行。
 
@@ -548,18 +558,30 @@ curl -I https://futureaiapi.com/health
 
 ### 9.1 挂定时任务
 
+三条任务要分挂在**两个** crontab 下，这是刻意的，不是笔误：
+
+- **证书续期挂在 root 的 crontab**。它要读 Let's Encrypt 的私钥（`root:root 0600`，所在目录 `0700`），普通用户读不到，理由与第 8.4 步那条注意相同。
+- **另外两条挂在当前用户的 crontab**。它们只读写你自己的主目录；挂到 root 下反而会让备份文件和日志归 root，之后你自己改不动，等于把刚修好的权限问题又装回去。
+
+先挂当前用户的两条：
+
 ```bash
 crontab -e
 ```
 
-**不要加 `sudo`**。脚本和日志都在你自己的主目录下，用当前用户的 crontab 即可；用 root 的 crontab 反而会让日志文件归 root，之后你自己改不动。
+```
+30 3 * * * /home/ubuntu/stacks/futureai-api/backup.sh >> /home/ubuntu/logs/futureai-api-backup.log 2>&1
+0  4 * * * cd /home/ubuntu/stacks/gateway && ./scripts/rotate-logs.sh >> /home/ubuntu/logs/rotate-logs.log 2>&1
+```
 
-在文件末尾加这三行：
+再挂 root 的那条：
+
+```bash
+sudo crontab -e
+```
 
 ```
 17 3 * * * cd /home/ubuntu/stacks/gateway && ./scripts/certbot.sh renew >> /home/ubuntu/logs/certbot-renew.log 2>&1
-30 3 * * * /home/ubuntu/stacks/futureai-api/backup.sh >> /home/ubuntu/logs/futureai-api-backup.log 2>&1
-0  4 * * * cd /home/ubuntu/stacks/gateway && ./scripts/rotate-logs.sh >> /home/ubuntu/logs/rotate-logs.log 2>&1
 ```
 
 **三条，一条都不能少。**
@@ -588,7 +610,13 @@ crontab -e
 crontab -l
 ```
 
-应该能看到刚才加的那三行。
+应该能看到刚才加的两条（备份、日志清理）。再确认 root 的那一条：
+
+```bash
+sudo crontab -l
+```
+
+应该看到证书续期那条。
 
 ### 9.3 手动跑一次续期
 
@@ -597,7 +625,7 @@ cd /home/ubuntu/stacks/gateway
 ```
 
 ```bash
-./scripts/certbot.sh renew
+sudo ./scripts/certbot.sh renew
 ```
 
 不必等到凌晨。手动跑一次才能确认它真的能用，而不是等三个月后才发现不行。
