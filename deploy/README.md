@@ -33,6 +33,7 @@
 | 我想… | 看 |
 |---|---|
 | 搞懂不认识的词（镜像、反向代理、证书与 CA、A 记录、SNI、cron） | [GLOSSARY.md](GLOSSARY.md) |
+| 不会用 nano 或 vi 编辑文件 | [EDITORS.md](EDITORS.md) |
 | 知道为什么这么设计 | [NOTES.md](NOTES.md#1-为什么是这套结构) |
 | 上线前逐项自检 | [NOTES.md](NOTES.md#5-上线自检清单) |
 | 升级 / 回滚 / 备份 | [NOTES.md](NOTES.md#6-升级) |
@@ -55,54 +56,111 @@
 | 9 | 服务器 | 挂定时任务（证书续期、备份、日志清理） |
 | 10 | 服务器 | （以后）再往这台机器上加服务 |
 
-**1 到 7 做完就是一个可用的部署**（自签证书，浏览器会警告）。第 8 章需要域名，没配好解析可以稍后再做；第 9 章不依赖域名，应当完成。第 10 章现在用不到。
+第 1 至 7 章完成即构成一个可用的部署（自签证书，浏览器会警告）。第 8 章需要域名，解析未配置好可稍后再做；第 9 章不依赖域名，应当完成。第 10 章当前用不到。
 
 ## 2 服务器：一次性准备
 
 ### 2.1 装 Docker 并让用户免 sudo
 
-第 2.4 步建网络就要用 `docker`，而本文后面所有 `docker` 命令都不带 `sudo`。这两件事的前提是：这台机器装了 Docker，且当前用户在 `docker` 组里。
+第 2.4 步建共享网络就要用 `docker`，而本文后续所有 `docker` 命令都不带 `sudo`。这两件事的前提是：服务器已安装 Docker，且当前用户属于 `docker` 组。
 
-先看装没装：
+先确认是否已安装：
 
 ```bash
 docker --version
 ```
 
-有版本号就跳过安装，直接做下面的加组。没有的话，在服务器上装（用 Ubuntu 官方源，之后能跟着 `apt upgrade` 一起更新）：
+有版本号则跳过安装，直接做本节末尾的「加入 docker 组」。
+
+安装使用 Ubuntu 官方软件源，安装完成后可随 `apt upgrade` 一起更新。
+
+更新软件包索引：
 
 ```bash
 sudo apt-get update
+```
+
+安装下载工具：
+
+```bash
 sudo apt-get install -y ca-certificates curl
+```
+
+创建存放密钥的目录：
+
+```bash
 sudo install -m 0755 -d /etc/apt/keyrings
+```
+
+导入 Docker 的签名公钥：
+
+```bash
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+```
+
+使公钥对所有人可读：
+
+```bash
 sudo chmod a+r /etc/apt/keyrings/docker.asc
+```
+
+添加 Docker 软件源：
+
+```bash
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+```
+
+再次更新软件包索引：
+
+```bash
 sudo apt-get update
+```
+
+安装 Docker 及构建、编排插件：
+
+```bash
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-`docker-compose-plugin` 与 `docker-buildx-plugin` 必须带上：本文用的是 `docker compose`（v2 子命令），不是老的 `docker-compose`。
+`docker-compose-plugin` 与 `docker-buildx-plugin` 必须包含在内：本文使用 `docker compose`（v2 子命令），不是旧版的 `docker-compose`。
 
-装完确认三件套都在：
+确认三项均已安装：
 
 ```bash
-docker --version && docker compose version && docker buildx version
+docker --version
 ```
 
-再把当前用户加进 `docker` 组，这样后面每条命令都不用 `sudo`：
+```bash
+docker compose version
+```
+
+```bash
+docker buildx version
+```
+
+将当前用户加入 `docker` 组，其后每条 `docker` 命令都不必再加 `sudo`：
 
 ```bash
 sudo usermod -aG docker ubuntu
 ```
 
-> **注意**：`-a` 不能省。`-G` 的含义是「设置附加组」，不带 `-a` 会把 `ubuntu` 此前所属的其它附加组全部踢掉，只留 `docker`。
+> **注意**：`-a` 不能省略。`-G` 的含义是「设置附加组」，不带 `-a` 会移除 `ubuntu` 此前所属的其它附加组，只保留 `docker`。
 
-> **注意**：改完**必须重新登录**才生效——组信息是登录那一刻确定的。开一个新 SSH 会话，`id -nG` 里能看到 `docker`、`docker ps` 不再报 `permission denied`，才算好了。当场用 `newgrp docker` 只对那一个新开的 shell 有效，别拿它当验证。
+重新登录服务器后确认组已生效（组信息在登录那一刻确定，`newgrp docker` 只对新建的 shell 有效，不能作为验证手段）：
 
-> **注意**：加入 `docker` 组等于给了这个用户无条件的 root 权限（能挂载任意宿主机目录起容器、能读出任何镜像里的密钥）。这台机器上除了你不要再留其他可登录账号。全文需要 `sudo` 的一共四处，都是刻意的：本步的 `usermod`、第 2.3 步的 `chown`（目录属主不对时才用得上）、第 8.4 步的 `certbot.sh`、以及第 9.1 步挂在 root crontab 下的那条续期任务。后两处的理由见第 8.4 步。
+```bash
+id -nG
+```
 
-> 国内拉 `download.docker.com` 慢或不通时，可以改用阿里云等镜像源，或临时走官方脚本 `curl -fsSL https://get.docker.com | sh`——它更快，但 Docker 官方不推荐用于生产，且升级不走 `apt`。
+输出中应包含 `docker`。再确认可免 `sudo` 访问 Docker：
+
+```bash
+docker ps
+```
+
+预期列出一张容器表；当前没有容器时只有表头。
+
+> 若拉取 `download.docker.com` 缓慢或不通，可改用阿里云等镜像源，或临时执行 `curl -fsSL https://get.docker.com | sh`。后者更快，但 Docker 官方不推荐用于生产环境，且升级不经过 `apt`。
 
 ### 2.2 查 CPU 架构
 
@@ -110,24 +168,34 @@ sudo usermod -aG docker ubuntu
 uname -m
 ```
 
-`x86_64` → 后面用 `linux/amd64`；`aarch64` → 后面用 `linux/arm64`。**记下来**，第 3.1 步要用。
+`x86_64` 对应 `linux/amd64`，`aarch64` 对应 `linux/arm64`。记下结果，第 3.1 步要用。
 
 ### 2.3 建配置目录
+
+创建目录树：
 
 ```bash
 mkdir -p /home/ubuntu/stacks/gateway/logs /home/ubuntu/stacks/gateway/certbot/www \
          /home/ubuntu/stacks/futureai-api /home/ubuntu/logs
 ```
 
-网关和应用的配置都放在 `/home/ubuntu/stacks/` 下，一个服务一个子目录（第 10 章再往这台机器上加服务时，也是照这个形状加）。`/home/ubuntu/logs/` 放定时任务的输出，见第 9 章。
+网关和应用的配置各占 `/home/ubuntu/stacks/` 下的一个子目录（第 10 章再往这台机器上加服务时，照同样的形状增加）。`/home/ubuntu/logs/` 存放定时任务的输出，见第 9 章。
 
-**为什么放在主目录而不是 `/opt`**：`/opt` 属于 root，普通用户连 `mkdir` 都过不去，`scp` 传上去的文件也会因权限失败。主目录下的东西本来就归你，这一章之后的所有命令——`scp`、`chmod`、挂 cron——都不需要 `sudo`。
+确认属主是当前用户：
 
-> **注意**：`gateway/logs` 与 `gateway/certbot/www` 必须在这里手工建出来，不能让 Docker 替你建。这两个目录都在网关的挂载列表里（见 [gateway/docker-compose.yml](gateway/docker-compose.yml)），而 Docker 遇到不存在的挂载源目录会**以 root 的身份**创建它——之后 ubuntu 就没法在里面改名或删除文件，第 9 章那条日志清理 cron 会天天失败，而日志照涨。
+```bash
+ls -ld /home/ubuntu/stacks /home/ubuntu/logs
+```
+
+输出中的属主应为 `ubuntu`。若为 `root`，其下的目录与文件均归 root，后续步骤会因权限失败；此时改回来：
+
+```bash
+sudo chown -R ubuntu:ubuntu /home/ubuntu/stacks /home/ubuntu/logs
+```
+
+> **注意**：`gateway/logs` 与 `gateway/certbot/www` 必须在上面手工创建，不能让 Docker 代建。这两个目录都在网关的挂载列表里（见 [gateway/docker-compose.yml](gateway/docker-compose.yml)），而 Docker 遇到不存在的挂载源目录会以 root 的身份创建它，其后当前用户无法在其中改名或删除文件，第 9 章那条日志清理任务会持续失败。
 >
-> `gateway/certs` 不用在这里建：第 4.4 步的 `self-signed.sh` 会自己 `mkdir` 出来，归你所有。但也**不要**图省事用 `sudo mkdir` 提前建任何一层，那样建出来的目录属主是 root，问题只是换个地方出现。
-
-> **注意**：上面这些目录的属主必须是你自己（`ls -ld /home/ubuntu/stacks /home/ubuntu/logs` 看一眼）。哪一层是 `root root`，就把它改回来：`sudo chown -R ubuntu:ubuntu /home/ubuntu/stacks /home/ubuntu/logs`。
+> `gateway/certs` 不在上面的列表里：第 4.4 步的 `self-signed.sh` 会自行创建，属主同样是当前用户。
 
 ### 2.4 建共享网络
 
@@ -183,7 +251,7 @@ docker pull alpine:3.22
 完成，镜像包 14M，标签 20260915225600。
 ```
 
-标签默认取构建时刻（年月日时分秒），所以**你实际看到的数字和这里不会一样**。本文后面统一拿 `20260915225600` 当占位符。第 5.1 步和第 5.9 步还要用它，**先记下来**，换了机器就翻不回这一步了。
+标签默认取构建时刻（年月日时分秒），实际输出与本例不会相同。本文后续统一使用 `20260915225600` 作为占位符。第 5.1 步和第 5.9 步还要用到它，先记下来：离开这一步后无法回查。
 
 ### 3.3 上传网关配置
 
@@ -257,7 +325,7 @@ docker compose up -d --force-recreate
 
 它只用于 ACME 注册（证书与账号相关的事务联系）。**不要指望它做到期提醒**：Let's Encrypt 已于 2025 年 6 月停发证书到期通知邮件，续期只能靠第 9.1 步那条 cron。
 
-`vi` 里依次按 `Esc`、`:wq`、回车保存退出。
+保存退出：依次按 `Esc`、输入 `:wq`、回车。其余按键见 [EDITORS.md 第 2 章](EDITORS.md#2-vi)。
 
 ### 4.4 生成自签证书
 
@@ -391,13 +459,13 @@ INITIAL_ROOT_PASSWORD=    ← 自己设一个管理员初始密码，登录时�
 FUTUREAI_API_TAG=         ← 第 3.2 步的标签，形如 20260915225600
 ```
 
-`vi` 里依次按 `Esc`、`:wq`、回车保存退出。
+保存退出见 [EDITORS.md 第 2 章](EDITORS.md#2-vi)。
 
 > **注意**：`JWT_SECRET` 或 `SECRET_KEY` 留空、过短，服务会拒绝启动，这是刻意的 fail-closed。
 
 > **注意**：`FUTUREAI_API_TAG` 要和第 3.2 步的标签一字不差，否则 `docker compose up -d` 会报 `image "futureai-api:xxx" not found`。
 
-> **注意**：不要图省事填 `latest`。打镜像时确实顺带打了这个标签，但它会在每次 `docker load` 时**静默指向新版本**：改了标签 `docker compose up -d` 未必重建容器，服务器上跑的到底是哪一版就说不清了，回滚也无从下手（见 [NOTES.md 第 7 章](NOTES.md#7-回滚)）。
+> **注意**：不要为求方便填 `latest`。打镜像时确实顺带打了这个标签，但它会在每次 `docker load` 时**静默指向新版本**：改了标签 `docker compose up -d` 未必重建容器，服务器上运行的究竟是哪一版就说不清了，回滚也无从下手（见 [NOTES.md 第 7 章](NOTES.md#7-回滚)）。
 
 ### 5.10 起应用和数据库
 
@@ -419,7 +487,7 @@ database migration started
 FutureAI API started on port 3001
 ```
 
-卡在 `database migration` 或直接退出，多半是 `.env` 里的 `POSTGRES_PASSWORD` 填错了。
+日志停在 `database migration` 或进程直接退出，多半是 `.env` 里的 `POSTGRES_PASSWORD` 填错了。
 
 ## 6 服务器：验证三层是否打通
 
@@ -451,7 +519,7 @@ curl -k -s --resolve futureaiapi.com:443:127.0.0.1 https://futureaiapi.com/api/n
 
 ### 6.4 确认 TRUSTED_PROXIES 生效
 
-**这项最容易漏，后果也最严重**，它决定应用能不能认出用户的真实 IP。
+本项最容易漏，后果也最严重：它决定应用能否识别用户的真实 IP。
 
 从外部（你自己的电脑）打开 `https://futureaiapi.com`，故意输错几次密码，然后回服务器上看日志：
 
@@ -532,7 +600,7 @@ sudo ./scripts/certbot.sh issue
 
 **预期看到**：一串 `Congratulations!` 之类的输出，最后是 `==> 证书已更新，重载网关`。
 
-**已经签成但卡在最后一步时**（脚本报「证书尚未签发」而 LE 显示成功），**不要重跑 `issue`**——重签会消耗 Let's Encrypt 每周 5 张的重复证书额度。改用：
+**已签发但止步于最后一步时**（脚本报「证书尚未签发」而 LE 显示成功），不要重跑 `issue`——重签会消耗 Let's Encrypt 每周 5 张的重复证书额度。改用：
 
 ```bash
 sudo ./scripts/certbot.sh renew
@@ -554,14 +622,14 @@ curl -I https://futureaiapi.com/health
 
 ## 9 服务器：挂定时任务
 
-> 本章与前两章无关，**即使没有域名也必须做**。三条 cron 里只有第一条是证书续期，另外两条是数据库备份与日志清理。
+> 本章与前两章无关，没有域名也必须完成。三条任务中只有第一条是证书续期，另外两条是数据库备份与日志清理。
 
 ### 9.1 挂定时任务
 
-三条任务要分挂在**两个** crontab 下，这是刻意的，不是笔误：
+三条任务分挂在两个 crontab 下，这一点容易看漏：
 
-- **证书续期挂在 root 的 crontab**。它要读 Let's Encrypt 的私钥（`root:root 0600`，所在目录 `0700`），普通用户读不到，理由与第 8.4 步那条注意相同。
-- **另外两条挂在当前用户的 crontab**。它们只读写你自己的主目录；挂到 root 下反而会让备份文件和日志归 root，之后你自己改不动，等于把刚修好的权限问题又装回去。
+- 证书续期挂在 root 的 crontab。它要读 Let's Encrypt 的私钥（`root:root 0600`，所在目录 `0700`），普通用户读不到，理由与第 8.4 步那条注意相同。
+- 另外两条挂在当前用户的 crontab。它们只读写你自己的主目录；挂到 root 下反而会让备份文件和日志归 root，此后当前用户无法修改，等于把刚刚解决的权限问题重新引入。
 
 先挂当前用户的两条：
 
@@ -569,10 +637,25 @@ curl -I https://futureaiapi.com/health
 crontab -e
 ```
 
+首次运行会提示 `no crontab for ubuntu - using an empty one`，这不是错误，表示该用户还没有定时任务。若随后要求选择编辑器，按编号选择：输入 `1` 选 `nano`（默认项，直接回车即可），输入 `2` 选 `vim`。选定后该用户不再询问，要更换运行 `select-editor`。
+
+每行的五个字段依次是 `分 时 日 月 星期`，`*` 表示该字段任意值。在文件末尾加入以下两行：
+
 ```
 30 3 * * * /home/ubuntu/stacks/futureai-api/backup.sh >> /home/ubuntu/logs/futureai-api-backup.log 2>&1
 0  4 * * * cd /home/ubuntu/stacks/gateway && ./scripts/rotate-logs.sh >> /home/ubuntu/logs/rotate-logs.log 2>&1
 ```
+
+保存退出：
+
+- `nano`：依次按 `Ctrl+O`、回车、`Ctrl+X`。
+- `vi`：依次按 `Esc`、输入 `:wq`、回车。
+
+nano 的其余常用按键见 [EDITORS.md 第 1 章](EDITORS.md#1-nano)。
+
+未保存就退出等于没有添加，`crontab -e` 只在保存时才写进去。
+
+若内容有语法错误，保存时会报 `errors in crontab file, can't install`，并询问是否重新编辑；此时按提示重新编辑并修正，不要直接放弃，否则前面写的都不会生效。
 
 再挂 root 的那条：
 
@@ -580,11 +663,13 @@ crontab -e
 sudo crontab -e
 ```
 
+root 的 crontab 是独立的一份，要再走一次同样的编辑与保存流程（同样可能要求选择编辑器）。在文件末尾加入这一行：
+
 ```
 17 3 * * * cd /home/ubuntu/stacks/gateway && ./scripts/certbot.sh renew >> /home/ubuntu/logs/certbot-renew.log 2>&1
 ```
 
-**三条，一条都不能少。**
+三条缺一不可，各自被漏掉后的后果如下。
 
 | 时间 | 做什么 | 漏了会怎样 |
 |---|---|---|
@@ -592,17 +677,15 @@ sudo crontab -e
 | 每天 3:30 | 备份数据库和 `.env` | 出事时没有可恢复的备份 |
 | 每天 4:00 | 归档并清理网关日志 | **日志无限增长写满磁盘，数据库同盘会一起挂** |
 
-第三条最容易漏。网关日志写在宿主机的 `/home/ubuntu/stacks/gateway/logs/` 下，Docker 的日志上限**管不到它**（那只管容器的 stdout / stderr），只能靠主机侧清理。
+第三条最容易漏。网关日志写在宿主机的 `/home/ubuntu/stacks/gateway/logs/` 下，Docker 的日志上限**不覆盖它**（那只管容器的 stdout / stderr），只能靠主机侧清理。
 
-> **注意**：这里必须用 `rotate-logs.sh`，不要改成 `find ... -mtime +14 -delete`。nginx 持有活动日志的打开句柄、而这些文件的 mtime 永远是「刚刚」，`-mtime +14` 一条也匹配不到——那条命令看着像在清理，实际什么都没删，日志照样涨到写满磁盘。脚本的做法是「改名归档 → 让 nginx 重开日志 → 删除过期归档」，三者的顺序都不能少。
+> **注意**：这里必须用 `rotate-logs.sh`，不要改成 `find ... -mtime +14 -delete`。nginx 持有活动日志的打开句柄、而这些文件的 mtime 永远是「刚刚」，`-mtime +14` 一条也匹配不到——那条命令看似在清理，实际什么都没删，日志继续增长直到写满磁盘。脚本的做法是「改名归档 → 让 nginx 重开日志 → 删除过期归档」，三者的顺序都不能少。
 
 `certbot.sh renew` 只在证书快到期时才真正续期，其余时候什么也不做。末尾那串 `>> /home/ubuntu/logs/... 2>&1` 是把输出写进日志文件，方便以后回查。
 
-> **注意**：`/home/ubuntu/logs/` 必须先存在（第 2.3 步已建）。`>>` 不会替你建目录，目录不在时整条 cron 静默失败——`crontab -l` 里看着挂好了，实际什么也没跑，直到某天证书过期、网站打不开才发现。
+> **注意**：`/home/ubuntu/logs/` 必须先存在（第 2.3 步已建）。`>>` 不会替你创建目录，目录不在时整条 cron 静默失败——`crontab -l` 显示任务已挂上，实际什么也没执行，直到某天证书过期、网站打不开才发现。
 
 > **注意**：cron 的执行环境很干净，`PATH` 里没有你交互式登录时的那些路径。三条命令都写的是绝对路径或先 `cd` 再执行，所以不受影响；将来往这里加命令时也要照这个写法，不要在 cron 里依赖相对路径或 shell 别名。
-
-> 五个字段的含义是 `分 时 日 月 星期`，`*` 表示「都行」。第一次跑 `crontab -e` 会问选哪个编辑器，选 `nano` 最简单，存盘是 `Ctrl+O` 回车、再 `Ctrl+X`。
 
 ### 9.2 确认定时任务已挂上
 
@@ -657,7 +740,7 @@ networks:
 
 ### 10.3 网关加一个 server 块
 
-复制 [gateway/templates/default.conf.template](gateway/templates/default.conf.template) 里 futureai-api 那个块，改四处：`server_name`、`access_log` 文件名、`set $xxx_up`（`服务名:端口`）、以及流式服务需要的超时设置。**模板文件末尾有逐条说明。**
+复制 [gateway/templates/default.conf.template](gateway/templates/default.conf.template) 里 futureai-api 那个块，改四处：`server_name`、`access_log` 文件名、`set $xxx_up`（`服务名:端口`）、以及流式服务需要的超时设置。模板文件末尾有逐条说明。
 
 ### 10.4 给流式服务加超时（不是流式就跳过）
 
@@ -666,7 +749,7 @@ proxy_read_timeout 600s;
 proxy_buffering off;
 ```
 
-> **注意**：那个服务如果是**流式**返回的（一次回答持续几十秒到几分钟），必须加这两行。漏了的话长回答会在中途被**静默截断**，连接是正常断开的，日志里看不出任何异常，现象只是「回答到一半卡住」。另外证书要重新签，SAN 里得有新域名。
+> **注意**：那个服务如果是**流式**返回的（一次回答持续几十秒到几分钟），必须加这两行。漏了的话长回答会在中途被**静默截断**，连接是正常断开的，日志里看不出任何异常，现象只是「回答到一半停止」。另外证书要重新签，SAN 里得有新域名。
 
 ### 10.5 在网关 .env 加域名，并同步改 filter
 
