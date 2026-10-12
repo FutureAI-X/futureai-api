@@ -211,11 +211,19 @@ func precheckUniqueIndexes() error {
 
 // migrateDB 数据库迁移
 func migrateDB() error {
-	// 清理 tasks 表中 user_id 为 NULL 的记录（AutoMigrate 加 NOT NULL 约束前需要先处理）
-	if err := DB.Exec("UPDATE tasks SET user_id = 0 WHERE user_id IS NULL").Error; err != nil {
-		common.SysLog("pre-migrate cleanup (tasks.user_id nulls): " + err.Error())
-	} else {
-		common.SysLog("pre-migrate cleanup: tasks.user_id nulls set to 0")
+	// 清理 tasks 表中 user_id 为 NULL 的记录（AutoMigrate 加 NOT NULL 约束前需要先处理）。
+	//
+	// 表不存在时直接跳过：全新部署上 tasks 由下面的 AutoMigrate 创建，此处先跑 UPDATE
+	// 只会得到 "relation \"tasks\" does not exist"。那是首次启动的正常路径，不是故障 ——
+	// 照原样打出来会被读成启动失败，所以这种情况下不打任何日志。
+	if DB.Migrator().HasTable("tasks") {
+		// 同理，无事可做时也不打日志：每次启动都打一行「已清理」同样是噪音，
+		// 只在真的改动了行数时才报出来。
+		if res := DB.Exec("UPDATE tasks SET user_id = 0 WHERE user_id IS NULL"); res.Error != nil {
+			common.SysError("pre-migrate cleanup (tasks.user_id nulls): " + res.Error.Error())
+		} else if res.RowsAffected > 0 {
+			common.SysLogf("pre-migrate cleanup: 已将 %d 行 tasks.user_id 由 NULL 置为 0", res.RowsAffected)
+		}
 	}
 
 	// 唯一索引前置检查：给出可操作的错误信息，而非底层数据库报错

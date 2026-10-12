@@ -524,14 +524,18 @@ func CreateRootUserIfNeed() error {
 
 	// 初始密码绝不写入日志：日志会流向容器日志、journald 或第三方聚合平台，
 	// 可见范围远大于数据库本身。改为写入仅属主可读的文件（0600）。
+	//
+	// 下面两条用普通日志级别 + [首次启动] 标记，而不是 error：这是首次启动的
+	// 正常路径，不是故障，用 [ERROR] 打出来会被读成「启动失败」，反而把真正的
+	// 错误淹掉。要突出它靠标记，不靠级别。
 	if !generated {
-		common.SysErrorf("已创建 root 用户(用户名: root)，初始密码取自 INITIAL_ROOT_PASSWORD 环境变量，请立即登录修改密码")
+		common.SysLog("[首次启动] 已创建 root 用户（用户名 root），初始密码取自 INITIAL_ROOT_PASSWORD 环境变量，请立即登录修改密码")
 		return nil
 	}
 
 	if err := os.WriteFile(rootInitialPasswordFile, []byte(initialPassword+"\n"), 0600); err != nil {
 		return fmt.Errorf("root 用户已创建，但初始密码写入文件失败: %w（请删除该用户，设置 INITIAL_ROOT_PASSWORD 后重启）", err)
 	}
-	common.SysErrorf("已创建 root 用户(用户名: root)，初始密码已写入 %s（权限 0600）。请立即登录修改密码并删除该文件", rootInitialPasswordFile)
+	common.SysLogf("[首次启动] 已创建 root 用户（用户名 root），初始密码已写入 %s（权限 0600）。请立即登录修改密码并删除该文件", rootInitialPasswordFile)
 	return nil
 }
