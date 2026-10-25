@@ -2,6 +2,102 @@ import { useState, useEffect } from 'react'
 import { X, Loader2 } from 'lucide-react'
 import type { AdminUser } from '../../api/admin'
 
+// ── 新建用户的默认凭据 ──
+//
+// 用户名的格式是 U_{yyyyMMddhhmmss}，方便按创建时间辨认账号。
+function generateUsername(): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `U_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+}
+
+const PASSWORD_GROUPS = [
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  'abcdefghijklmnopqrstuvwxyz',
+  '0123456789',
+  '!@#$%^&*',
+]
+
+// 每类字符各取 4 个，共 16 位。
+const PASSWORD_LENGTH_PER_GROUP = 4
+
+interface PasswordChar {
+  char: string
+  type: number
+}
+
+// 用 crypto 而不是 Math.random：生成的是真实账号密码，不该是可预测序列。
+function randomInt(max: number): number {
+  const buf = new Uint32Array(1)
+  crypto.getRandomValues(buf)
+  return buf[0] % max
+}
+
+function shuffled<T>(items: readonly T[]): T[] {
+  const result = items.slice()
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1)
+    ;[result[i], result[j]] = [result[j], result[i]]
+  }
+  return result
+}
+
+// 生成 16 位密码：大写/小写/数字/特殊符号各 4 位，顺序打乱，
+// 且相邻两位不能属于同一类型。
+function generatePassword(): string {
+  const build = (): PasswordChar[] =>
+    shuffled(
+      PASSWORD_GROUPS.flatMap((group, type) =>
+        shuffled(group.split(''))
+          .slice(0, PASSWORD_LENGTH_PER_GROUP)
+          .map((char) => ({ char, type })),
+      ),
+    )
+
+  const hasNoAdjacentSameType = (chars: PasswordChar[]) =>
+    chars.every((item, i) => i === 0 || item.type !== chars[i - 1].type)
+
+  // 随机打乱后重试。16 位、4 类各 4 个时，单次随机排列满足条件的概率
+  // 约 3.6%，1000 次尝试全部失败的概率可以忽略；兜底分支只是理论上存在。
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    const chars = build()
+    if (hasNoAdjacentSameType(chars)) {
+      return chars.map((item) => item.char).join('')
+    }
+  }
+
+  // 兜底：四类按随机顺序轮转输出（A B C D A B C D …），天然不相邻。
+  const groups = PASSWORD_GROUPS.map((group) =>
+    shuffled(group.split('')).slice(0, PASSWORD_LENGTH_PER_GROUP),
+  )
+  return shuffled([0, 1, 2, 3])
+    .flatMap((type) => groups[type])
+    .join('')
+}
+
+// 复制文本。优先用异步 Clipboard API；非 HTTPS 环境下它不可用或会拒绝，
+// 退回旧的 execCommand 方案（与重置密码弹窗的做法一致）。
+async function copyText(text: string): Promise<void> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return
+    }
+  } catch {
+    // 继续走兜底
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  if (!copied) throw new Error('copy failed')
+}
+
 interface UserDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -32,8 +128,9 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
         setDisplayName(currentRow.display_name)
         setRole(currentRow.role)
       } else {
-        setUsername('')
-        setPassword('')
+        // 新建时直接生成一套可用凭据；两个输入框仍可手动修改。
+        setUsername(generateUsername())
+        setPassword(generatePassword())
         setDisplayName('')
         setRole(1)
       }
@@ -58,14 +155,15 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
     return () => document.removeEventListener('keydown', handleEsc)
   }, [open, onOpenChange])
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const validate = (): boolean => {
     setError('')
+    if (!username.trim()) { setError('用户名不能为空'); return false }
+    if (!isEdit && !password.trim()) { setError('密码不能为空'); return false }
+    if (!isEdit && password.length < 6) { setError('密码长度不能少于6位'); return false }
+    return true
+  }
 
-    if (!username.trim()) { setError('用户名不能为空'); return }
-    if (!isEdit && !password.trim()) { setError('密码不能为空'); return }
-    if (!isEdit && password.length < 6) { setError('密码长度不能少于6位'); return }
-
+  const save = async () => {
     setSaving(true)
     try {
       await onSubmit({
@@ -80,6 +178,30 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (validate()) void save()
+  }
+
+  const handleSaveClick = () => {
+    if (validate()) void save()
+  }
+
+  // 复制并保存：先复制输入框里的当前值（自动生成后可能已被修改），再走保存流程。
+  // 复制失败时不保存——否则弹框一关，这套凭据就再也看不到了。
+  const handleCopyAndSave = async () => {
+    if (saving) return
+    if (!validate()) return
+    const credentials = `用户: ${username.trim()}\n密码: ${password}`
+    try {
+      await copyText(credentials)
+    } catch {
+      setError('复制到剪贴板失败，请检查浏览器权限后重试')
+      return
+    }
+    await save()
   }
 
   if (!open) return null
@@ -187,12 +309,12 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
             取消
           </button>
           <button
-            onClick={handleSubmit}
+            onClick={isEdit ? handleSaveClick : handleCopyAndSave}
             disabled={saving}
             className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors disabled:opacity-50'
           >
             {saving && <Loader2 className='size-4 animate-spin' />}
-            {saving ? '保存中...' : '保存'}
+            {saving ? '保存中...' : isEdit ? '保存' : '复制并保存'}
           </button>
         </div>
       </div>
