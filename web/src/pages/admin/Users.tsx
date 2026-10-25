@@ -11,8 +11,6 @@ import {
   Copy,
   Check,
   Loader2,
-  ChevronLeft,
-  ChevronRight,
   Shield,
   ShieldCheck,
   User as UserIcon,
@@ -32,6 +30,7 @@ import {
 import { UserDrawer } from '../../components/admin/UserDrawer'
 import { CreditDialog } from '../../components/admin/CreditDialog'
 import { ConfirmDialog } from '../../components/admin/ConfirmDialog'
+import { Pagination } from '../../components/Pagination'
 import { formatCredits } from '../../lib/credits'
 
 // ── 角色配置 ──
@@ -47,8 +46,6 @@ const STATUS_CONFIG: Record<number, { label: string; className: string }> = {
   2: { label: '已禁用', className: 'bg-red-500/10 text-red-600 dark:text-red-400' },
   3: { label: '已删除', className: 'bg-gray-500/10 text-gray-500 dark:text-gray-400' },
 }
-
-const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
 export function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([])
@@ -72,8 +69,6 @@ export function AdminUsers() {
   const [resetPassword, setResetPassword] = useState('')
   const [copied, setCopied] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
-
-  const totalPages = Math.ceil(total / pageSize)
 
   // ── 数据加载 ──
   const loadUsers = useCallback(async () => {
@@ -245,9 +240,9 @@ export function AdminUsers() {
   }
 
   return (
-    <div className='space-y-6'>
+    <div data-page-fill className='flex h-full min-h-0 flex-col gap-6'>
       {/* 页面标题 */}
-      <div className='flex items-center justify-between'>
+      <div className='flex shrink-0 items-center justify-between'>
         <div>
           <h2 className='text-2xl font-bold tracking-tight'>用户管理</h2>
           <p className='text-muted-foreground mt-1 text-sm'>
@@ -264,7 +259,7 @@ export function AdminUsers() {
       </div>
 
       {/* 搜索栏 */}
-      <div className='flex items-center gap-3'>
+      <div className='flex shrink-0 items-center gap-3'>
         <div className='relative flex-1 max-w-sm'>
           <Search className='text-muted-foreground absolute left-3 top-1/2 size-4 -translate-y-1/2' />
           <input
@@ -284,12 +279,12 @@ export function AdminUsers() {
         </button>
       </div>
 
-      {/* 数据表格 */}
-      <div className='border-border/60 overflow-hidden rounded-xl border'>
-        <div className='overflow-x-auto'>
+      {/* 数据表格：占满剩余高度，超出部分在表格内滚动 */}
+      <div className='border-border/60 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border'>
+        <div className='min-h-0 flex-1 overflow-auto'>
           <table className='w-full text-sm'>
-            {/* 表头 */}
-            <thead>
+            {/* 表头（滚动时吸顶） */}
+            <thead className='bg-muted sticky top-0 z-10'>
               <tr className='bg-muted/30 border-border/40 border-b'>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>ID</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>用户名</th>
@@ -438,70 +433,13 @@ export function AdminUsers() {
           </table>
         </div>
 
-        {/* 分页 */}
-        {!loading && total > 0 && (
-          <div className='border-border/40 flex items-center justify-between border-t px-4 py-3'>
-            <div className='text-muted-foreground text-sm'>
-              共 <span className='text-foreground font-medium'>{total}</span> 条记录
-            </div>
-            <div className='flex items-center gap-2'>
-              <select
-                value={pageSize}
-                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
-                className='border-border/60 bg-background h-8 rounded-lg border px-2 text-xs'
-              >
-                {PAGE_SIZE_OPTIONS.map((size) => (
-                  <option key={size} value={size}>{size} 条/页</option>
-                ))}
-              </select>
-
-              <button
-                onClick={() => setPage(Math.max(1, page - 1))}
-                disabled={page <= 1}
-                className='border-border/60 hover:bg-muted inline-flex size-8 items-center justify-center rounded-lg border transition-colors disabled:opacity-50'
-              >
-                <ChevronLeft className='size-4' />
-              </button>
-
-              <div className='flex items-center gap-1'>
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNum: number
-                  if (totalPages <= 5) {
-                    pageNum = i + 1
-                  } else if (page <= 3) {
-                    pageNum = i + 1
-                  } else if (page >= totalPages - 2) {
-                    pageNum = totalPages - 4 + i
-                  } else {
-                    pageNum = page - 2 + i
-                  }
-                  return (
-                    <button
-                      key={pageNum}
-                      onClick={() => setPage(pageNum)}
-                      className={cn(
-                        'inline-flex size-8 items-center justify-center rounded-lg text-sm font-medium transition-colors',
-                        page === pageNum
-                          ? 'bg-primary text-primary-foreground'
-                          : 'hover:bg-muted'
-                      )}
-                    >
-                      {pageNum}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <button
-                onClick={() => setPage(Math.min(totalPages, page + 1))}
-                disabled={page >= totalPages}
-                className='border-border/60 hover:bg-muted inline-flex size-8 items-center justify-center rounded-lg border transition-colors disabled:opacity-50'
-              >
-                <ChevronRight className='size-4' />
-              </button>
-            </div>
-          </div>
-        )}
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {/* 添加/编辑抽屉 */}

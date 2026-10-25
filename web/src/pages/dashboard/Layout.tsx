@@ -148,7 +148,8 @@ export function DashboardLayout() {
 
         {/* 内容区 */}
         <main className='min-w-0 flex-1'>
-          <div className='w-full px-4 py-6 sm:px-6 lg:px-8'>
+          {/* data-page-fill：页面自己接管高度，内部滚动，整页不再出现滚动条 */}
+          <div className='has-[[data-page-fill]]:h-[calc(100svh-4rem)] has-[[data-page-fill]]:overflow-hidden w-full px-4 py-6 sm:px-6 lg:px-8'>
             <Outlet />
           </div>
         </main>

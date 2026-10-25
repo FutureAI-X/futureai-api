@@ -129,8 +129,8 @@ export function AdminVendorModels() {
   }, [drawerOpen, deleteOpen])
 
   return (
-    <div className='space-y-6'>
-      <div className='flex items-center justify-between'>
+    <div data-page-fill className='flex h-full min-h-0 flex-col gap-6'>
+      <div className='flex shrink-0 items-center justify-between'>
         <div>
           <h2 className='text-2xl font-bold tracking-tight'>供应商模型</h2>
           <p className='text-muted-foreground mt-1 text-sm'>管理供应商与模型的关联关系</p>
@@ -141,10 +141,10 @@ export function AdminVendorModels() {
         </button>
       </div>
 
-      <div className='border-border/60 overflow-hidden rounded-xl border'>
-        <div className='overflow-x-auto'>
+      <div className='border-border/60 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border'>
+        <div className='min-h-0 flex-1 overflow-auto'>
           <table className='w-full text-sm'>
-            <thead>
+            <thead className='bg-muted sticky top-0 z-10'>
               <tr className='bg-muted/30 border-border/40 border-b'>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>ID</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>供应商</th>

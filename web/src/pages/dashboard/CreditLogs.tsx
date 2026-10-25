@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Loader2,
-  ChevronLeft,
-  ChevronRight,
   Minus,
   Plus,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { CopyButton } from '../../components/CopyButton'
 import { formatCredits } from '../../lib/credits'
+import { Pagination } from '../../components/Pagination'
 
 const BASE = '/api/user'
 
@@ -54,7 +53,7 @@ export function CreditLogs() {
   const [loading, setLoading] = useState(true)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(20)
 
   const loadLogs = useCallback(async () => {
     setLoading(true)
@@ -73,27 +72,18 @@ export function CreditLogs() {
 
   useEffect(() => { loadLogs() }, [loadLogs])
 
-  const totalPages = Math.ceil(total / pageSize)
-
   return (
-    <div className='space-y-6'>
-      <div>
+    <div data-page-fill className='flex h-full min-h-0 flex-col gap-6'>
+      <div className='shrink-0'>
         <h2 className='text-2xl font-bold tracking-tight'>积分日志</h2>
         <p className='text-muted-foreground mt-1 text-sm'>查看积分消耗和退还记录</p>
       </div>
 
-      {/* 统计信息 */}
-      <div className='flex items-center gap-3'>
-        <span className='text-muted-foreground text-sm'>
-          共 <span className='text-foreground font-medium'>{total}</span> 条记录
-        </span>
-      </div>
-
       {/* 表格 */}
-      <div className='border-border/60 overflow-hidden rounded-xl border'>
-        <div className='overflow-x-auto'>
+      <div className='border-border/60 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border'>
+        <div className='min-h-0 flex-1 overflow-auto'>
           <table className='w-full text-sm'>
-            <thead>
+            <thead className='bg-muted sticky top-0 z-10'>
               <tr className='bg-muted/30 border-border/40 border-b'>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>ID</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>类型</th>
@@ -147,34 +137,14 @@ export function CreditLogs() {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
-
-      {/* 分页 */}
-      {totalPages > 1 && (
-        <div className='flex items-center justify-between'>
-          <span className='text-muted-foreground text-sm'>
-            第 {page} / {totalPages} 页
-          </span>
-          <div className='flex items-center gap-2'>
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className='border-border/60 hover:bg-muted inline-flex h-9 items-center gap-1 rounded-lg border px-3 text-sm font-medium transition-colors disabled:opacity-50'
-            >
-              <ChevronLeft className='size-4' />
-              上一页
-            </button>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className='border-border/60 hover:bg-muted inline-flex h-9 items-center gap-1 rounded-lg border px-3 text-sm font-medium transition-colors disabled:opacity-50'
-            >
-              下一页
-              <ChevronRight className='size-4' />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
