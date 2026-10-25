@@ -293,3 +293,8 @@ netsh int ipv6 set dynamicport tcp start=49152 num=16384
 | `API_RATE_LIMIT_BURST` | `/v1` 每用户瞬时突发量 | `10` |
 | `IMAGE_GET_RATE_LIMIT_PER_MINUTE` | 公开文件读取接口每来源 IP 每分钟请求数 | `1000` |
 | `UPLOAD_CREDITS` | 图片上传的单次积分成本 | `0` |
+| `PUBLIC_BASE_URL` | 对外访问地址，用于拼接文件公开 URL（支持裸域名） | 空（回落到上游地址） |
+| `TENCENT_COS_BUCKET_URL` | COS 桶域名，成图转存用 | 空（不启用转存） |
+| `TENCENT_COS_SECRET_ID` | COS 子账号 SecretId | 空 |
+| `TENCENT_COS_SECRET_KEY` | COS 子账号 SecretKey | 空 |
+| `FILE_TTL_SECONDS` | 转存文件有效期（秒） | `86400` |

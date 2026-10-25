@@ -1,17 +1,22 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/storage"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -20,6 +25,11 @@ import (
 // 文件内容不可变（同一 ID 永远指向同一份内容），可以放心缓存；
 // 仍按 expires_at 截断，避免文件过期后浏览器还继续提供副本。
 const fileCacheMaxAge = 24 * time.Hour
+
+// presignTTL 私有对象临时地址的有效期。
+// 只在「代理这一跳」使用：拿到后立即发起上游请求，5 分钟足够覆盖
+// 连接排队与重定向，也不需要把长期凭证写进 files.url。
+const presignTTL = 5 * time.Minute
 
 // inlineFileTypes 允许在浏览器中直接内联打开的内容类型。
 //
@@ -79,9 +89,9 @@ func fileExpired(expiresAt *time.Time, now time.Time) bool {
 // 又会让并发数直接受内存限制。上游读取沿用请求自身的 context，
 // 客户端断开时上游连接会一并取消。
 func proxyFileContent(c *gin.Context, record *model.File, now time.Time) {
-	target, err := parseFileURL(record.URL)
+	target, err := resolveFileURL(c.Request.Context(), record)
 	if err != nil {
-		common.SysErrorf("[GetImageFile] 文件 URL 无效: file_id=%s, err=%v", record.FileID, err)
+		common.SysErrorf("[GetImageFile] 解析文件地址失败: file_id=%s, err=%v", record.FileID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"code": "fail", "message": "文件暂时无法获取"})
 		return
 	}
@@ -167,6 +177,87 @@ func proxyFileContent(c *gin.Context, record *model.File, now time.Time) {
 // fileNotFound 统一的 404 响应
 func fileNotFound(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{"code": "fail", "message": "文件不存在"})
+}
+
+// publicBaseURLEnv 对外访问地址的环境变量名。
+// 用于把文件 ID 拼成调用方可以直接访问的绝对 URL。
+const publicBaseURLEnv = "PUBLIC_BASE_URL"
+
+var warnPublicBaseURLOnce sync.Once
+
+// configuredPublicBaseURL 读取对外访问地址。
+//
+// 支持完整 origin（https://futureaiapi.com）或裸域名（futureaiapi.com，按 https 处理），
+// 末尾斜杠会被去掉。未配置或非法时返回空串，调用方回落到上游原始地址。
+func configuredPublicBaseURL() string {
+	raw := strings.TrimSpace(os.Getenv(publicBaseURLEnv))
+	if raw == "" {
+		warnPublicBaseURLOnce.Do(func() {
+			common.SysErrorf("[PublicURL] %s 未配置，任务响应中的 url 将回落到上游原始地址", publicBaseURLEnv)
+		})
+		return ""
+	}
+
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		warnPublicBaseURLOnce.Do(func() {
+			common.SysErrorf("[PublicURL] %s 配置无效(%q)，任务响应中的 url 将回落到上游原始地址", publicBaseURLEnv, raw)
+		})
+		return ""
+	}
+
+	if u.Path != "" && u.Path != "/" {
+		warnPublicBaseURLOnce.Do(func() {
+			common.SysErrorf("[PublicURL] %s 包含路径(%q)，已忽略；请只配置协议与域名", publicBaseURLEnv, u.Path)
+		})
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// publicFileURL 生成文件的公开读取地址；未配置对外地址时返回空串。
+func publicFileURL(fileID string) string {
+	if fileID == "" {
+		return ""
+	}
+	base := configuredPublicBaseURL()
+	if base == "" {
+		return ""
+	}
+	return base + "/v1/images/get/" + url.PathEscape(fileID)
+}
+
+// resolveFileURL 决定实际拉取地址。
+//
+// 写入侧把成图转存到私有桶，files.url 只是对象的规范地址，不能匿名读取；
+// 因此 TENCENT_COS 记录要用 file_key 现签一个短期地址。service_type 为空
+// 的历史记录（以及将来由外部写入、但本服务不认识的服务）仍按 url 直连。
+func resolveFileURL(ctx context.Context, record *model.File) (*url.URL, error) {
+	raw := record.URL
+
+	if strings.TrimSpace(record.ServiceType) != "" {
+		store, err := storage.FromEnv(record.ServiceType, record.ServiceAddress)
+		switch {
+		case err == nil:
+			if strings.TrimSpace(record.FileKey) == "" {
+				return nil, errors.New("记录缺少 file_key")
+			}
+			signed, signErr := store.PresignGet(ctx, record.FileKey, presignTTL)
+			if signErr != nil {
+				return nil, signErr
+			}
+			raw = signed
+		case errors.Is(err, storage.ErrNotSupported):
+			// 本服务不认识的服务类型：可能是公开地址，回落到 url
+		default:
+			return nil, err
+		}
+	}
+
+	return parseFileURL(raw)
 }
 
 // parseFileURL 校验并解析记录中的完整 URL。

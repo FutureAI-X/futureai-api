@@ -61,3 +61,9 @@ func GetFileByFileID(fileID string) (*File, error) {
 	}
 	return &file, nil
 }
+
+// CreateFile 插入文件记录。
+// 调用方负责先完成对象上传；本函数只落库，失败时由调用方决定是否重试。
+func CreateFile(file *File) error {
+	return DB.Create(file).Error
+}

@@ -557,7 +557,7 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_logs.created_at IS '记录创建时间'`,
 
 		// files 表注释
-		`COMMENT ON TABLE files IS '对外可读文件登记表，由上传方写入，本服务只读'`,
+		`COMMENT ON TABLE files IS '对外可读文件登记表，由成图转存或外部写入方维护'`,
 		`COMMENT ON COLUMN files.id IS '记录唯一标识，自增主键'`,
 		`COMMENT ON COLUMN files.file_id IS '对外文件ID，公开读取接口的访问凭证，必须随机不可猜'`,
 		`COMMENT ON COLUMN files.service_type IS '对象存储服务类型，如 TENCENT_COS'`,
@@ -567,6 +567,9 @@ func addTableComments() error {
 		`COMMENT ON COLUMN files.ttl_seconds IS '有效期（秒），仅记录写入方的原始设定'`,
 		`COMMENT ON COLUMN files.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN files.expires_at IS '过期时间，NULL 表示长期有效；读取接口以本列为准'`,
+
+		// tasks 新增列
+		`COMMENT ON COLUMN tasks.file_id IS '成图在 files 表中的文件ID，空表示未落库'`,
 	}
 
 	// credit_rules.ref_image_params 是历史遗留列：老库里有，而新库由 AutoMigrate

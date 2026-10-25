@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/FutureAI-X/futureai-api/common"
+	"github.com/FutureAI-X/futureai-api/filestore"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/FutureAI-X/futureai-api/supplier"
 	"github.com/gin-gonic/gin"
@@ -527,10 +528,38 @@ func GetTask(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"taskId": task.TaskID,
-		"status": task.Status,
-		"data":   data,
+		"taskId":  task.TaskID,
+		"status":  task.Status,
+		"file_id": task.FileID,
+		"data":    applyPublicFileURL(data, task.FileID),
 	})
+}
+
+// applyPublicFileURL 调整任务响应中的 url 字段。
+//
+//   - 原上游地址原样移到 url_vendor；
+//   - url 改为本服务的公开读取地址 {PUBLIC_BASE_URL}/v1/images/get/{file_id}；
+//   - 没有 file_id（转存失败或尚未转存），或对外地址未配置时，
+//     url 保持原值，与 url_vendor 相同。
+//
+// 只影响响应，不回写 query_response：库里始终保留上游原始结果。
+func applyPublicFileURL(data map[string]interface{}, fileID string) map[string]interface{} {
+	publicURL := publicFileURL(fileID)
+	if data == nil {
+		if publicURL == "" {
+			return nil
+		}
+		data = map[string]interface{}{}
+	}
+
+	if vendorURL, ok := data["url"]; ok {
+		data["url_vendor"] = vendorURL
+	}
+	if publicURL != "" {
+		data["url"] = publicURL
+	}
+
+	return data
 }
 
 // ── 任务对账（轮询上游状态）──
@@ -760,6 +789,29 @@ func hasDeliverableImage(data map[string]interface{}) bool {
 	return false
 }
 
+// persistCompletedImage 把上游成图转存到对象存储，返回 files.file_id。
+//
+// 失败只记日志并返回空串：任务照常完成，原始上游 URL 仍保留在
+// query_response 的 data.url 中。转存是附加能力，不能让它把
+// 「已经出图且已扣费」的任务变成失败。
+func persistCompletedImage(taskID string, data map[string]interface{}) string {
+	rawURL, _ := data["url"].(string)
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		// 仅返回 b64_json 的结果不在此处理，保持原有行为
+		return ""
+	}
+
+	file, err := filestore.Default().PersistURL(context.Background(), rawURL)
+	if err != nil {
+		common.SysErrorf("[Reconcile] 成图转存失败，任务仍按完成处理: taskID=%s, err=%v", taskID, err)
+		return ""
+	}
+
+	common.SysLogf("[Reconcile] 成图已转存: taskID=%s, fileID=%s", taskID, file.FileID)
+	return file.FileID
+}
+
 // pollOnce 查询一次上游任务状态并据此推进状态机。
 func pollOnce(task model.Task, creds *vendorCredentialCache) {
 	s, ok := creds.supplierFor(task.VendorID)
@@ -791,10 +843,15 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 		if err != nil {
 			common.SysErrorf("[Reconcile] 结果序列化失败: taskID=%s, err=%v", task.TaskID, err)
 		}
-		if err := model.UpdateTaskStatus(task.TaskID, model.StatusCompleted, string(dataJSON)); err != nil {
+
+		// 成图转存是尽力而为：失败只记日志，任务照常完成。
+		// 原始上游 URL 仍在 data.url 中，用户不会因为存储侧故障拿不到图。
+		fileID := persistCompletedImage(task.TaskID, result.Data)
+
+		if err := model.UpdateTaskCompleted(task.TaskID, string(dataJSON), fileID); err != nil {
 			common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
 		} else {
-			common.SysLogf("[Reconcile] 任务完成: taskID=%s", task.TaskID)
+			common.SysLogf("[Reconcile] 任务完成: taskID=%s, fileID=%s", task.TaskID, fileID)
 		}
 
 	case model.StatusFailed, model.StatusCancelled:

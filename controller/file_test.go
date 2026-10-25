@@ -341,3 +341,50 @@ func TestProxyFileContentRejectsInvalidURL(t *testing.T) {
 		t.Fatalf("状态码 = %d, want 502", rec.Code)
 	}
 }
+
+// TestProxyFileContentFallsBackForUnknownServiceType 验证本服务不认识的
+// service_type 仍按 url 直连，兼容历史记录与外部写入方。
+func TestProxyFileContentFallsBackForUnknownServiceType(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3})
+	}))
+	defer upstream.Close()
+	overrideFileDownloadClient(t, upstream.Client())
+
+	c, rec := newProxyTestContext(t, nil)
+	record := &model.File{
+		FileID:      "file_test",
+		ServiceType: "SOME_OTHER_STORAGE",
+		URL:         upstream.URL + "/photo.png",
+	}
+
+	proxyFileContent(c, record, time.Now())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, want 200", rec.Code)
+	}
+}
+
+// TestProxyFileContentTencentCOSWithoutCredentials 验证私有桶记录在
+// 缺少密钥时明确失败，而不是拿私有 URL 去请求后得到 403。
+func TestProxyFileContentTencentCOSWithoutCredentials(t *testing.T) {
+	t.Setenv("TENCENT_COS_BUCKET_URL", "")
+	t.Setenv("TENCENT_COS_SECRET_ID", "")
+	t.Setenv("TENCENT_COS_SECRET_KEY", "")
+
+	c, rec := newProxyTestContext(t, nil)
+	record := &model.File{
+		FileID:         "file_test",
+		ServiceType:    "TENCENT_COS",
+		ServiceAddress: "https://bucket.example.com",
+		FileKey:        "png/file_test.png",
+		URL:            "https://bucket.example.com/png/file_test.png",
+	}
+
+	proxyFileContent(c, record, time.Now())
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("状态码 = %d, want 502", rec.Code)
+	}
+}

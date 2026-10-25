@@ -62,13 +62,13 @@ var refundableStatuses = []string{StatusFailed, StatusCancelled, StatusCallFail}
 
 // Task 任务记录
 type Task struct {
-	ID         int    `json:"id" gorm:"primaryKey"`
-	TaskID     string `json:"task_id" gorm:"uniqueIndex;size:64;not null"`
+	ID     int    `json:"id" gorm:"primaryKey"`
+	TaskID string `json:"task_id" gorm:"uniqueIndex;size:64;not null"`
 	// UserID 与 IdempotencyKey 组成联合唯一索引：幂等键只需在单个用户内唯一
-	UserID     int    `json:"user_id" gorm:"index;uniqueIndex:idx_tasks_user_idem;not null;default:0"`
-	VendorID   int    `json:"vendor_id" gorm:"index;not null;default:0"`
-	ModelID    int    `json:"model_id" gorm:"index;not null;default:0"`
-	EndpointID int    `json:"endpoint_id" gorm:"index;not null;default:0"`
+	UserID     int `json:"user_id" gorm:"index;uniqueIndex:idx_tasks_user_idem;not null;default:0"`
+	VendorID   int `json:"vendor_id" gorm:"index;not null;default:0"`
+	ModelID    int `json:"model_id" gorm:"index;not null;default:0"`
+	EndpointID int `json:"endpoint_id" gorm:"index;not null;default:0"`
 
 	// Status 上建索引：对账循环每隔几十秒就要按状态筛一次，
 	// 没有索引的话每次都是对最大表的顺序扫描。
@@ -79,6 +79,10 @@ type Task struct {
 	VendorResponse  string  `json:"vendor_response" gorm:"type:text"`             // 供应商任务提交响应 JSON
 	QueryResponse   string  `json:"query_response" gorm:"type:text"`              // 供应商任务查询响应 JSON
 	RequestBody     string  `json:"request_body" gorm:"type:text"`                // 调用方原始请求体 JSON（超长会截断），用于问题回溯
+
+	// FileID 成图在 files 表中的文件 ID。
+	// 转存失败时为空（尽力而为），原始上游 URL 仍保存在 QueryResponse 的 data.url 中。
+	FileID string `json:"file_id,omitempty" gorm:"size:64;not null;default:''"`
 
 	// IdempotencyKey 调用方通过 Idempotency-Key 请求头提供的去重键。
 	// 用指针而非字符串：Postgres 的唯一索引把 NULL 视为互不相等，
@@ -204,6 +208,26 @@ func UpdateTaskStatus(taskID string, status string, queryResponse string) error 
 	}
 	if queryResponse != "" {
 		updates["query_response"] = queryResponse
+	}
+	return DB.Model(&Task{}).
+		Where("task_id = ? AND status NOT IN ?", taskID, terminalStatuses).
+		Updates(updates).Error
+}
+
+// UpdateTaskCompleted 将任务置为 completed，并记录成图的 file_id。
+//
+// fileID 为空表示转存失败：任务仍按完成处理（尽力而为），
+// 原始上游 URL 保留在 query_response 的 data.url 中。
+// 与 UpdateTaskStatus 一样带终态守卫，避免并发对账重复改写。
+func UpdateTaskCompleted(taskID string, queryResponse string, fileID string) error {
+	updates := map[string]interface{}{
+		"status": StatusCompleted,
+	}
+	if queryResponse != "" {
+		updates["query_response"] = queryResponse
+	}
+	if fileID != "" {
+		updates["file_id"] = fileID
 	}
 	return DB.Model(&Task{}).
 		Where("task_id = ? AND status NOT IN ?", taskID, terminalStatuses).
