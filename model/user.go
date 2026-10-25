@@ -340,8 +340,10 @@ func GetUsers(page, pageSize int, keyword string) ([]User, int64, error) {
 		return nil, 0, err
 	}
 
+	// 按创建时间倒序：最近注册的用户排在最前。id 作次级排序键，
+	// 保证 created_at 相同（同一秒内的批量导入）时翻页顺序稳定。
 	offset := (page - 1) * pageSize
-	if err := query.Order("id ASC").Offset(offset).Limit(pageSize).Find(&users).Error; err != nil {
+	if err := query.Order("created_at DESC, id DESC").Offset(offset).Limit(pageSize).Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
 

@@ -56,7 +56,7 @@ func AdminGetUsers(c *gin.Context) {
 			Email:       u.Email,
 			Credits:     u.Credits,
 			UsedCredits: u.UsedCredits,
-			CreatedAt:   u.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:   common.FormatDisplayTime(u.CreatedAt),
 		}
 	}
 

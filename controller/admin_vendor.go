@@ -43,7 +43,7 @@ func AdminGetVendors(c *gin.Context) {
 			BaseURL:     v.BaseURL,
 			APIKey:      apiKey,
 			Status:      v.Status,
-			CreatedAt:   v.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:   common.FormatDisplayTime(v.CreatedAt),
 		}
 	}
 

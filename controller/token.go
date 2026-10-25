@@ -45,7 +45,7 @@ func GetTokens(c *gin.Context) {
 			KeySuffix: t.KeySuffix,
 			KeyLength: t.KeyLength,
 			Status:    t.Status,
-			CreatedAt: t.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt: common.FormatDisplayTime(t.CreatedAt),
 		}
 	}
 
@@ -111,7 +111,7 @@ func CreateToken(c *gin.Context) {
 			"id":         token.ID,
 			"name":       token.Name,
 			"key":        encryptedKey,
-			"created_at": token.CreatedAt.Format("2006-01-02 15:04:05"),
+			"created_at": common.FormatDisplayTime(token.CreatedAt),
 		},
 	})
 }

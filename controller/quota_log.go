@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/gin-gonic/gin"
 )
@@ -52,7 +53,7 @@ func GetCreditLogs(c *gin.Context) {
 			Credits:   log.Credits,
 			Type:      log.Type,
 			Remark:    log.Remark,
-			CreatedAt: log.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt: common.FormatDisplayTime(log.CreatedAt),
 		}
 	}
 
@@ -107,7 +108,7 @@ func AdminGetCreditLogs(c *gin.Context) {
 			Credits:   log.Credits,
 			Type:      log.Type,
 			Remark:    log.Remark,
-			CreatedAt: log.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt: common.FormatDisplayTime(log.CreatedAt),
 		}
 	}
 

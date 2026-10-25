@@ -110,7 +110,13 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className='p-6 space-y-4'>
+        {/*
+          autoComplete='off'：这个弹框里的「用户名 + 密码」会被浏览器识别成登录表单，
+          把管理员自己保存的登录凭据自动填进来。表单和用户名框都关掉自动填充，
+          密码框用 new-password 明确表示「这是新建用户的密码」，浏览器才不会
+          把它当成当前站点的登录凭证去填充。
+        */}
+        <form onSubmit={handleSubmit} autoComplete='off' className='p-6 space-y-4'>
           {error && (
             <div className='bg-destructive/10 text-destructive rounded-lg px-4 py-3 text-sm'>
               {error}
@@ -121,6 +127,7 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
             <label className='text-sm font-medium'>用户名</label>
             <input
               type='text'
+              autoComplete='off'
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder='请输入用户名'
@@ -133,6 +140,7 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
               <label className='text-sm font-medium'>密码</label>
               <input
                 type='password'
+                autoComplete='new-password'
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder='请输入密码（至少6位）'

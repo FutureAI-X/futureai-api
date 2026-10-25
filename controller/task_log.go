@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/gin-gonic/gin"
 )
@@ -50,8 +51,8 @@ func AdminGetTaskLogs(c *gin.Context) {
 			Status:          t.Status,
 			Credits:         t.Credits,
 			CreditsRefunded: t.CreditsRefunded,
-			CreatedAt:       t.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:       t.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:       common.FormatDisplayTime(t.CreatedAt),
+			UpdatedAt:       common.FormatDisplayTime(t.UpdatedAt),
 		}
 	}
 
@@ -127,8 +128,8 @@ func GetUserTaskLogs(c *gin.Context) {
 			Status:        t.Status,
 			Credits:       t.Credits,
 			CreditsRefunded: t.CreditsRefunded,
-			CreatedAt:     t.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:     t.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:     common.FormatDisplayTime(t.CreatedAt),
+			UpdatedAt:     common.FormatDisplayTime(t.UpdatedAt),
 		}
 	}
 
