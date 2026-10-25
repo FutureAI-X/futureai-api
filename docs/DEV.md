@@ -291,4 +291,5 @@ netsh int ipv6 set dynamicport tcp start=49152 num=16384
 |--------|------|--------|
 | `API_RATE_LIMIT_PER_MINUTE` | `/v1` 每用户每分钟请求数 | `60` |
 | `API_RATE_LIMIT_BURST` | `/v1` 每用户瞬时突发量 | `10` |
+| `IMAGE_GET_RATE_LIMIT_PER_MINUTE` | 公开文件读取接口每来源 IP 每分钟请求数 | `1000` |
 | `UPLOAD_CREDITS` | 图片上传的单次积分成本 | `0` |

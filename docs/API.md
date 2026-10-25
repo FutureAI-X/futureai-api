@@ -7,9 +7,10 @@
 | 路由前缀 | 凭证 | 传递方式 |
 |---|---|---|
 | `/api/auth`、`/api/pricing` | 无 | 公开 |
+| `/v1/images/get/:file_id` | 无 | 公开（文件 ID 即凭证） |
 | `/api/user` | 登录态 | `Authorization: Bearer <JWT>` |
 | `/api/admin` | 管理员 | `Authorization: Bearer <JWT>`（role = 100） |
-| `/v1` | API Key | `Authorization: Bearer sk-...` |
+| `/v1`（其余端点） | API Key | `Authorization: Bearer sk-...` |
 
 所有凭证仅通过请求头传递，查询参数形式（`?token=` / `?data_key=`）已不再支持：查询串会进入访问日志、反向代理日志、浏览器历史与 `Referer` 头。`data_key` 需要按需读取密钥类字段时，通过 `X-Data-Key` 请求头携带。
 
@@ -126,6 +127,28 @@
 
 数据库列的标度宽于业务口径（`numeric(20,10)`），放宽到 4 位只需修改 `CreditPrecision` 与前端的 `CREDIT_DECIMALS`，无需改动 schema，也无需订正数据。
 
+### 2.4 文件读取
+
+请求 `GET /v1/images/get/:file_id`，无需认证。文件 ID 由上传方在写入 `files` 表时生成，使用随机不可猜的格式（`file_` + 24 位十六进制），不要使用自增数字或可推导的值：ID 本身就是唯一凭证，可枚举等于所有文件公开。
+
+响应直接返回文件字节，不包 JSON：
+
+- 图片类型（JPEG / PNG / WebP / GIF / AVIF / BMP）以原 `Content-Type` 和 `Content-Disposition: inline` 返回，浏览器可直接打开。
+- 其余类型一律以 `application/octet-stream` 和 `Content-Disposition: attachment` 返回，浏览器会下载。SVG 也在其中：它可以内嵌脚本，内联渲染会在本域下执行。
+- 支持 `Range` / `If-Range` 请求头，大文件可断点续传，响应为 `206 Partial Content`。
+- 记录的有效期以 `files.expires_at` 为准，`NULL` 表示长期有效。成功响应允许浏览器缓存，缓存时长取剩余有效期与 24 小时中的较小者。
+
+错误响应为 JSON：
+
+| 状态码 | 含义 |
+|---|---|
+| `404` | 文件 ID 为空、超长或记录不存在 |
+| `410` | 记录已过期 |
+| `502` | 记录中的 URL 无法拉取，或上游返回非 2xx |
+| `429` | 超出该来源 IP 的限流额度 |
+
+限流按来源 IP 统计，速率由 `IMAGE_GET_RATE_LIMIT_PER_MINUTE` 配置，默认 1000 次/分钟。该端点与前端同源，`TRUSTED_PROXIES` 配置错误时所有请求会被算作同一个 IP。
+
 ## 3 用户接口
 
 全部端点需要 `Authorization: Bearer <JWT>`。
@@ -147,13 +170,14 @@
 
 ## 4 OpenAI 兼容接口
 
-全部端点需要 `Authorization: Bearer sk-...`，并按用户做令牌桶限流（`API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST`）。这些端点每次调用都会真实消耗供应商配额。
+除公开文件读取（见 2.4 节）外，全部端点需要 `Authorization: Bearer sk-...`，并按用户做令牌桶限流（`API_RATE_LIMIT_PER_MINUTE` / `API_RATE_LIMIT_BURST`）。这些端点每次调用都会真实消耗供应商配额。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/v1/models` | 可用模型列表 |
 | POST | `/v1/images/generations` | 图像生成 |
 | POST | `/v1/uploads/images` | 图片上传（单文件上限 10MB） |
+| GET | `/v1/images/get/:file_id` | 公开文件读取（无需认证，见 2.4 节） |
 | GET | `/v1/tasks/:task_id` | 查询任务 |
 
 请求 `GET /v1/models` 的响应：

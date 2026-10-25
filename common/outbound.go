@@ -182,10 +182,16 @@ const OutboundProxyEnv = "OUTBOUND_PROXY"
 var (
 	outboundClientOnce sync.Once
 	outboundClient     *http.Client
+
+	fileDownloadClientOnce sync.Once
+	fileDownloadClient     *http.Client
 )
 
 // outboundClientOverride 测试注入用，生产运行期间始终为 nil。
 var outboundClientOverride atomic.Pointer[http.Client]
+
+// fileDownloadClientOverride 测试注入用，生产运行期间始终为 nil。
+var fileDownloadClientOverride atomic.Pointer[http.Client]
 
 // SetOutboundClientForTest 替换出站客户端，**仅供测试使用**，传 nil 恢复默认。
 //
@@ -193,6 +199,38 @@ var outboundClientOverride atomic.Pointer[http.Client]
 // 测试因此无法走真实拨号路径。生产代码不得调用本函数。
 func SetOutboundClientForTest(c *http.Client) {
 	outboundClientOverride.Store(c)
+}
+
+// SetFileDownloadClientForTest 替换公开文件下载客户端，**仅供测试使用**，
+// 传 nil 恢复默认。理由同 SetOutboundClientForTest。
+func SetFileDownloadClientForTest(c *http.Client) {
+	fileDownloadClientOverride.Store(c)
+}
+
+// newOutboundTransport 构造带 SSRF 拨号校验与连接池配置的 Transport。
+// 两个出站客户端共用同一套配置，避免其中一份漏掉 IdleConnTimeout 之类的
+// 关键项（见 OutboundHTTPClient 注释）。
+func newOutboundTransport(dial func(context.Context, string, string) (net.Conn, error), proxyURL *url.URL) *http.Transport {
+	return &http.Transport{
+		DialContext:           dial,
+		Proxy:                 http.ProxyURL(proxyURL),
+		TLSHandshakeTimeout:   outboundDialTimeout,
+		ResponseHeaderTimeout: outboundResponseHeaderTimeout,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   16,
+		ExpectContinueTimeout: time.Second,
+		ForceAttemptHTTP2:     true,
+	}
+}
+
+// outboundDialer 返回拨号函数与解析后的代理配置
+func outboundDialer() (func(context.Context, string, string) (net.Conn, error), *url.URL) {
+	proxyURL := parseOutboundProxy()
+	if proxyURL != nil {
+		return proxyDialContext(proxyURL), proxyURL
+	}
+	return SafeDialContext, nil
 }
 
 // OutboundHTTPClient 返回进程级共享的出站 HTTP 客户端。
@@ -214,25 +252,10 @@ func OutboundHTTPClient() *http.Client {
 	}
 
 	outboundClientOnce.Do(func() {
-		proxyURL := parseOutboundProxy()
-
-		dial := SafeDialContext
-		if proxyURL != nil {
-			dial = proxyDialContext(proxyURL)
-		}
+		dial, proxyURL := outboundDialer()
 
 		outboundClient = &http.Client{
-			Transport: &http.Transport{
-				DialContext:           dial,
-				Proxy:                 http.ProxyURL(proxyURL),
-				TLSHandshakeTimeout:   outboundDialTimeout,
-				ResponseHeaderTimeout: outboundResponseHeaderTimeout,
-				IdleConnTimeout:       90 * time.Second,
-				MaxIdleConns:          100,
-				MaxIdleConnsPerHost:   16,
-				ExpectContinueTimeout: time.Second,
-				ForceAttemptHTTP2:     true,
-			},
+			Transport: newOutboundTransport(dial, proxyURL),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 3 {
 					return errors.New("重定向次数过多")
@@ -249,6 +272,36 @@ func OutboundHTTPClient() *http.Client {
 		}
 	})
 	return outboundClient
+}
+
+// FileDownloadHTTPClient 返回拉取公开文件内容用的出站客户端。
+//
+// 与 OutboundHTTPClient 的差别只有重定向策略：这里不带任何凭证，
+// 而对象存储/CDN 经常 302 到另一个域名，禁止跨主机重定向会让正常的
+// 文件读取失败。SSRF 防线不变——拨号仍然经过 SafeDialContext，
+// 且重定向只允许 http(s)、最多 3 次。
+func FileDownloadHTTPClient() *http.Client {
+	if c := fileDownloadClientOverride.Load(); c != nil {
+		return c
+	}
+
+	fileDownloadClientOnce.Do(func() {
+		dial, proxyURL := outboundDialer()
+
+		fileDownloadClient = &http.Client{
+			Transport: newOutboundTransport(dial, proxyURL),
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 3 {
+					return errors.New("重定向次数过多")
+				}
+				if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+					return fmt.Errorf("拒绝重定向到非 http(s) 协议: %s", req.URL.Scheme)
+				}
+				return nil
+			},
+		}
+	})
+	return fileDownloadClient
 }
 
 // parseOutboundProxy 解析 OUTBOUND_PROXY。

@@ -68,6 +68,16 @@ func SetRouter(server *gin.Engine) {
 		apiRouter.GET("/tasks/:task_id", controller.GetTask)
 	}
 
+	// 公开文件读取（无需认证，按来源 IP 限流）。
+	// 必须注册在带 APIAuth 的 /v1 路由组之外：文件 ID 本身就是访问凭证。
+	fileRouter := server.Group("/v1/images")
+	fileRouter.Use(middleware.IPRateLimit(
+		common.GetEnvOrDefault("IMAGE_GET_RATE_LIMIT_PER_MINUTE", 1000),
+	))
+	{
+		fileRouter.GET("/get/:file_id", controller.GetImageFile)
+	}
+
 	// 管理员接口
 	adminRouter := server.Group("/api/admin")
 	adminRouter.Use(middleware.RootAuth())

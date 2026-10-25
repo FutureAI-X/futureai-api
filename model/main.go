@@ -176,6 +176,7 @@ var uniqueIndexPrechecks = []struct {
 	{"vendor_models", "vendor_id, model_id", "供应商-模型关联"},
 	{"model_endpoints", "model_id, endpoint_id", "模型-端点关联"},
 	{"credit_rules", "model_id", "模型积分规则"},
+	{"files", "file_id", "文件ID"},
 }
 
 // precheckUniqueIndexes 在建立唯一索引前检测重复数据。
@@ -244,6 +245,7 @@ func migrateDB() error {
 		&CreditRuleItem{},
 		&CreditRuleCondition{},
 		&CreditLog{},
+		&File{},
 	)
 	if err != nil {
 		return err
@@ -553,6 +555,18 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_logs.type IS '操作类型：deduct=扣除, refund=退还, adjust=管理员调整'`,
 		`COMMENT ON COLUMN credit_logs.remark IS '备注说明'`,
 		`COMMENT ON COLUMN credit_logs.created_at IS '记录创建时间'`,
+
+		// files 表注释
+		`COMMENT ON TABLE files IS '对外可读文件登记表，由上传方写入，本服务只读'`,
+		`COMMENT ON COLUMN files.id IS '记录唯一标识，自增主键'`,
+		`COMMENT ON COLUMN files.file_id IS '对外文件ID，公开读取接口的访问凭证，必须随机不可猜'`,
+		`COMMENT ON COLUMN files.service_type IS '对象存储服务类型，如 TENCENT_COS'`,
+		`COMMENT ON COLUMN files.service_address IS '对象存储服务地址'`,
+		`COMMENT ON COLUMN files.file_key IS '文件在对象存储中的 Key'`,
+		`COMMENT ON COLUMN files.url IS '当前可直接读取文件的完整URL'`,
+		`COMMENT ON COLUMN files.ttl_seconds IS '有效期（秒），仅记录写入方的原始设定'`,
+		`COMMENT ON COLUMN files.created_at IS '记录创建时间'`,
+		`COMMENT ON COLUMN files.expires_at IS '过期时间，NULL 表示长期有效；读取接口以本列为准'`,
 	}
 
 	// credit_rules.ref_image_params 是历史遗留列：老库里有，而新库由 AutoMigrate

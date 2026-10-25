@@ -196,6 +196,7 @@ func main() {
 	// 停对账循环并释放出站连接，避免进程退出时留下半途的查询
 	stopReconciler()
 	common.OutboundHTTPClient().CloseIdleConnections()
+	common.FileDownloadHTTPClient().CloseIdleConnections()
 
 	if err := model.CloseDB(); err != nil {
 		common.SysError("关闭数据库连接失败: " + err.Error())

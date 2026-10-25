@@ -3,6 +3,7 @@ package common
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"testing"
 )
 
@@ -128,5 +129,58 @@ func TestOutboundHTTPClientIsShared(t *testing.T) {
 	}
 	if tr.MaxIdleConnsPerHost <= 2 {
 		t.Errorf("MaxIdleConnsPerHost = %d，等于默认值 2，高并发下会频繁重建连接", tr.MaxIdleConnsPerHost)
+	}
+}
+
+// ── FileDownloadHTTPClient：公开文件下载客户端 ──
+
+func TestFileDownloadHTTPClientIsShared(t *testing.T) {
+	a := FileDownloadHTTPClient()
+	b := FileDownloadHTTPClient()
+	if a != b {
+		t.Fatal("FileDownloadHTTPClient 必须返回同一个实例，否则连接池无法复用")
+	}
+	if _, ok := a.Transport.(*http.Transport); !ok {
+		t.Fatalf("Transport 类型 = %T, want *http.Transport", a.Transport)
+	}
+}
+
+// TestFileDownloadHTTPClientRedirectPolicy 验证：
+// 不带凭证的下载客户端允许跨主机重定向（CDN 常见），但仍拒绝非 http(s)。
+func TestFileDownloadHTTPClientRedirectPolicy(t *testing.T) {
+	c := FileDownloadHTTPClient()
+	if c.CheckRedirect == nil {
+		t.Fatal("必须设置 CheckRedirect")
+	}
+
+	mustParse := func(raw string) *url.URL {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("解析 %q 失败: %v", raw, err)
+		}
+		return u
+	}
+
+	via := []*http.Request{{URL: mustParse("https://a.example.com/file.png")}}
+
+	// 跨主机重定向应放行
+	crossHost := &http.Request{URL: mustParse("https://b.example.com/file.png")}
+	if err := c.CheckRedirect(crossHost, via); err != nil {
+		t.Errorf("跨主机重定向被拒绝: %v", err)
+	}
+
+	// 非 http(s) 协议应拒绝
+	badScheme := &http.Request{URL: mustParse("file:///etc/passwd")}
+	if err := c.CheckRedirect(badScheme, via); err == nil {
+		t.Error("重定向到 file 协议应被拒绝")
+	}
+
+	// 重定向次数应设上限
+	tooMany := make([]*http.Request, 3)
+	for i := range tooMany {
+		tooMany[i] = &http.Request{URL: mustParse("https://a.example.com/file.png")}
+	}
+	if err := c.CheckRedirect(crossHost, tooMany); err == nil {
+		t.Error("超过 3 次重定向应被拒绝")
 	}
 }
