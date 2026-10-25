@@ -18,8 +18,8 @@ type CreditLog struct {
 	ID        int       `json:"id" gorm:"primaryKey"`
 	UserID    int       `json:"user_id" gorm:"index;not null"`
 	TaskID    string    `json:"task_id" gorm:"index;size:64"`
-	Credits   float64   `json:"credits" gorm:"type:numeric(20,10);not null"` // 积分数量（正数）
-	Type      string    `json:"type" gorm:"size:32;not null"`               // deduct=扣除, refund=退还
+	Credits   float64   `json:"credits" gorm:"type:numeric(20,10);not null"` // 变动数额（绝对值，方向由 type + remark 表达）
+	Type      string    `json:"type" gorm:"size:32;not null"`               // deduct=扣除, refund=退还, adjust=管理员调整
 	Remark    string    `json:"remark" gorm:"size:255"`                     // 备注
 	CreatedAt time.Time `json:"created_at"`
 

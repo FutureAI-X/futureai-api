@@ -1,16 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, Minus, Plus } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { getAdminCreditLogs, type AdminCreditLog } from '../../api/admin'
 import { UserSelect } from '../../components/admin/UserSelect'
 import { CopyButton } from '../../components/CopyButton'
-import { formatCredits } from '../../lib/credits'
 import { Pagination } from '../../components/Pagination'
-
-const TYPE_CONFIG: Record<string, { label: string; className: string; icon: typeof Minus }> = {
-  deduct: { label: '扣除', className: 'text-red-600 dark:text-red-400', icon: Minus },
-  refund: { label: '退还', className: 'text-emerald-600 dark:text-emerald-400', icon: Plus },
-}
+import {
+  creditLogDelta,
+  creditLogDeltaClass,
+  creditLogType,
+  formatCreditLogDelta,
+} from '../../lib/credit-log'
 
 // 格式化时间
 function formatTime(timeStr?: string): string {
@@ -89,8 +89,9 @@ export function AdminCreditLogs() {
               ) : logs.length === 0 ? (
                 <tr><td colSpan={7} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无积分记录</p></td></tr>
               ) : logs.map((log) => {
-                const typeConf = TYPE_CONFIG[log.type] || TYPE_CONFIG.deduct
+                const typeConf = creditLogType(log.type)
                 const TypeIcon = typeConf.icon
+                const delta = creditLogDelta(log)
                 return (
                   <tr key={log.id} className='hover:bg-muted/20 transition-colors'>
                     <td className='px-4 py-3'><span className='text-muted-foreground font-mono text-xs'>{log.id}</span></td>
@@ -102,8 +103,11 @@ export function AdminCreditLogs() {
                       </span>
                     </td>
                     <td className='px-4 py-3'>
-                      <span className={cn('text-sm font-medium', typeConf.className)}>
-                        {log.type === 'refund' ? '+' : '-'}{formatCredits(log.credits)}
+                      <span
+                        className={cn('text-sm font-medium', creditLogDeltaClass(delta))}
+                        title={delta === 0 ? '历史覆盖记录未保存方向，± 表示仅知道变动数额' : undefined}
+                      >
+                        {formatCreditLogDelta(log)}
                       </span>
                     </td>
                     <td className='px-4 py-3'>

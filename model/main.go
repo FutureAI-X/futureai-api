@@ -549,8 +549,8 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_logs.id IS '日志唯一标识，自增主键'`,
 		`COMMENT ON COLUMN credit_logs.user_id IS '用户ID，关联 users 表'`,
 		`COMMENT ON COLUMN credit_logs.task_id IS '关联的任务ID'`,
-		`COMMENT ON COLUMN credit_logs.credits IS '积分数量（正数）'`,
-		`COMMENT ON COLUMN credit_logs.type IS '操作类型：deduct=扣除, refund=退还'`,
+		`COMMENT ON COLUMN credit_logs.credits IS '变动数额（绝对值，方向由 type + remark 表达）'`,
+		`COMMENT ON COLUMN credit_logs.type IS '操作类型：deduct=扣除, refund=退还, adjust=管理员调整'`,
 		`COMMENT ON COLUMN credit_logs.remark IS '备注说明'`,
 		`COMMENT ON COLUMN credit_logs.created_at IS '记录创建时间'`,
 	}

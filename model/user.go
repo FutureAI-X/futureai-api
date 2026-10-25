@@ -473,9 +473,15 @@ func AdjustUserCredits(id int, mode string, value float64) error {
 		case "subtract":
 			remark = "管理员扣减积分 " + amount
 		case "override":
-			// 覆盖记的是结果值：它才是这次操作想表达的信息，
-			// Credits 列仍记实际差额，两者各司其职
-			remark = "管理员覆盖积分为 " + strconv.FormatFloat(newCredits, 'f', -1, 64)
+			// 覆盖记的是结果值：它才是这次操作想表达的信息。
+			// Credits 列存的是差额绝对值，方向只能放在备注里——少了这一句，
+			// 前端就无法判断这次覆盖是把余额调高还是调低。
+			direction := "增加"
+			if actual < 0 {
+				direction = "减少"
+			}
+			remark = "管理员覆盖积分为 " + strconv.FormatFloat(newCredits, 'f', -1, 64) +
+				"（本次" + direction + " " + amount + "）"
 		}
 
 		return tx.Create(&CreditLog{
