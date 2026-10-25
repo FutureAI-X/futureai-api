@@ -167,53 +167,7 @@ curl -m 3 telnet://<服务器IP>:5432
 
 ## 6 升级
 
-先在本机构建并上传新镜像：
-
-```bash
-./deploy/build-image.sh linux/amd64
-```
-
-```bash
-scp futureai-api-20260915225600-amd64.tar.gz <user>@<server>:/tmp/
-```
-
-再在服务器上备份。**必须先备份，再升级**：
-
-```bash
-/home/ubuntu/stacks/futureai-api/backup.sh
-```
-
-先把标签记进变量，本章后续命令都在同一个终端会话中执行：
-
-```bash
-TAG=20260915225600
-```
-
-加载新镜像：
-
-```bash
-gunzip -c /tmp/futureai-api-$TAG-amd64.tar.gz | docker load
-```
-
-记录本次标签与 commit 的对应关系，回滚时要靠它确定「上一个版本」：
-
-```bash
-docker image inspect futureai-api:$TAG --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
-```
-
-切换标签并重启：
-
-```bash
-cd /home/ubuntu/stacks/futureai-api
-```
-
-```bash
-sed -i "s/^FUTUREAI_API_TAG=.*/FUTUREAI_API_TAG=$TAG/" .env
-```
-
-```bash
-docker compose up -d
-```
+操作步骤见 [UPDATE.md](UPDATE.md)。本章只记录升级时必须知道的机制。
 
 **升级前必须备份**：应用启动时会自动跑 `AutoMigrate`，不需要单独的迁移步骤，但**部分变更不可逆**，回滚旧镜像不一定能回到旧 schema。有些版本还会在启动时执行 `ALTER TABLE`（例如放宽积分列精度），那会在启动阶段重写大表并加表锁，期间服务不可用、请求超时排队。看到启动日志里出现「放宽 xxx 的标度」时，这次升级就不是秒级的。
 

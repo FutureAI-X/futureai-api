@@ -36,7 +36,9 @@
 | 不会用 nano 或 vi 编辑文件 | [EDITORS.md](EDITORS.md) |
 | 知道为什么这么设计 | [NOTES.md](NOTES.md#1-为什么是这套结构) |
 | 上线前逐项自检 | [NOTES.md](NOTES.md#5-上线自检清单) |
-| 升级 / 回滚 / 备份 | [NOTES.md](NOTES.md#6-升级) |
+| 更新已部署的实例（打包、上传、切换） | [UPDATE.md](UPDATE.md) |
+| 回滚 | [NOTES.md](NOTES.md#7-回滚) |
+| 备份 | [NOTES.md](NOTES.md#8-备份) |
 | 出问题了 | [NOTES.md](NOTES.md#10-排查表) |
 
 ### 1.4 部署路线
