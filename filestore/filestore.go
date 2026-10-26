@@ -45,6 +45,9 @@ const (
 
 	// maxInsertAttempts 落库遇到 file_id 冲突时的最大尝试次数
 	maxInsertAttempts = 3
+
+	// orphanCleanupTimeout 落库失败后删除已上传对象的超时
+	orphanCleanupTimeout = 10 * time.Second
 )
 
 // Config 转存配置
@@ -87,6 +90,7 @@ type Persister struct {
 	cfg        Config
 	newStore   func(serviceType, serviceAddress string) (storage.Store, error)
 	createFile func(*model.File) error
+	fileExists func(fileID string) (bool, error)
 	httpClient *http.Client
 	now        func() time.Time
 	newFileID  func(ext string) (string, error)
@@ -98,6 +102,7 @@ func NewPersister(cfg Config) *Persister {
 		cfg:        cfg,
 		newStore:   storage.FromEnv,
 		createFile: model.CreateFile,
+		fileExists: model.FileIDExists,
 		httpClient: common.FileDownloadHTTPClient(),
 		now:        time.Now,
 		newFileID:  generateFileID,
@@ -183,16 +188,44 @@ func (p *Persister) PersistURL(ctx context.Context, rawURL string) (*model.File,
 			lastErr = err
 			if model.IsDuplicateKeyError(err) {
 				// 96 位随机值撞库概率极低；真撞上就换一个 ID 重传。
-				// 上一次上传的对象会残留，由存储侧生命周期规则清理。
+				// 这里刻意不删除刚上传的对象：扩展名相同时它的 key 与已有记录
+				// 完全相同，删除会毁掉那条有效记录。极小概率的残留可以接受。
 				common.SysErrorf("[FileStore] file_id 冲突，换一个重试: %s", fileID)
 				continue
 			}
+			p.cleanupAfterCreateFailure(store, fileID, key)
 			return nil, err
 		}
 		return file, nil
 	}
 
 	return nil, fmt.Errorf("file_id 冲突重试次数用尽: %w", lastErr)
+}
+
+// cleanupAfterCreateFailure 在落库失败后删除刚上传的对象，避免留下孤儿对象。
+//
+// 只有确认记录确实没写进去时才删：PostgreSQL 在 COMMIT 成功后、客户端收到
+// 响应前断开连接时，调用方拿到的是错误，但记录其实已经存在；此时删对象会让
+// 那条记录永远读不到内容。清理失败只记日志，不改变调用方拿到的主错误。
+func (p *Persister) cleanupAfterCreateFailure(store storage.Store, fileID, key string) {
+	exists, err := p.fileExists(fileID)
+	if err != nil {
+		common.SysErrorf("[FileStore] 落库失败且无法确认记录状态，保留对象: file_id=%s, err=%v", fileID, err)
+		return
+	}
+	if exists {
+		common.SysErrorf("[FileStore] 落库返回错误但记录已存在，保留对象: file_id=%s", fileID)
+		return
+	}
+
+	// 原 context 可能已经超时（落库失败有时就发生在超时之后），
+	// 单独开一个短超时让清理有机会完成。
+	ctx, cancel := context.WithTimeout(context.Background(), orphanCleanupTimeout)
+	defer cancel()
+
+	if err := store.Delete(ctx, key); err != nil {
+		common.SysErrorf("[FileStore] 落库失败后清理对象失败，可能残留: key=%s, err=%v", key, err)
+	}
 }
 
 // download 下载源文件并施加体积上限。

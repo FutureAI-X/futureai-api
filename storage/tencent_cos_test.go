@@ -90,6 +90,69 @@ func TestTencentCOSUploadPropagatesError(t *testing.T) {
 	}
 }
 
+func TestTencentCOSDelete(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotAuth   string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	store := newTestCOS(t, srv.URL, srv.Client().Transport)
+	if err := store.Delete(context.Background(), "/png/file_abc.png"); err != nil {
+		t.Fatalf("删除失败: %v", err)
+	}
+
+	if gotMethod != http.MethodDelete {
+		t.Errorf("方法 = %s, want DELETE", gotMethod)
+	}
+	if gotPath != "/png/file_abc.png" {
+		t.Errorf("路径 = %s, want /png/file_abc.png", gotPath)
+	}
+	if gotAuth == "" {
+		t.Error("请求缺少 Authorization，签名层未生效")
+	}
+}
+
+func TestTencentCOSDeleteNotFoundIsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code><Message>not found</Message></Error>`))
+	}))
+	defer srv.Close()
+
+	store := newTestCOS(t, srv.URL, srv.Client().Transport)
+	if err := store.Delete(context.Background(), "png/missing.png"); err != nil {
+		t.Errorf("对象不存在应视为删除成功，实际返回: %v", err)
+	}
+}
+
+func TestTencentCOSDeletePropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	}))
+	defer srv.Close()
+
+	store := newTestCOS(t, srv.URL, srv.Client().Transport)
+	if err := store.Delete(context.Background(), "png/file_abc.png"); err == nil {
+		t.Error("上游返回 403 时应返回错误")
+	}
+}
+
+func TestTencentCOSDeleteRejectsEmptyKey(t *testing.T) {
+	store := newTestCOS(t, "https://examplebucket-1250000000.cos.ap-guangzhou.myqcloud.com", nil)
+	if err := store.Delete(context.Background(), "  "); err == nil {
+		t.Error("空 key 应返回错误")
+	}
+}
+
 func TestTencentCOSPresignGet(t *testing.T) {
 	store := newTestCOS(t, "https://examplebucket-1250000000.cos.ap-guangzhou.myqcloud.com", nil)
 

@@ -270,7 +270,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 只有 `completed` 时 `data` 才有值。非终态表示仍在推进中，应继续轮询（建议间隔 5 秒左右），不要当作失败。
 
-`completed` 响应还包含 `file_id`：成图已转存到对象存储时为该文件 ID，转存失败时为空字符串。文件有效期由 `FILE_TTL_SECONDS` 配置，默认 24 小时，到期后 `/v1/images/get/:file_id` 返回 `410`。
+`completed` 响应还包含 `file_id`：成图已转存到对象存储时为该文件 ID，转存失败时为空字符串。文件有效期由 `FILE_TTL_SECONDS` 配置，默认 24 小时，到期后 `/v1/images/get/:file_id` 返回 `410`；记录会在对象删除 7 天后回收，之后再访问返回 `404`。
 
 `data` 中的两个地址字段口径如下：
 

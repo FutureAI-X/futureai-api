@@ -15,6 +15,7 @@ import (
 
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/controller"
+	"github.com/FutureAI-X/futureai-api/filestore"
 	"github.com/FutureAI-X/futureai-api/middleware"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/FutureAI-X/futureai-api/router"
@@ -80,6 +81,18 @@ func main() {
 	// 用一个可取消的 context 控制生命周期，关闭时能干净地停下来。
 	reconcilerCtx, stopReconciler := context.WithCancel(context.Background())
 	go controller.RunTaskReconciler(reconcilerCtx)
+
+	// 过期文件清理循环：轻量对象存储没有生命周期规则，对象只能由应用删除。
+	// 同样用可取消的 context 控制生命周期。
+	cleanupCfg := filestore.LoadCleanupConfig()
+	stopCleaner := func() {}
+	if cleanupCfg.Enabled {
+		cleanerCtx, stop := context.WithCancel(context.Background())
+		stopCleaner = stop
+		go filestore.RunCleaner(cleanerCtx, cleanupCfg)
+	} else {
+		common.SysLog("[FileCleaner] FILE_CLEANUP_ENABLED 未启用，过期对象不会被自动删除")
+	}
 
 	// 设置 Gin 模式（默认 release；仅在显式 GIN_MODE=debug 时开启调试）
 	if os.Getenv("GIN_MODE") != "debug" {
@@ -193,8 +206,9 @@ func main() {
 		common.SysError("优雅关闭超时，仍有请求未完成: " + err.Error())
 	}
 
-	// 停对账循环并释放出站连接，避免进程退出时留下半途的查询
+	// 停对账与清理循环并释放出站连接，避免进程退出时留下半途的查询
 	stopReconciler()
+	stopCleaner()
 	common.OutboundHTTPClient().CloseIdleConnections()
 	common.FileDownloadHTTPClient().CloseIdleConnections()
 

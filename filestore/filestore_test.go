@@ -26,6 +26,8 @@ type fakeStore struct {
 	serviceAddress string
 	uploads        []uploadedObject
 	uploadErr      error
+	deletes        []string
+	deleteErr      error
 }
 
 func (s *fakeStore) ServiceType() string { return storage.ServiceTencentCOS }
@@ -41,6 +43,14 @@ func (s *fakeStore) Upload(ctx context.Context, key string, data []byte, content
 		data:        append([]byte(nil), data...),
 		contentType: contentType,
 	})
+	return nil
+}
+
+func (s *fakeStore) Delete(ctx context.Context, key string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	s.deletes = append(s.deletes, key)
 	return nil
 }
 
@@ -71,6 +81,7 @@ func newTestPersister(t *testing.T, handler http.HandlerFunc) (*Persister, *fake
 		},
 		newStore:   func(string, string) (storage.Store, error) { return store, nil },
 		createFile: func(*model.File) error { return nil },
+		fileExists: func(string) (bool, error) { return false, nil },
 		httpClient: srv.Client(),
 		now:        func() time.Time { return testNow },
 		newFileID:  generateFileID,
@@ -256,6 +267,57 @@ func TestPersistURLDoesNotRetryOtherDBErrors(t *testing.T) {
 	}
 	if len(store.uploads) != 1 {
 		t.Errorf("非冲突错误不应重试，上传次数 = %d", len(store.uploads))
+	}
+}
+
+func TestPersistURLDeletesObjectWhenInsertFails(t *testing.T) {
+	persister, store, srv := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(pngBytes())
+	})
+
+	dbErr := errors.New("connection refused")
+	persister.createFile = func(*model.File) error { return dbErr }
+
+	if _, err := persister.PersistURL(context.Background(), srv.URL+"/source"); !errors.Is(err, dbErr) {
+		t.Fatalf("err = %v, want %v", err, dbErr)
+	}
+	if len(store.deletes) != 1 || store.deletes[0] != store.uploads[0].key {
+		t.Errorf("落库失败后应删除刚上传的对象: uploads=%v, deletes=%v", store.uploads, store.deletes)
+	}
+}
+
+func TestPersistURLKeepsObjectWhenRecordAlreadyExists(t *testing.T) {
+	persister, store, srv := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(pngBytes())
+	})
+
+	dbErr := errors.New("connection reset after commit")
+	persister.createFile = func(*model.File) error { return dbErr }
+	// 数据库在 COMMIT 后断开连接：记录其实已经写入
+	persister.fileExists = func(string) (bool, error) { return true, nil }
+
+	if _, err := persister.PersistURL(context.Background(), srv.URL+"/source"); !errors.Is(err, dbErr) {
+		t.Fatalf("err = %v, want %v", err, dbErr)
+	}
+	if len(store.deletes) != 0 {
+		t.Errorf("记录已存在时不能删除对象，实际删除: %v", store.deletes)
+	}
+}
+
+func TestPersistURLKeepsObjectWhenExistenceUnknown(t *testing.T) {
+	persister, store, srv := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(pngBytes())
+	})
+
+	dbErr := errors.New("connection refused")
+	persister.createFile = func(*model.File) error { return dbErr }
+	persister.fileExists = func(string) (bool, error) { return false, errors.New("db down") }
+
+	if _, err := persister.PersistURL(context.Background(), srv.URL+"/source"); !errors.Is(err, dbErr) {
+		t.Fatalf("err = %v, want %v", err, dbErr)
+	}
+	if len(store.deletes) != 0 {
+		t.Errorf("无法确认记录状态时不应删除对象，实际删除: %v", store.deletes)
 	}
 }
 

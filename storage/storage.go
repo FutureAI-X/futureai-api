@@ -30,6 +30,9 @@ type Store interface {
 	ServiceAddress() string
 	// Upload 上传对象。key 形如 png/file_xxx.png。
 	Upload(ctx context.Context, key string, data []byte, contentType string) error
+	// Delete 删除对象。语义是「确保对象不存在」：对象本来就不存在时视为成功，
+	// 调用方可以安全重试。
+	Delete(ctx context.Context, key string) error
 	// PresignGet 生成可直接 GET 的临时地址，供读取接口代理。
 	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
 	// ObjectURL 返回对象的规范地址。私有桶下它不可匿名访问，仅作记录。

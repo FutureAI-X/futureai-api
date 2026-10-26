@@ -298,3 +298,9 @@ netsh int ipv6 set dynamicport tcp start=49152 num=16384
 | `TENCENT_COS_SECRET_ID` | COS 子账号 SecretId | 空 |
 | `TENCENT_COS_SECRET_KEY` | COS 子账号 SecretKey | 空 |
 | `FILE_TTL_SECONDS` | 转存文件有效期（秒） | `86400` |
+| `FILE_CLEANUP_ENABLED` | 是否启用过期文件清理 | `true` |
+| `FILE_CLEANUP_INTERVAL_SECONDS` | 清理循环间隔（秒） | `600` |
+| `FILE_CLEANUP_BATCH_SIZE` | 每轮处理上限（条，对象删除与记录回收各自计算） | `1000` |
+| `FILE_CLEANUP_GRACE_SECONDS` | 过期后删除对象的宽限期（秒） | `900` |
+| `FILE_CLEANUP_RETENTION_SECONDS` | 对象删除后记录保留时长（秒） | `604800` |
+| `FILE_CLEANUP_RETRY_WINDOW_SECONDS` | 删除失败的最长重试窗口（秒） | `604800` |

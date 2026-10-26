@@ -128,6 +128,24 @@ func (s *TencentCOS) Upload(ctx context.Context, key string, data []byte, conten
 	return nil
 }
 
+// Delete 删除对象。
+// 对象不存在（404）视为成功：清理任务可能因为上次请求超时等原因重复删除，
+// 把它当失败会让这条记录永远清不掉。
+func (s *TencentCOS) Delete(ctx context.Context, key string) error {
+	key = strings.TrimLeft(strings.TrimSpace(key), "/")
+	if key == "" {
+		return fmt.Errorf("缺少 file_key")
+	}
+
+	if _, err := s.client.Object.Delete(ctx, key); err != nil {
+		if cos.IsNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("COS 删除失败: %w", err)
+	}
+	return nil
+}
+
 // PresignGet 生成临时下载地址。
 // 签名在本地完成，不产生额外网络请求；读取接口拿到后立即代理。
 func (s *TencentCOS) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
