@@ -14,6 +14,7 @@
 | 在本地验证部署架构（Nginx 网关） | [GATEWAY.md](GATEWAY.md) |
 | 部署至服务器 | [../deploy/README.md](../deploy/README.md) |
 | 查询接口 | [API.md](API.md) |
+| 环境变量完整说明 | [ENV.md](ENV.md) |
 
 ---
 
@@ -97,7 +98,7 @@ openssl rand -hex 24
 grep '^TRUSTED_PROXIES=' .env
 ```
 
-其余变量保持默认值，其含义参见 `.env.example` 中的注释或第 4 章。
+其余变量保持默认值，其含义参见 [ENV.md](ENV.md)。
 
 ### 1.3 启动数据库
 
@@ -251,56 +252,6 @@ netsh int ipv6 set dynamicport tcp start=49152 num=16384
 
 ## 4 环境变量参考
 
-本章为查阅性质，非操作步骤。本地开发通常只需关注 1.2 节填写的几项，其余保持默认值。
+所有环境变量的完整说明（作用、默认值、取值范围、注意事项，以及本地模板与生产模板的差异）见 [ENV.md](ENV.md)。
 
-### 4.1 密钥
-
-| 变量名 | 描述 | 默认值 |
-|--------|------|--------|
-| `JWT_SECRET` | JWT 密钥，至少 32 字符，缺失即拒绝启动 | 无 |
-| `SECRET_KEY` | 供应商密钥加密密钥，至少 32 字符，缺失即拒绝启动 | 无 |
-| `POSTGRES_PASSWORD` | 本地开发数据库密码，供 docker compose 使用并被 `SQL_DSN` 引用 | 必须设置 |
-
-### 4.2 数据库
-
-| 变量名 | 描述 | 默认值 |
-|--------|------|--------|
-| `SQL_DSN` | PostgreSQL 连接字符串，引用 `${POSTGRES_USER}`、`${POSTGRES_PASSWORD}`、`${POSTGRES_DB}`（三个引用行均须位于其上方） | 必须设置 |
-| `POSTGRES_USER` | 本地开发数据库用户名，供 docker compose、备份脚本与 `SQL_DSN` 使用 | `futureai_api` |
-| `POSTGRES_DB` | 本地开发数据库名，同上 | `futureai_api` |
-| `SQL_MAX_IDLE_CONNS` | 最大空闲连接数 | `10` |
-| `SQL_MAX_OPEN_CONNS` | 最大打开连接数 | `80` |
-| `SQL_MAX_LIFETIME` | 连接最大生存时间（秒） | `1800` |
-| `SQL_MAX_IDLE_TIME` | 连接最大空闲时间（秒） | `600` |
-
-### 4.3 服务与部署
-
-| 变量名 | 描述 | 默认值 |
-|--------|------|--------|
-| `PORT` | 服务端口 | `3001` |
-| `GIN_MODE` | Gin 运行模式（debug / release） | `release` |
-| `DEBUG` | 调试模式，开启后打印 SQL 日志 | `false` |
-| `TRUSTED_PROXIES` | 信任的反向代理网段（逗号分隔 IP / CIDR） | 空（不信任任何代理头） |
-| `OUTBOUND_PROXY` | 出站代理，形如 `http://10.0.0.1:3128` | 空（直连） |
-| `INITIAL_ROOT_PASSWORD` | root 初始密码，含 `$` 时须用单引号 | 空（随机生成并写入文件） |
-| `FUTUREAI_API_TAG` | 本地开发栈使用的镜像标签，仅 `docker compose` 读取 | `latest` |
-
-### 4.4 限流与计费
-
-| 变量名 | 描述 | 默认值 |
-|--------|------|--------|
-| `API_RATE_LIMIT_PER_MINUTE` | `/v1` 每用户每分钟请求数 | `60` |
-| `API_RATE_LIMIT_BURST` | `/v1` 每用户瞬时突发量 | `10` |
-| `IMAGE_GET_RATE_LIMIT_PER_MINUTE` | 公开文件读取接口每来源 IP 每分钟请求数 | `1000` |
-| `UPLOAD_CREDITS` | 图片上传的单次积分成本 | `0` |
-| `PUBLIC_BASE_URL` | 对外访问地址，用于拼接文件公开 URL（支持裸域名） | 空（回落到上游地址） |
-| `TENCENT_COS_BUCKET_URL` | COS 桶域名，成图转存用 | 空（不启用转存） |
-| `TENCENT_COS_SECRET_ID` | COS 子账号 SecretId | 空 |
-| `TENCENT_COS_SECRET_KEY` | COS 子账号 SecretKey | 空 |
-| `FILE_TTL_SECONDS` | 转存文件有效期（秒） | `86400` |
-| `FILE_CLEANUP_ENABLED` | 是否启用过期文件清理 | `true` |
-| `FILE_CLEANUP_INTERVAL_SECONDS` | 清理循环间隔（秒） | `600` |
-| `FILE_CLEANUP_BATCH_SIZE` | 每轮处理上限（条，对象删除与记录回收各自计算） | `1000` |
-| `FILE_CLEANUP_GRACE_SECONDS` | 过期后删除对象的宽限期（秒） | `900` |
-| `FILE_CLEANUP_RETENTION_SECONDS` | 对象删除后记录保留时长（秒） | `604800` |
-| `FILE_CLEANUP_RETRY_WINDOW_SECONDS` | 删除失败的最长重试窗口（秒） | `604800` |
+本节不再重复罗列；查找某一项时直接按变量名在 ENV.md 中搜索。

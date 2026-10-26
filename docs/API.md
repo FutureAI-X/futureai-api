@@ -37,7 +37,7 @@
 - 若设置了 `INITIAL_ROOT_PASSWORD` 环境变量，则使用该值；
 - 否则随机生成并写入 `./root_initial_password.txt`（权限 `0600`）。
 
-该密码不会写入日志。登录后应立即通过 `PUT /api/user/password` 修改，并删除密码文件。容器部署建议直接使用环境变量，理由见 [deploy/futureai-api/.env.example](../deploy/futureai-api/.env.example)。
+该密码不会写入日志。登录后应立即通过 `PUT /api/user/password` 修改，并删除密码文件。容器部署建议直接使用环境变量，理由见 [ENV.md](ENV.md#initial_root_password)。
 
 响应：
 

@@ -7,6 +7,7 @@
 | 我想… | 看这里 |
 |---|---|
 | 本地跑起来、改代码 | **[docs/DEV.md](docs/DEV.md)** |
+| 查环境变量的含义 | [docs/ENV.md](docs/ENV.md) |
 | 打包成镜像、用 Docker 在本地跑 | **[docs/DOCKER.md](docs/DOCKER.md)** |
 | 在本地跑 Nginx 网关（验证部署架构） | [docs/GATEWAY.md](docs/GATEWAY.md) |
 | 部署到服务器 | [deploy/README.md](deploy/README.md) |
@@ -34,6 +35,7 @@ futureai-api/
 │
 ├── docs/                # 文档
 │   ├── DEV.md           #   本地开发
+│   ├── ENV.md           #   环境变量完整说明
 │   ├── DOCKER.md        #   打包镜像 & 本地 Docker 运行
 │   └── API.md           #   接口参考
 │
