@@ -185,6 +185,9 @@ var (
 
 	fileDownloadClientOnce sync.Once
 	fileDownloadClient     *http.Client
+
+	trustedEndpointClientOnce sync.Once
+	trustedEndpointClient     *http.Client
 )
 
 // outboundClientOverride 测试注入用，生产运行期间始终为 nil。
@@ -302,6 +305,49 @@ func FileDownloadHTTPClient() *http.Client {
 		}
 	})
 	return fileDownloadClient
+}
+
+// TrustedEndpointHTTPClient 返回访问「运维配置的可信端点」用的出站客户端。
+//
+// 与 FileDownloadHTTPClient 的唯一区别是**不做目标 IP 的内网/保留地址拦截**。
+// 原因：腾讯云主机访问 COS 时，桶域名会被解析到 169.254.0.0/16（链路本地，
+// 走云内网直连，免流量费），而通用 SSRF 规则会把这种正常解析当成内网访问拒绝，
+// 表现为上传报「拒绝连接内网或保留地址 169.254.0.x」。
+//
+// 使用边界：只能用于地址来自运维配置或本服务自己写入的记录的场景——
+// TENCENT_COS_BUCKET_URL、files.service_address 以及据此签发的预签名地址。
+// 用户可控的 URL（上游成图地址、历史外部地址）必须继续走 FileDownloadHTTPClient，
+// 否则 SSRF 防护就被绕过了。
+func TrustedEndpointHTTPClient() *http.Client {
+	trustedEndpointClientOnce.Do(func() {
+		proxyURL := parseOutboundProxy()
+
+		var dial func(context.Context, string, string) (net.Conn, error)
+		if proxyURL != nil {
+			dial = proxyDialContext(proxyURL)
+		} else {
+			dialer := &net.Dialer{Timeout: outboundDialTimeout, KeepAlive: 30 * time.Second}
+			dial = dialer.DialContext
+		}
+
+		trustedEndpointClient = &http.Client{
+			Transport: newOutboundTransport(dial, proxyURL),
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 3 {
+					return errors.New("重定向次数过多")
+				}
+				if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+					return fmt.Errorf("拒绝重定向到非 http(s) 协议: %s", req.URL.Scheme)
+				}
+				// 对象存储请求可能携带签名头，跨主机重定向等于把凭证交给另一个主机。
+				if req.URL.Host != via[0].URL.Host {
+					return fmt.Errorf("拒绝跨主机重定向: %s -> %s", via[0].URL.Host, req.URL.Host)
+				}
+				return nil
+			},
+		}
+	})
+	return trustedEndpointClient
 }
 
 // parseOutboundProxy 解析 OUTBOUND_PROXY。

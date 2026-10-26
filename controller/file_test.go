@@ -366,6 +366,42 @@ func TestProxyFileContentFallsBackForUnknownServiceType(t *testing.T) {
 	}
 }
 
+// TestProxyFileContentUsesTrustedClientForStorage 验证对象存储记录走可信端点客户端。
+// 腾讯云 COS 在云主机内解析到 169.254.0.0/16，通用客户端会拦截；这里用回环地址
+// 模拟同类目标：只有走 TrustedEndpointHTTPClient 才能读取成功。
+func TestProxyFileContentUsesTrustedClientForStorage(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 9, 9, 9}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(png)
+	}))
+	defer upstream.Close()
+
+	t.Setenv("TENCENT_COS_BUCKET_URL", upstream.URL)
+	t.Setenv("TENCENT_COS_SECRET_ID", "test-id")
+	t.Setenv("TENCENT_COS_SECRET_KEY", "test-key")
+	t.Setenv(common.OutboundProxyEnv, "")
+
+	c, rec := newProxyTestContext(t, nil)
+	record := &model.File{
+		FileID:         "file_test",
+		ServiceType:    "TENCENT_COS",
+		ServiceAddress: upstream.URL,
+		FileKey:        "png/file_test.png",
+		URL:            upstream.URL + "/png/file_test.png",
+	}
+
+	proxyFileContent(c, record, time.Now())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.EqualFold(rec.Body.String(), string(png)) {
+		t.Errorf("响应体与上游内容不一致")
+	}
+}
+
 // TestProxyFileContentTencentCOSWithoutCredentials 验证私有桶记录在
 // 缺少密钥时明确失败，而不是拿私有 URL 去请求后得到 403。
 func TestProxyFileContentTencentCOSWithoutCredentials(t *testing.T) {

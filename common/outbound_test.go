@@ -3,6 +3,7 @@ package common
 import (
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 )
@@ -55,6 +56,28 @@ func TestIsBlockedOutboundIPAllowsPublicTargets(t *testing.T) {
 func TestIsBlockedOutboundIPHandlesNil(t *testing.T) {
 	if !IsBlockedOutboundIP(nil) {
 		t.Error("nil IP 应视为不可用（fail-closed）")
+	}
+}
+
+// TestTrustedEndpointHTTPClientAllowsLoopback 验证可信端点客户端不做内网拦截。
+// 腾讯云 COS 在云主机内会把桶域名解析到 169.254.0.0/16，通用客户端会因此拒绝上传；
+// 用回环地址模拟同一类"正常但非公网"的目标。
+func TestTrustedEndpointHTTPClientAllowsLoopback(t *testing.T) {
+	t.Setenv(OutboundProxyEnv, "")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	resp, err := TrustedEndpointHTTPClient().Get(srv.URL)
+	if err != nil {
+		t.Fatalf("可信端点客户端不应拒绝回环地址: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
 }
 

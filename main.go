@@ -211,6 +211,7 @@ func main() {
 	stopCleaner()
 	common.OutboundHTTPClient().CloseIdleConnections()
 	common.FileDownloadHTTPClient().CloseIdleConnections()
+	common.TrustedEndpointHTTPClient().CloseIdleConnections()
 
 	if err := model.CloseDB(); err != nil {
 		common.SysError("关闭数据库连接失败: " + err.Error())

@@ -68,7 +68,11 @@ func NewTencentCOS(cfg TencentCOSConfig) (*TencentCOS, error) {
 	if transport == nil {
 		// 复用共享 Transport：SDK 的签名层只包裹 RoundTripper，
 		// 底层连接池仍由它管理，避免每次上传都重新握手。
-		transport = common.FileDownloadHTTPClient().Transport
+		//
+		// 用可信端点客户端而不是通用出站客户端：腾讯云主机会把 COS 桶域名
+		// 解析到 169.254.0.0/16 走内网直连，通用客户端的 SSRF 拦截会拒绝它。
+		// 桶地址来自环境变量或 files.service_address，不是用户输入。
+		transport = common.TrustedEndpointHTTPClient().Transport
 	}
 
 	client := cos.NewClient(&cos.BaseURL{BucketURL: u}, &http.Client{

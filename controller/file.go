@@ -89,12 +89,13 @@ func fileExpired(expiresAt *time.Time, now time.Time) bool {
 // 又会让并发数直接受内存限制。上游读取沿用请求自身的 context，
 // 客户端断开时上游连接会一并取消。
 func proxyFileContent(c *gin.Context, record *model.File, now time.Time) {
-	target, err := resolveFileURL(c.Request.Context(), record)
+	source, err := resolveFileURL(c.Request.Context(), record)
 	if err != nil {
 		common.SysErrorf("[GetImageFile] 解析文件地址失败: file_id=%s, err=%v", record.FileID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"code": "fail", "message": "文件暂时无法获取"})
 		return
 	}
+	target := source.URL
 
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, target.String(), nil)
 	if err != nil {
@@ -114,7 +115,12 @@ func proxyFileContent(c *gin.Context, record *model.File, now time.Time) {
 		req.Header.Set("If-Range", ir)
 	}
 
-	resp, err := common.FileDownloadHTTPClient().Do(req)
+	client := common.FileDownloadHTTPClient()
+	if source.Trusted {
+		// 对象存储的预签名地址可能解析到云厂商内网地址，不能套用 SSRF 拦截。
+		client = common.TrustedEndpointHTTPClient()
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		// 客户端主动断开时这里也会返回错误（请求 context 已取消），
 		// 那不是故障，不写错误日志。
@@ -230,13 +236,23 @@ func publicFileURL(fileID string) string {
 	return base + "/v1/images/get/" + url.PathEscape(fileID)
 }
 
+// fileSource 读取接口最终要拉取的地址。
+type fileSource struct {
+	URL *url.URL
+	// Trusted 表示地址由本服务针对已知对象存储现场签发。
+	// 这类地址可能解析到云厂商内网地址（腾讯云 COS 的 169.254.0.0/16），
+	// 必须使用不做内网拦截的客户端；其余地址仍走 SSRF 防护。
+	Trusted bool
+}
+
 // resolveFileURL 决定实际拉取地址。
 //
 // 写入侧把成图转存到私有桶，files.url 只是对象的规范地址，不能匿名读取；
 // 因此 TENCENT_COS 记录要用 file_key 现签一个短期地址。service_type 为空
 // 的历史记录（以及将来由外部写入、但本服务不认识的服务）仍按 url 直连。
-func resolveFileURL(ctx context.Context, record *model.File) (*url.URL, error) {
+func resolveFileURL(ctx context.Context, record *model.File) (*fileSource, error) {
 	raw := record.URL
+	trusted := false
 
 	if strings.TrimSpace(record.ServiceType) != "" {
 		store, err := storage.FromEnv(record.ServiceType, record.ServiceAddress)
@@ -250,6 +266,7 @@ func resolveFileURL(ctx context.Context, record *model.File) (*url.URL, error) {
 				return nil, signErr
 			}
 			raw = signed
+			trusted = true
 		case errors.Is(err, storage.ErrNotSupported):
 			// 本服务不认识的服务类型：可能是公开地址，回落到 url
 		default:
@@ -257,7 +274,11 @@ func resolveFileURL(ctx context.Context, record *model.File) (*url.URL, error) {
 		}
 	}
 
-	return parseFileURL(raw)
+	u, err := parseFileURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &fileSource{URL: u, Trusted: trusted}, nil
 }
 
 // parseFileURL 校验并解析记录中的完整 URL。
