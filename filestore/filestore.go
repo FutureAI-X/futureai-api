@@ -1,8 +1,8 @@
-// Package filestore 把外部 URL 的文件转存到对象存储，并登记到 files 表。
+// Package filestore 把文件转存到对象存储，并登记到 files 表。
 //
-// 这是「先下载、再上传、最后落库」的编排层：
-// 对象存储的差异由 storage.Store 抽象，本包只负责下载校验、
-// 生成不可猜的文件 ID、计算有效期与写库。
+// 支持两种来源：从外部 URL 下载（PersistURL），以及直接在内存中的内容
+// （PersistBytes，供图片上传接口使用）。对象存储的差异由 storage.Store 抽象，
+// 本包只负责校验、生成不可猜的文件 ID、计算有效期与写库。
 package filestore
 
 import (
@@ -154,6 +154,27 @@ func (p *Persister) PersistURL(ctx context.Context, rawURL string) (*model.File,
 		return nil, errors.New("仅支持 JPEG/PNG/WebP/GIF 图片")
 	}
 
+	return p.persistBytes(ctx, data, ext, contentType)
+}
+
+// PersistBytes 把已经在内存中的图片转存到对象存储并登记 files 表。
+//
+// 供图片上传接口使用：内容已经在请求体里，不需要再下载一次。
+// 过期时间与清理机制与 PersistURL 完全一致。
+func (p *Persister) PersistBytes(ctx context.Context, data []byte) (*model.File, error) {
+	ext, contentType, ok := detectImageExt(data)
+	if !ok {
+		return nil, errors.New("仅支持 JPEG/PNG/WebP/GIF 图片")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return p.persistBytes(ctx, data, ext, contentType)
+}
+
+// persistBytes 执行「上传对象 + 登记记录」。
+// 调用方负责确定扩展名与 Content-Type，并控制 context 的时限。
+func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentType string) (*model.File, error) {
 	store, err := p.newStore(p.cfg.ServiceType, "")
 	if err != nil {
 		return nil, err

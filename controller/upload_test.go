@@ -1,9 +1,157 @@
 package controller
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/storage"
+	"github.com/gin-gonic/gin"
 )
+
+// ── 上传后端选择 ──
+
+func TestUploadBackendConfig(t *testing.T) {
+	cases := map[string]string{
+		"":            uploadBackendCOS,
+		"cos":         uploadBackendCOS,
+		"APIMart":     uploadBackendAPIMart,
+		"  apimart ":  uploadBackendAPIMart,
+		"unsupported": uploadBackendCOS,
+	}
+	for raw, want := range cases {
+		t.Setenv(uploadBackendEnv, raw)
+		if got := uploadBackend(); got != want {
+			t.Errorf("IMAGE_UPLOAD_BACKEND=%q -> %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// newUploadTestContext 构造一个已解析 multipart 的 gin 上下文。
+// 预先解析是必须的：gin.Context.FormFile 会读 c.engine，而测试上下文没有 engine。
+func newUploadTestContext(t *testing.T, filename string, data []byte) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("构造 multipart 失败: %v", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatalf("写入 multipart 失败: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("关闭 multipart 失败: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/uploads/images", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if err := req.ParseMultipartForm(32 << 20); err != nil {
+		t.Fatalf("解析 multipart 失败: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("user_id", 1)
+	return c, rec
+}
+
+func overridePersistUploadedImage(t *testing.T, fn func(context.Context, []byte) (*model.File, error)) {
+	t.Helper()
+	original := persistUploadedImage
+	persistUploadedImage = fn
+	t.Cleanup(func() { persistUploadedImage = original })
+}
+
+func TestUploadImageStoresToCOS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv(uploadBackendEnv, uploadBackendCOS)
+	t.Setenv(uploadCreditsEnv, "0")
+	t.Setenv(publicBaseURLEnv, "https://example.com")
+
+	png := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4}
+	var gotData []byte
+	overridePersistUploadedImage(t, func(_ context.Context, data []byte) (*model.File, error) {
+		gotData = append([]byte(nil), data...)
+		return &model.File{FileID: "file_abcdef.png"}, nil
+	})
+
+	c, rec := newUploadTestContext(t, "photo.PNG", png)
+	UploadImage(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if string(gotData) != string(png) {
+		t.Errorf("传给存储的内容与请求体不一致")
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("响应不是合法 JSON: %v", err)
+	}
+	if want := "https://example.com/v1/images/get/file_abcdef.png"; resp["url"] != want {
+		t.Errorf("url = %v, want %s", resp["url"], want)
+	}
+	if resp["filename"] != "photo.png" {
+		t.Errorf("filename = %v, want photo.png", resp["filename"])
+	}
+	if resp["content_type"] != "image/png" {
+		t.Errorf("content_type = %v, want image/png", resp["content_type"])
+	}
+	if resp["bytes"] != float64(len(png)) {
+		t.Errorf("bytes = %v, want %d", resp["bytes"], len(png))
+	}
+}
+
+func TestUploadImageRejectsWhenPublicBaseURLMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv(uploadBackendEnv, uploadBackendCOS)
+	t.Setenv(uploadCreditsEnv, "0")
+	t.Setenv(publicBaseURLEnv, "")
+
+	called := false
+	overridePersistUploadedImage(t, func(context.Context, []byte) (*model.File, error) {
+		called = true
+		return &model.File{FileID: "file_abcdef.png"}, nil
+	})
+
+	c, rec := newUploadTestContext(t, "photo.png", []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4})
+	UploadImage(c)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("状态码 = %d, want 503", rec.Code)
+	}
+	if called {
+		t.Error("缺少对外地址时不应上传")
+	}
+}
+
+func TestUploadImageCOSNotConfiguredReturns503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv(uploadBackendEnv, uploadBackendCOS)
+	t.Setenv(uploadCreditsEnv, "0")
+	t.Setenv(publicBaseURLEnv, "https://example.com")
+
+	overridePersistUploadedImage(t, func(context.Context, []byte) (*model.File, error) {
+		return nil, storage.ErrNotConfigured
+	})
+
+	c, rec := newUploadTestContext(t, "photo.png", []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4})
+	UploadImage(c)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("状态码 = %d, want 503", rec.Code)
+	}
+}
 
 // ── sanitizeFilename：阻断路径穿越与 multipart 头注入 ──
 

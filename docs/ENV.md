@@ -236,6 +236,18 @@ chmod 600 .env
     速率持续消耗。
   - 配置非法（负数、非数字）时按 `0` 处理并打错误日志，不会拒绝启动。
 
+### `IMAGE_UPLOAD_BACKEND`
+
+- **作用**：`POST /v1/uploads/images` 的上传后端。
+- **默认**：`cos`。
+- **取值**：
+  - `cos`：转存到 `TENCENT_COS_*` 配置的对象存储，登记 `files` 表，响应里的 `url` 是本服务的公开读取地址。
+  - `apimart`：转存到 APIMart（保留的原有实现），`url` 是第三方托管地址。
+- **注意**：
+  - 非法值按 `cos` 处理并打错误日志。
+  - 两者都可用时严格按本项选择，不会自动跨后端；出问题时改这一项并重启即可切回 APIMart。
+  - 计费（`UPLOAD_CREDITS`）与后端选择无关。
+
 ### `IMAGE_GET_RATE_LIMIT_PER_MINUTE`
 
 - **作用**：`GET /v1/images/get/:file_id`（公开文件读取）按来源 IP 的限流速率。

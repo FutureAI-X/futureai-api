@@ -197,6 +197,21 @@
 
 上传使用 `multipart/form-data`，字段名 `file`，超过 10MB 返回 413。网关侧的 `client_max_body_size` 为 12m，若小于请求体大小，请求会在到达应用之前被拒绝。
 
+默认把图片转存到平台自己的对象存储，成功响应如下：
+
+```json
+{
+  "url": "https://futureaiapi.com/v1/images/get/file_6d41e4bf9a4bfac7b1ff97d7.png",
+  "filename": "photo.png",
+  "content_type": "image/png",
+  "bytes": 123456
+}
+```
+
+`url` 是公开读取地址，无需认证，有效期与成图一致（`FILE_TTL_SECONDS`，默认 24 小时）；到期后返回 `410`，记录回收后返回 `404`。`filename` 是调用方上传时的文件名，下载时实际文件名取自 URL 末段（`file_<id>.<ext>`）。
+
+服务端可通过 `IMAGE_UPLOAD_BACKEND=apimart` 切回第三方上传，此时 `url` 是第三方的托管地址，其余字段不变。
+
 ### 4.1 图像生成的请求标准
 
 `POST /v1/images/generations` 只接受下表字段，请求体中的其他字段一律忽略（不报错，也不透传给上游）。平台对各供应商的适配（参数改名、变体参数补全等）全部在这一层之下完成，调用方只需面向这一套字段。

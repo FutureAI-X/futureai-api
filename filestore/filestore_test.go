@@ -142,6 +142,69 @@ func TestPersistURLSuccess(t *testing.T) {
 	}
 }
 
+func TestPersistBytesSuccess(t *testing.T) {
+	png := pngBytes()
+	persister, store, _ := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("PersistBytes 不应发起下载请求")
+	})
+
+	file, err := persister.PersistBytes(context.Background(), png)
+	if err != nil {
+		t.Fatalf("转存失败: %v", err)
+	}
+
+	if !regexp.MustCompile(`^file_[0-9a-f]{24}\.png$`).MatchString(file.FileID) {
+		t.Errorf("file_id 形态异常: %q", file.FileID)
+	}
+	wantKey := "png/" + file.FileID
+	if file.FileKey != wantKey {
+		t.Errorf("FileKey = %q, want %q", file.FileKey, wantKey)
+	}
+	if file.ServiceType != storage.ServiceTencentCOS {
+		t.Errorf("ServiceType = %q", file.ServiceType)
+	}
+	if file.TTLSeconds != 86400 {
+		t.Errorf("TTLSeconds = %d, want 86400", file.TTLSeconds)
+	}
+	if file.ExpiresAt == nil || !file.ExpiresAt.Equal(testNow.Add(24*time.Hour)) {
+		t.Errorf("ExpiresAt = %v, want %v", file.ExpiresAt, testNow.Add(24*time.Hour))
+	}
+
+	if len(store.uploads) != 1 {
+		t.Fatalf("上传次数 = %d, want 1", len(store.uploads))
+	}
+	up := store.uploads[0]
+	if up.key != wantKey {
+		t.Errorf("上传 key = %q, want %q", up.key, wantKey)
+	}
+	if up.contentType != "image/png" {
+		t.Errorf("上传 Content-Type = %q, want image/png", up.contentType)
+	}
+	if string(up.data) != string(png) {
+		t.Errorf("上传内容与请求体不一致")
+	}
+}
+
+func TestPersistBytesRejectsUnsupportedType(t *testing.T) {
+	persister, store, _ := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {})
+
+	if _, err := persister.PersistBytes(context.Background(), []byte("<html></html>")); err == nil {
+		t.Fatal("非图片内容应返回错误")
+	}
+	if len(store.uploads) != 0 {
+		t.Errorf("类型校验失败时不应上传，实际 %d 次", len(store.uploads))
+	}
+}
+
+func TestPersistBytesPropagatesUploadError(t *testing.T) {
+	persister, store, _ := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {})
+	store.uploadErr = errors.New("COS 上传失败")
+
+	if _, err := persister.PersistBytes(context.Background(), pngBytes()); err == nil {
+		t.Fatal("上传失败应返回错误")
+	}
+}
+
 func TestPersistURLUsesConfiguredTTL(t *testing.T) {
 	persister, _, srv := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(pngBytes())
