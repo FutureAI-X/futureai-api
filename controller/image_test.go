@@ -340,12 +340,12 @@ func TestReconcileConcurrencyFitsInBatch(t *testing.T) {
 	}
 }
 
-// ── completed 但没图：必须能识别出来并退款 ──
+// ── completed 但没有产出：必须能识别出来并退款 ──
 
-// 上游返回 status=completed 而图片列表为空时（内容审核拦截、上游故障），
+// 上游返回 status=completed 而结果为空时（内容审核拦截、上游故障），
 // 不能当成成功：completed 是终态、不会被任何对账查询捡起，
-// 误判的代价是用户拿不到图而积分永远扣着。
-func TestHasDeliverableImage(t *testing.T) {
+// 误判的代价是用户拿不到结果而积分永远扣着。
+func TestHasDeliverableResult(t *testing.T) {
 	cases := []struct {
 		name string
 		data map[string]interface{}
@@ -360,12 +360,14 @@ func TestHasDeliverableImage(t *testing.T) {
 		{"nil map", nil, false},
 		{"数组形态", map[string]interface{}{"images": []interface{}{"https://x/1.png"}}, true},
 		{"只有元数据字段不算交付", map[string]interface{}{"url": "", "revised_prompt": "更详细的提示词"}, false},
+		{"视频有 url", map[string]interface{}{"url": "https://x/1.mp4"}, true},
+		{"视频 url 为空", map[string]interface{}{"url": ""}, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := hasDeliverableImage(tc.data); got != tc.want {
-				t.Errorf("hasDeliverableImage(%v) = %v, want %v", tc.data, got, tc.want)
+			if got := hasDeliverableResult(tc.data); got != tc.want {
+				t.Errorf("hasDeliverableResult(%v) = %v, want %v", tc.data, got, tc.want)
 			}
 		})
 	}

@@ -134,6 +134,8 @@ func modelTypeKeys() []string {
 // warnModelsWithoutCreditRule 启动时列出缺少启用计费规则的启用模型。
 // 计费是 fail-closed 的：未配置规则的模型会返回「暂不可用」，
 // 因此这里必须提前把清单打出来，避免上线后才发现模型不可用。
+//
+// 视频模型当前不走计费规则（任务按 0 积分创建），不参与本检查。
 func warnModelsWithoutCreditRule() {
 	var models []Model
 	if err := DB.Where("status = ?", 1).Find(&models).Error; err != nil {
@@ -141,8 +143,16 @@ func warnModelsWithoutCreditRule() {
 		return
 	}
 
-	var missing []string
+	missing := []string{}
+	checked := 0
 	for _, m := range models {
+		// 视频生成当前按 0 积分创建，不经过计费规则；把它算作漏配会让
+		// 每次启动都误报「调用将被拒绝」。接入视频计费时去掉这个跳过。
+		if m.Type == ModelTypeVideo {
+			continue
+		}
+		checked++
+
 		var count int64
 		if err := DB.Model(&CreditRule{}).
 			Where("model_id = ? AND status = ?", m.ID, 1).
@@ -155,7 +165,7 @@ func warnModelsWithoutCreditRule() {
 	}
 
 	if len(missing) == 0 {
-		common.SysLogf("[计费] 全部 %d 个启用模型均已配置计费规则", len(models))
+		common.SysLogf("[计费] 全部 %d 个启用模型均已配置计费规则（视频模型当前免费，不参与检查）", checked)
 		return
 	}
 

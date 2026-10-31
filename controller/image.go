@@ -262,7 +262,7 @@ func ImageGenerate(c *gin.Context) {
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 供应商响应序列化失败: taskID=%s, err=%v", task.TaskID, err)
 	}
-	if err := setVendorResponseWithRetry(task.TaskID, string(vendorRespJSON)); err != nil {
+	if err := setVendorResponseWithRetry("ImageGenerate", task.TaskID, string(vendorRespJSON)); err != nil {
 		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 记录供应商响应失败，重启后该任务将无法对账: taskID=%s, err=%v",
 			task.TaskID, err)
 	}
@@ -298,13 +298,15 @@ func parseIdempotencyKey(c *gin.Context) (*string, bool) {
 // 值得重试的原因：写失败意味着上游 task_id 只存在于内存里，
 // 一旦进程随后退出，这个任务就永远无法对账（上游照常出图计费）。
 // 数据库抖动是短暂的，重试能把绝大多数情况救回来。
-func setVendorResponseWithRetry(taskID, vendorResponse string) error {
+//
+// tag 仅用于日志前缀，区分是哪个端点触发的写入。
+func setVendorResponseWithRetry(tag, taskID, vendorResponse string) error {
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
 		if err = model.SetTaskVendorResponse(taskID, vendorResponse); err == nil {
 			return nil
 		}
-		common.SysErrorf("[ImageGenerate] 记录供应商响应失败(第%d次): taskID=%s, err=%v", attempt, taskID, err)
+		common.SysErrorf("[%s] 记录供应商响应失败(第%d次): taskID=%s, err=%v", tag, attempt, taskID, err)
 		time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
 	}
 	return err
@@ -320,20 +322,26 @@ const maxStoredRequestBody = 1 << 20
 // requestBodyTruncatedMarker 附在截断后的请求体末尾，提示内容不完整
 const requestBodyTruncatedMarker = "...[truncated]"
 
-// marshalRequestBody 把请求体序列化成可落库的字符串。
+// marshalRequestBody 把图像请求体序列化成可落库的字符串。
+func marshalRequestBody(v interface{}) string {
+	return marshalRequestBodyFor("ImageGenerate", v)
+}
+
+// marshalRequestBodyFor 把请求体序列化成可落库的字符串。
 //
 // 只用于回溯，因此任何失败都必须降级为「记不下就不记」，绝不能让它影响一次已经扣过费的调用。
-func marshalRequestBody(v interface{}) string {
+// tag 仅用于日志前缀。
+func marshalRequestBodyFor(tag string, v interface{}) string {
 	data, err := json.Marshal(v)
 	if err != nil {
-		common.SysErrorf("[ImageGenerate] 请求体序列化失败，本次不记录: %v", err)
+		common.SysErrorf("[%s] 请求体序列化失败，本次不记录: %v", tag, err)
 		return ""
 	}
 	if len(data) <= maxStoredRequestBody {
 		return string(data)
 	}
 
-	common.SysErrorf("[ImageGenerate] 请求体 %d 字节超过上限 %d，落库时截断", len(data), maxStoredRequestBody)
+	common.SysErrorf("[%s] 请求体 %d 字节超过上限 %d，落库时截断", tag, len(data), maxStoredRequestBody)
 
 	// 直接切字节可能劈开多字节字符，落库后是无效 UTF-8；
 	// 这个索引一定在范围内（len(data) > maxStoredRequestBody），回退必然终止。
@@ -521,18 +529,74 @@ func GetTask(c *gin.Context) {
 		return
 	}
 
+	if isVideoTask(task) {
+		// 视频任务对外只暴露 taskId / status / data.url（失败时为上游错误），
+		// 不返回 file_id 与其余元数据；完整结果仍保留在 query_response 中，
+		// 供管理端任务详情与事后回溯使用。
+		c.JSON(http.StatusOK, gin.H{
+			"taskId": task.TaskID,
+			"status": task.Status,
+			"data":   videoTaskData(task.QueryResponse),
+		})
+		return
+	}
+
 	// 解析 query_response 作为 data
 	var data map[string]interface{}
 	if task.QueryResponse != "" {
 		json.Unmarshal([]byte(task.QueryResponse), &data)
 	}
 
+	data = applyPublicFileURL(data, task.FileID)
+
 	c.JSON(http.StatusOK, gin.H{
 		"taskId":  task.TaskID,
 		"status":  task.Status,
 		"file_id": task.FileID,
-		"data":    applyPublicFileURL(data, task.FileID),
+		"data":    data,
 	})
+}
+
+// videoTaskData 从视频任务的 query_response 中提取对外可见的最小结果。
+//
+// 完成时只返回 url；失败/取消时返回上游错误。resolution、duration、usage
+// 等元数据刻意不对外返回——它们只留在 query_response 里供管理端排查。
+// 没有可返回内容时返回 nil（JSON null），与图片任务非终态的 data 口径一致。
+func videoTaskData(queryResponse string) interface{} {
+	if queryResponse == "" {
+		return nil
+	}
+
+	var stored map[string]interface{}
+	if err := json.Unmarshal([]byte(queryResponse), &stored); err != nil {
+		return nil
+	}
+
+	if rawURL, ok := stored["url"].(string); ok && strings.TrimSpace(rawURL) != "" {
+		return map[string]interface{}{"url": rawURL}
+	}
+	if errInfo, ok := stored["error"]; ok && errInfo != nil {
+		return map[string]interface{}{"error": errInfo}
+	}
+	return nil
+}
+
+// isVideoTask 判断任务是否属于视频生成端点。
+//
+// 视频产物是上游的限时下载地址：不转存、也没有 file_id，
+// 因此 GetTask 不能套用图片的 applyPublicFileURL。
+// 端点仍被模型引用时不允许删除（见 DeleteEndpoint），正常情况下查得到。
+func isVideoTask(task *model.Task) bool {
+	if task == nil || task.EndpointID <= 0 {
+		return false
+	}
+	ep, err := model.GetEndpointByID(task.EndpointID)
+	if err != nil {
+		common.SysErrorf("[GetTask] 查询端点失败，按图片任务处理: taskID=%s, endpointID=%d, err=%v",
+			task.TaskID, task.EndpointID, err)
+		return false
+	}
+	return ep.Path == videoGenerationsPath
 }
 
 // applyPublicFileURL 调整任务响应中的 url 字段。
@@ -757,19 +821,20 @@ func reconcileOnce() {
 	wg.Wait()
 }
 
-// imageResultKeys 上游用来承载成图的字段名。
+// resultKeys 上游用来承载成图 / 成片结果的字段名。
 //
 // 只认这些「结果字段」，而不是「map 里有没有任何非空值」：后者会被
-// revised_prompt 之类的元数据字段骗过，把「其实没有图」误判成已交付。
-var imageResultKeys = []string{"url", "b64_json", "image_url", "images", "data"}
+// revised_prompt 之类的元数据字段骗过，把「其实没有产出」误判成已交付。
+// 视频供应商把 task.content.url 规范化为 url，同样落在这里。
+var resultKeys = []string{"url", "b64_json", "image_url", "images", "data"}
 
-// hasDeliverableImage 判断上游的 completed 结果里是否真的有图。
+// hasDeliverableResult 判断上游的 completed 结果里是否真的有产出。
 //
-// 上游会返回 status=completed 而图片列表为空（内容审核拦截、上游自身故障）。
+// 上游会返回 status=completed 而结果为空（内容审核拦截、上游自身故障）。
 // 这不能当成成功：completed 是终态，且不在任何一条对账查询里，
-// 一旦置成 completed，用户拿不到图、积分也永远不会退——钱就一直扣着。
-func hasDeliverableImage(data map[string]interface{}) bool {
-	for _, key := range imageResultKeys {
+// 一旦置成 completed，用户拿不到结果、积分也永远不会退——钱就一直扣着。
+func hasDeliverableResult(data map[string]interface{}) bool {
+	for _, key := range resultKeys {
 		v, ok := data[key]
 		if !ok {
 			continue
@@ -828,12 +893,12 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 
 	switch result.Status {
 	case model.StatusCompleted:
-		// 上游说完成了，但结果里没有可用图片：按「上游没有产出」处理并退款。
-		// 不这么做的话任务会停在终态 completed —— 用户没有图，钱却已经扣掉，
+		// 上游说完成了，但结果里没有可用产出：按「上游没有产出」处理并退款。
+		// 不这么做的话任务会停在终态 completed —— 用户没有结果，钱却已经扣掉，
 		// 且没有任何后续流程会再碰它。
-		if !hasDeliverableImage(result.Data) {
-			common.SysErrorf("[Reconcile] 上游报告 completed 但未返回图片，按失败退款: taskID=%s", task.TaskID)
-			if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusFailed, `{"error":"upstream completed without image"}`); err != nil {
+		if !hasDeliverableResult(result.Data) {
+			common.SysErrorf("[Reconcile] 上游报告 completed 但未返回结果，按失败退款: taskID=%s", task.TaskID)
+			if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusFailed, `{"error":"upstream completed without result"}`); err != nil {
 				common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
 			}
 			break
@@ -844,9 +909,13 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 			common.SysErrorf("[Reconcile] 结果序列化失败: taskID=%s, err=%v", task.TaskID, err)
 		}
 
-		// 成图转存是尽力而为：失败只记日志，任务照常完成。
+		// 图片结果转存是尽力而为：失败只记日志，任务照常完成。
 		// 原始上游 URL 仍在 data.url 中，用户不会因为存储侧故障拿不到图。
-		fileID := persistCompletedImage(task.TaskID, result.Data)
+		// 视频结果不转存，直接使用上游的限时下载地址。
+		fileID := ""
+		if result.Kind != supplier.ResultKindVideo {
+			fileID = persistCompletedImage(task.TaskID, result.Data)
+		}
 
 		if err := model.UpdateTaskCompleted(task.TaskID, string(dataJSON), fileID); err != nil {
 			common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
@@ -855,8 +924,15 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 		}
 
 	case model.StatusFailed, model.StatusCancelled:
-		// 上游明确告诉我们任务失败/被取消 → 这是可退款的终态
-		if err := model.UpdateTaskStatusWithRefund(task.TaskID, result.Status, ""); err != nil {
+		// 上游明确告诉我们任务失败/被取消 → 这是可退款的终态。
+		// 把上游错误信息写入 query_response，便于事后回溯（图片供应商通常为空）。
+		queryResp := ""
+		if len(result.Data) > 0 {
+			if b, err := json.Marshal(result.Data); err == nil {
+				queryResp = string(b)
+			}
+		}
+		if err := model.UpdateTaskStatusWithRefund(task.TaskID, result.Status, queryResp); err != nil {
 			common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
 		} else {
 			common.SysLogf("[Reconcile] 任务终止并退款: taskID=%s, status=%s", task.TaskID, result.Status)
@@ -881,7 +957,7 @@ type vendorCredentialCache struct {
 }
 
 type cachedSupplier struct {
-	s  supplier.Supplier
+	s  supplier.TaskQuerier
 	ok bool
 }
 
@@ -889,7 +965,7 @@ func newVendorCredentialCache() *vendorCredentialCache {
 	return &vendorCredentialCache{entries: make(map[int]*cachedSupplier)}
 }
 
-func (c *vendorCredentialCache) supplierFor(vendorID int) (supplier.Supplier, bool) {
+func (c *vendorCredentialCache) supplierFor(vendorID int) (supplier.TaskQuerier, bool) {
 	c.mu.Lock()
 	if e, found := c.entries[vendorID]; found {
 		c.mu.Unlock()
@@ -908,7 +984,10 @@ func (c *vendorCredentialCache) supplierFor(vendorID int) (supplier.Supplier, bo
 
 // loadSupplier 查库并构造供应商客户端。
 // 供应商实现只持有不可变的配置，共用同一个进程级 HTTP 客户端，因此并发安全。
-func loadSupplier(vendorID int) (supplier.Supplier, bool) {
+//
+// 对账循环只需要 TaskQuery 能力（图像与视频任务共用同一套状态机），
+// 因此这里用窄接口，而不是要求供应商实现图像生成。
+func loadSupplier(vendorID int) (supplier.TaskQuerier, bool) {
 	vendor, err := model.GetVendorByID(vendorID)
 	if err != nil {
 		common.SysErrorf("[Reconcile] 供应商不存在: vendorID=%d, err=%v", vendorID, err)
@@ -921,7 +1000,7 @@ func loadSupplier(vendorID int) (supplier.Supplier, bool) {
 		return nil, false
 	}
 
-	s := supplier.NewSupplier(vendor.Name, supplier.Config{BaseURL: vendor.BaseURL, APIKey: apiKey})
+	s := supplier.NewTaskQuerier(vendor.Name, supplier.Config{BaseURL: vendor.BaseURL, APIKey: apiKey})
 	if s == nil {
 		common.SysErrorf("[Reconcile] 不支持的供应商类型: %s", vendor.Name)
 		return nil, false

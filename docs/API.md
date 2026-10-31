@@ -178,6 +178,7 @@
 |---|---|---|
 | GET | `/v1/models` | 可用模型列表 |
 | POST | `/v1/images/generations` | 图像生成 |
+| POST | `/v1/videos/generations` | 视频生成（见 4.5 节） |
 | POST | `/v1/uploads/images` | 图片上传（单文件上限 10MB） |
 | GET | `/v1/images/get/:file_id` | 公开文件读取（无需认证，见 2.4 节） |
 | GET | `/v1/tasks/:task_id` | 查询任务 |
@@ -252,7 +253,7 @@
 
 ### 4.3 幂等键（可选）
 
-提交图像生成时携带 `Idempotency-Key` 请求头，可在窗口内安全重试：
+提交图像或视频生成时携带 `Idempotency-Key` 请求头，可在窗口内安全重试：
 
 ```bash
 curl -X POST https://futureaiapi.com/v1/images/generations \
@@ -262,12 +263,12 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
   -d '{"model":"...","prompt":"a cat"}'
 ```
 
-- 同一用户携带同一键重复提交只扣一次积分，后续请求直接返回首次的 `taskId`。
+- 同一用户携带同一键重复提交只会处理一次，后续请求直接返回首次的 `taskId`。
 - 不同用户可以使用相同的键，互不影响。
 - 不携带该请求头时不去重，保持原有行为。
 - 键最长 128 字符。
 
-**强烈建议调用方使用它**：提交是同步语义（上游最长 30 秒才响应），而多数 OpenAI 兼容 SDK 在超时后会自动重试；没有幂等键时，一次超时重试即会扣两次积分、在上游生成两张图。
+**强烈建议调用方使用它**：提交是同步语义（上游最长 30 秒才响应），而多数 OpenAI 兼容 SDK 在超时后会自动重试；没有幂等键时，一次超时重试就会重复扣费，并在上游重复生成。
 
 ### 4.4 任务状态
 
@@ -283,7 +284,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | `cancelled` | 是 | 上游明确返回取消 | **已退** |
 | `call_fail` | 是 | 上游明确拒绝受理 / 提交未成功 / 超期无法确认 | **已退** |
 
-只有 `completed` 时 `data` 才有值。非终态表示仍在推进中，应继续轮询（建议间隔 5 秒左右），不要当作失败。
+只有 `completed` 时 `data` 才有值。非终态表示仍在推进中，应继续轮询（建议间隔 5 秒左右），不要当作失败。视频生成任务当前按 0 积分创建（见 4.5 节），上表的积分列对它不适用。
 
 `completed` 响应还包含 `file_id`：成图已转存到对象存储时为该文件 ID，转存失败时为空字符串。文件有效期由 `FILE_TTL_SECONDS` 配置，默认 24 小时，到期后 `/v1/images/get/:file_id` 返回 `410`；记录会在对象删除 7 天后回收，之后再访问返回 `404`。
 
@@ -294,12 +295,85 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 域名取自服务端环境变量 `PUBLIC_BASE_URL`，因此返回的是可直接访问的绝对地址。该变量支持完整 origin（如 `https://futureaiapi.com`）或裸域名（按 `https` 处理）；未配置或配置非法时，`data.url` 回落到上游原始地址。
 
+视频任务不套用上述地址改写：`data.url` 就是上游的限时下载地址，没有 `file_id` 与 `url_vendor`，详见 4.5 节。
+
 `unknown` 是刻意保留的非终态：平台并不知道上游是否出图，此时既不能算成功也不能退款。分两种情况——
 
 - 已经拿到上游 taskId、只是查询失败：会继续重试，通常很快推进到 `completed` / `failed`。
 - 提交阶段结果不确定（超时、响应读不完整），连 taskId 都没拿到：没有再查证的凭据，**不会自动重试**，等人工核对。
 
 两种都会在原任务创建满 6 小时后被对账循环转为 `call_fail` 并退款，同时打 `[需人工对账]` 日志。因此看到 `unknown` 时积分不会被吞掉，只是退还时间被推迟到兜底时限。
+
+### 4.5 视频生成
+
+`POST /v1/videos/generations` 只接受下表字段，请求体中的其他字段一律忽略。`model`、`content`、`resolution`、`duration`、`ratio` 均为必填，缺失或取值非法返回 400。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `model` | string | 平台模型名（不是供应商侧模型 ID） |
+| `content` | object[] | 内容项数组，见下表 |
+| `resolution` | string | 分辨率档位，如 `480P` / `1K` / `2K` |
+| `duration` | integer | 时长（秒），必须为正整数 |
+| `ratio` | string | 画幅，如 `16:9` / `adaptive` |
+
+`content` 只接受四类内容项，其余 `type` 返回 400：
+
+| type | 必填字段 | 说明 |
+|---|---|---|
+| `text` | `text` | 提示词。至少需要一个非空 `text` 项 |
+| `image_url` | `image_url.url` | 参考图 |
+| `video_url` | `video_url.url` | 参考视频 |
+| `audio_url` | `audio_url.url` | 参考音频 |
+
+三类 URL 必须是 `http(s)` 绝对地址。`role` 原样透传，常用值为 `reference_image` / `reference_video` / `reference_audio`。
+
+请求示例：
+
+```json
+{
+  "model": "MiniMax-H3",
+  "content": [
+    { "type": "text", "text": "从首帧平滑过渡到尾帧" },
+    { "type": "image_url", "image_url": { "url": "https://example.com/ref.png" }, "role": "reference_image" },
+    { "type": "video_url", "video_url": { "url": "https://example.com/ref.mp4" }, "role": "reference_video" }
+  ],
+  "resolution": "2K",
+  "duration": 5,
+  "ratio": "adaptive"
+}
+```
+
+成功响应：
+
+```json
+{ "code": "success", "taskId": "task_e629c5e8a37a614cf2289f650585aae4" }
+```
+
+上游明确拒绝受理时返回 HTTP 200 与：
+
+```json
+{ "code": "fail", "message": "供应商调用失败" }
+```
+
+参数、身份或模型配置错误沿用 `/v1` 现有语义（参数错误 400、端点不存在 404、无可用供应商 503 等）；提交结果不确定时返回 200 与 `code=fail`，任务状态为 `unknown`，由对账循环继续确认。
+
+视频生成当前不扣积分：任务按 `credits = 0` 创建，因此不会出现 402，也不会产生积分流水。
+
+任务完成后，`GET /v1/tasks/:task_id` 对视频任务只返回 `taskId`、`status` 与 `data.url`，不返回 `file_id` 及其余元数据：
+
+```json
+{
+  "taskId": "task_e629c5e8a37a614cf2289f650585aae4",
+  "status": "completed",
+  "data": { "url": "https://files.metaso.cn/api/minimax/v2/video_generation/..." }
+}
+```
+
+`data.url` 是上游的限时下载地址，平台不转存到对象存储：URL 过期后需要重新生成任务，也没有 `url_vendor`。失败或取消时 `data` 为 `{ "error": { "code": ..., "message": ... } }`；非终态时 `data` 为 `null`。`resolution`、`duration`、`usage` 等完整字段只保留在管理端任务详情的 `query_response` 中。
+
+上游的 `queued` / `running` 在平台侧统一显示为 `submitted`；`succeeded` / `failed` / `cancelled` 分别对应 `completed` / `failed` / `cancelled`。状态机见 4.4 节。
+
+> **注意**：使用前需要在管理后台创建 `/v1/videos/generations` 端点、类型为 `video` 的模型，并完成模型↔端点绑定、供应商（METASO，Base URL `https://metaso.cn/api/minimax/v2`）与供应商模型的映射。
 
 ## 5 管理员接口
 
