@@ -856,10 +856,11 @@ func hasDeliverableResult(data map[string]interface{}) bool {
 
 // persistCompletedImage 把上游成图转存到对象存储，返回 files.file_id。
 //
+// userID 用于登记结果归属，使生成结果可以作为后续视频生成的参考输入复用。
 // 失败只记日志并返回空串：任务照常完成，原始上游 URL 仍保留在
 // query_response 的 data.url 中。转存是附加能力，不能让它把
 // 「已经出图且已扣费」的任务变成失败。
-func persistCompletedImage(taskID string, data map[string]interface{}) string {
+func persistCompletedImage(taskID string, userID int, data map[string]interface{}) string {
 	rawURL, _ := data["url"].(string)
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -867,7 +868,7 @@ func persistCompletedImage(taskID string, data map[string]interface{}) string {
 		return ""
 	}
 
-	file, err := filestore.Default().PersistURL(context.Background(), rawURL)
+	file, err := filestore.Default().PersistURLForUser(context.Background(), rawURL, userID)
 	if err != nil {
 		common.SysErrorf("[Reconcile] 成图转存失败，任务仍按完成处理: taskID=%s, err=%v", taskID, err)
 		return ""
@@ -914,7 +915,7 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 		// 视频结果不转存，直接使用上游的限时下载地址。
 		fileID := ""
 		if result.Kind != supplier.ResultKindVideo {
-			fileID = persistCompletedImage(task.TaskID, result.Data)
+			fileID = persistCompletedImage(task.TaskID, task.UserID, result.Data)
 		}
 
 		if err := model.UpdateTaskCompleted(task.TaskID, string(dataJSON), fileID); err != nil {

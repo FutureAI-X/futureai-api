@@ -25,25 +25,77 @@ func newMetaso(cfg Config) *metaso {
 	return &metaso{cfg: cfg}
 }
 
+// Metaso 内容项类型。这是供应商侧的上游格式，只在本适配层使用；
+// 平台公开契约是 prompt + images/videos/audios 三个数组。
+const (
+	metasoContentTypeText  = "text"
+	metasoContentTypeImage = "image_url"
+	metasoContentTypeVideo = "video_url"
+	metasoContentTypeAudio = "audio_url"
+)
+
+type metasoContentURL struct {
+	URL string `json:"url"`
+}
+
+type metasoContentItem struct {
+	Type     string            `json:"type"`
+	Text     string            `json:"text,omitempty"`
+	ImageURL *metasoContentURL `json:"image_url,omitempty"`
+	VideoURL *metasoContentURL `json:"video_url,omitempty"`
+	AudioURL *metasoContentURL `json:"audio_url,omitempty"`
+	Role     string            `json:"role,omitempty"`
+}
+
 // metasoVideoRequest Metaso 视频生成请求体。
 //
 // 只包含约定的标准字段。fast_mode 固定 false，且不是对外字段：
 // 调用方无法通过请求体把它改成 true。
 type metasoVideoRequest struct {
-	Model      string             `json:"model"`
-	Content    []VideoContentItem `json:"content"`
-	Resolution string             `json:"resolution"`
-	Duration   int                `json:"duration"`
-	Ratio      string             `json:"ratio"`
-	FastMode   bool               `json:"fast_mode"`
+	Model      string              `json:"model"`
+	Content    []metasoContentItem `json:"content"`
+	Resolution string              `json:"resolution"`
+	Duration   int                 `json:"duration"`
+	Ratio      string              `json:"ratio"`
+	FastMode   bool                `json:"fast_mode"`
 }
 
-// buildVideoRequest 把平台标准字段翻译成 Metaso 的线上请求体。
-// model 使用供应商模型 ID（controller 按管理端的映射填充），而不是外部模型名。
+// buildVideoRequest 把平台字段翻译成 Metaso 的线上请求体。
+//
+// 平台侧是 prompt + 三个 URL 数组；这里按 Metaso 的 content 格式组装：
+// text → images → videos → audios，并按数组类型补默认 role。
 func buildVideoRequest(req VideoGenerateRequest) metasoVideoRequest {
+	content := make([]metasoContentItem, 0, 1+len(req.Images)+len(req.Videos)+len(req.Audios))
+
+	content = append(content, metasoContentItem{
+		Type: metasoContentTypeText,
+		Text: req.Prompt,
+	})
+	for _, u := range req.Images {
+		content = append(content, metasoContentItem{
+			Type:     metasoContentTypeImage,
+			ImageURL: &metasoContentURL{URL: u},
+			Role:     "reference_image",
+		})
+	}
+	for _, u := range req.Videos {
+		content = append(content, metasoContentItem{
+			Type:     metasoContentTypeVideo,
+			VideoURL: &metasoContentURL{URL: u},
+			Role:     "reference_video",
+		})
+	}
+	for _, u := range req.Audios {
+		content = append(content, metasoContentItem{
+			Type:     metasoContentTypeAudio,
+			AudioURL: &metasoContentURL{URL: u},
+			Role:     "reference_audio",
+		})
+	}
+
 	return metasoVideoRequest{
 		Model:      req.VendorModelID,
-		Content:    req.Content,
+		Content:    content,
 		Resolution: req.Resolution,
 		Duration:   req.Duration,
 		Ratio:      req.Ratio,

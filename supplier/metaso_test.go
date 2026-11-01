@@ -17,15 +17,11 @@ import (
 
 func validVideoRequest() VideoGenerateRequest {
 	return VideoGenerateRequest{
-		Model: "MiniMax-H3",
-		Content: []VideoContentItem{
-			{Type: VideoContentTypeText, Text: "a cat walking"},
-			{
-				Type:     VideoContentTypeImage,
-				ImageURL: &VideoContentURL{URL: "https://cdn.example.com/ref.png"},
-				Role:     "reference_image",
-			},
-		},
+		Model:         "MiniMax-H3",
+		Prompt:        "a cat walking",
+		Images:        []string{"https://cdn.example.com/ref.png"},
+		Videos:        []string{"https://cdn.example.com/ref.mp4"},
+		Audios:        []string{"https://cdn.example.com/ref.mp3"},
 		Resolution:    "2K",
 		Duration:      5,
 		Ratio:         "adaptive",
@@ -45,29 +41,20 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 		want   string
 	}{
 		{"缺少 model", func(r *VideoGenerateRequest) { r.Model = "  " }, "model"},
-		{"缺少 content", func(r *VideoGenerateRequest) { r.Content = nil }, "content"},
+		{"缺少 prompt", func(r *VideoGenerateRequest) { r.Prompt = "  " }, "prompt"},
 		{"缺少 resolution", func(r *VideoGenerateRequest) { r.Resolution = "" }, "resolution"},
 		{"duration 为 0", func(r *VideoGenerateRequest) { r.Duration = 0 }, "duration"},
 		{"duration 为负", func(r *VideoGenerateRequest) { r.Duration = -1 }, "duration"},
 		{"缺少 ratio", func(r *VideoGenerateRequest) { r.Ratio = "" }, "ratio"},
-		{"没有非空 text", func(r *VideoGenerateRequest) {
-			r.Content = []VideoContentItem{
-				{Type: VideoContentTypeText, Text: "   "},
-				{Type: VideoContentTypeImage, ImageURL: &VideoContentURL{URL: "https://x/a.png"}},
-			}
-		}, "text"},
-		{"未知 type", func(r *VideoGenerateRequest) {
-			r.Content = append(r.Content, VideoContentItem{Type: "file", Text: "x"})
-		}, "不支持"},
-		{"image_url 缺少 url", func(r *VideoGenerateRequest) {
-			r.Content[1].ImageURL = nil
-		}, "image_url.url"},
-		{"image_url 为空", func(r *VideoGenerateRequest) {
-			r.Content[1].ImageURL = &VideoContentURL{URL: "  "}
-		}, "image_url.url"},
-		{"非 http 地址", func(r *VideoGenerateRequest) {
-			r.Content[1].ImageURL = &VideoContentURL{URL: "file:///etc/passwd"}
-		}, "http(s)"},
+		{"images 非 http 地址", func(r *VideoGenerateRequest) {
+			r.Images = []string{"file:///etc/passwd"}
+		}, "images"},
+		{"videos 非 http 地址", func(r *VideoGenerateRequest) {
+			r.Videos = []string{"ftp://cdn.example.com/ref.mp4"}
+		}, "videos"},
+		{"audios 非 http 地址", func(r *VideoGenerateRequest) {
+			r.Audios = []string{"not-a-url"}
+		}, "audios"},
 	}
 
 	for _, tc := range cases {
@@ -85,29 +72,22 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 	}
 }
 
-// 四类内容项都应通过校验，避免只支持了示例里的 text + image。
-func TestVideoGenerateRequestValidateAllContentTypes(t *testing.T) {
-	req := VideoGenerateRequest{
-		Model: "MiniMax-H3",
-		Content: []VideoContentItem{
-			{Type: VideoContentTypeText, Text: "prompt"},
-			{Type: VideoContentTypeImage, ImageURL: &VideoContentURL{URL: "https://x/a.png"}, Role: "reference_image"},
-			{Type: VideoContentTypeVideo, VideoURL: &VideoContentURL{URL: "https://x/a.mp4"}, Role: "reference_video"},
-			{Type: VideoContentTypeAudio, AudioURL: &VideoContentURL{URL: "https://x/a.mp3"}, Role: "reference_audio"},
-		},
-		Resolution: "2K",
-		Duration:   5,
-		Ratio:      "adaptive",
-	}
+// prompt 必填，三个媒体数组可以为空（纯文生视频）。
+func TestVideoGenerateRequestValidateAllowsTextOnly(t *testing.T) {
+	req := validVideoRequest()
+	req.Images = nil
+	req.Videos = nil
+	req.Audios = nil
+
 	if err := req.Validate(); err != nil {
-		t.Fatalf("四类内容项应全部合法: %v", err)
+		t.Fatalf("纯文生视频不应报错: %v", err)
 	}
 }
 
 // URL 的 scheme 大小写不应影响判断。
 func TestVideoGenerateRequestValidateAcceptsUppercaseScheme(t *testing.T) {
 	req := validVideoRequest()
-	req.Content[1].ImageURL = &VideoContentURL{URL: "HTTPS://cdn.example.com/ref.png"}
+	req.Images = []string{"HTTPS://cdn.example.com/ref.png"}
 
 	if err := req.Validate(); err != nil {
 		t.Errorf("大写 scheme 应被接受: %v", err)
@@ -115,6 +95,7 @@ func TestVideoGenerateRequestValidateAcceptsUppercaseScheme(t *testing.T) {
 }
 
 // 上游只接受约定字段：model 用供应商模型 ID，fast_mode 固定 false。
+// 平台 prompt + 三个数组会按 text → images → videos → audios 组装成 content。
 func TestBuildVideoRequestUsesVendorModelIDAndFixedFastMode(t *testing.T) {
 	req := validVideoRequest()
 	req.Model = "caller-facing-name"
@@ -152,19 +133,40 @@ func TestBuildVideoRequestUsesVendorModelIDAndFixedFastMode(t *testing.T) {
 	}
 
 	content, ok := body["content"].([]interface{})
-	if !ok || len(content) != 2 {
-		t.Fatalf("content = %v, want 2 项", body["content"])
+	if !ok || len(content) != 4 {
+		t.Fatalf("content = %v, want 4 项（text + image + video + audio）", body["content"])
 	}
-	imageItem, ok := content[1].(map[string]interface{})
-	if !ok {
-		t.Fatalf("第二项不是对象: %v", content[1])
+
+	textItem, _ := content[0].(map[string]interface{})
+	if textItem["type"] != "text" || textItem["text"] != "a cat walking" {
+		t.Errorf("text item = %v", content[0])
 	}
-	if imageItem["role"] != "reference_image" {
-		t.Errorf("role = %v, want reference_image", imageItem["role"])
+
+	imageItem, _ := content[1].(map[string]interface{})
+	if imageItem["type"] != "image_url" || imageItem["role"] != "reference_image" {
+		t.Errorf("image item = %v", content[1])
 	}
 	imageURL, ok := imageItem["image_url"].(map[string]interface{})
 	if !ok || imageURL["url"] != "https://cdn.example.com/ref.png" {
 		t.Errorf("image_url 未原样写入: %v", imageItem["image_url"])
+	}
+
+	videoItem, _ := content[2].(map[string]interface{})
+	if videoItem["type"] != "video_url" || videoItem["role"] != "reference_video" {
+		t.Errorf("video item = %v", content[2])
+	}
+	videoURL, ok := videoItem["video_url"].(map[string]interface{})
+	if !ok || videoURL["url"] != "https://cdn.example.com/ref.mp4" {
+		t.Errorf("video_url 未原样写入: %v", videoItem["video_url"])
+	}
+
+	audioItem, _ := content[3].(map[string]interface{})
+	if audioItem["type"] != "audio_url" || audioItem["role"] != "reference_audio" {
+		t.Errorf("audio item = %v", content[3])
+	}
+	audioURL, ok := audioItem["audio_url"].(map[string]interface{})
+	if !ok || audioURL["url"] != "https://cdn.example.com/ref.mp3" {
+		t.Errorf("audio_url 未原样写入: %v", audioItem["audio_url"])
 	}
 }
 
@@ -217,6 +219,13 @@ func TestMetasoVideoGenerateSendsRequestAndReturnsTaskID(t *testing.T) {
 	}
 	if received["fast_mode"] != false {
 		t.Errorf("上游收到的 fast_mode = %v, want false", received["fast_mode"])
+	}
+	content, ok := received["content"].([]interface{})
+	if !ok || len(content) != 4 {
+		t.Fatalf("上游收到的 content = %v, want 4 项", received["content"])
+	}
+	if item, _ := content[0].(map[string]interface{}); item["type"] != "text" {
+		t.Errorf("content[0] = %v, want text", content[0])
 	}
 }
 

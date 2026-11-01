@@ -89,92 +89,37 @@ func (r ImageGenerateRequest) CreditParams() map[string]string {
 
 // ── 视频生成 ──
 
-// 标准内容项类型。视频请求的 content 数组只接受这四类项。
-const (
-	VideoContentTypeText  = "text"
-	VideoContentTypeImage = "image_url"
-	VideoContentTypeVideo = "video_url"
-	VideoContentTypeAudio = "audio_url"
-)
-
-// VideoContentURL 内容项里的 URL 容器。
-type VideoContentURL struct {
-	URL string `json:"url"`
-}
-
-// VideoContentItem 视频生成请求中的内容项。
+// VideoGenerateRequest 视频生成的平台内部请求。
 //
-// 只声明标准内容项：text / image_url / video_url / audio_url。
-// 请求体里的其他字段由 encoding/json 忽略；未知 type 由 Validate 拒绝，
-// 而不是静默丢弃——丢弃会让调用方以为参考素材已经生效。
-type VideoContentItem struct {
-	Type     string           `json:"type"`
-	Text     string           `json:"text,omitempty"`
-	ImageURL *VideoContentURL `json:"image_url,omitempty"`
-	VideoURL *VideoContentURL `json:"video_url,omitempty"`
-	AudioURL *VideoContentURL `json:"audio_url,omitempty"`
-	Role     string           `json:"role,omitempty"`
-}
-
-// VideoGenerateRequest 视频生成的标准化请求。
+// 公开契约在 controller 层：prompt + images/videos/audios 三个 file_id 数组。
+// controller 把 file_id 解析成短期签名 URL 后填充本结构，再交给供应商适配层。
+// 因此这里的 Images/Videos/Audios 是**已解析的 URL**，不是 file_id。
 //
-// 字段集就是对外契约：请求体里的其他字段由 encoding/json 忽略。
-// 供应商侧参数差异（例如 fast_mode 固定为 false）在供应商实现内部消化。
+// VendorModelID 由 controller 按管理端映射填充；json:"-" 保证它进不了快照，
+// 也保证调用方无法通过请求体顶掉映射。
 type VideoGenerateRequest struct {
-	Model      string             `json:"model"`
-	Content    []VideoContentItem `json:"content"`
-	Resolution string             `json:"resolution"`
-	Duration   int                `json:"duration"`
-	Ratio      string             `json:"ratio"`
+	Model      string   `json:"model"`
+	Prompt     string   `json:"prompt"`
+	Images     []string `json:"images"`
+	Videos     []string `json:"videos"`
+	Audios     []string `json:"audios"`
+	Resolution string   `json:"resolution"`
+	Duration   int      `json:"duration"`
+	Ratio      string   `json:"ratio"`
 
-	// VendorModelID 供应商侧模型 ID，由 controller 按映射关系填充。
-	// json:"-" 既让它进不了请求体快照，也保证调用方无法通过请求体顶掉映射。
 	VendorModelID string `json:"-"`
 }
 
-// Validate 校验视频请求的必填字段与内容项。
+// Validate 校验平台内部视频请求。
 //
-// 本地先挡住参数错误：上游对这类问题的报错需要一次网络往返，
-// 而且提交失败还会走退款/未知态流程，没有必要为一次笔误付出这些代价。
+// prompt 必填；媒体数组可以为空（纯文生视频）。数组元素是 controller 生成的
+// 签名 URL，只接受 http(s)。
 func (r *VideoGenerateRequest) Validate() error {
 	if strings.TrimSpace(r.Model) == "" {
 		return errors.New("缺少 model 参数")
 	}
-	if len(r.Content) == 0 {
-		return errors.New("缺少 content 参数")
-	}
-
-	textCount := 0
-	for i, item := range r.Content {
-		switch item.Type {
-		case VideoContentTypeText:
-			if strings.TrimSpace(item.Text) != "" {
-				textCount++
-			}
-		case VideoContentTypeImage, VideoContentTypeVideo, VideoContentTypeAudio:
-			var u *VideoContentURL
-			switch item.Type {
-			case VideoContentTypeImage:
-				u = item.ImageURL
-			case VideoContentTypeVideo:
-				u = item.VideoURL
-			case VideoContentTypeAudio:
-				u = item.AudioURL
-			}
-			if u == nil || strings.TrimSpace(u.URL) == "" {
-				return fmt.Errorf("content[%d] 缺少 %s.url", i, item.Type)
-			}
-			if !isHTTPURL(u.URL) {
-				return fmt.Errorf("content[%d].%s.url 必须是 http(s) 地址", i, item.Type)
-			}
-		default:
-			return fmt.Errorf("content[%d] 的 type %q 不支持", i, item.Type)
-		}
-	}
-
-	// 上游要求 prompt 必填：content 中至少一个非空 text 项。
-	if textCount == 0 {
-		return errors.New("content 至少需要一个非空 text 项")
+	if strings.TrimSpace(r.Prompt) == "" {
+		return errors.New("缺少 prompt 参数")
 	}
 	if strings.TrimSpace(r.Resolution) == "" {
 		return errors.New("缺少 resolution 参数")
@@ -185,11 +130,27 @@ func (r *VideoGenerateRequest) Validate() error {
 	if strings.TrimSpace(r.Ratio) == "" {
 		return errors.New("缺少 ratio 参数")
 	}
+
+	groups := []struct {
+		name string
+		urls []string
+	}{
+		{"images", r.Images},
+		{"videos", r.Videos},
+		{"audios", r.Audios},
+	}
+	for _, group := range groups {
+		for _, u := range group.urls {
+			if !isHTTPURL(u) {
+				return fmt.Errorf("%s 包含非 http(s) 地址", group.name)
+			}
+		}
+	}
 	return nil
 }
 
 // isHTTPURL 判断字符串是否为 http/https 绝对地址。
-// 内容项 URL 会被上游直接抓取，拒绝 file://、data: 等无法获取或不安全的形态。
+// 媒体数组里的 URL 会被上游直接抓取，拒绝 file://、data: 等无法获取或不安全的形态。
 func isHTTPURL(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {

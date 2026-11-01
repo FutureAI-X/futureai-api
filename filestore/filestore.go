@@ -132,7 +132,14 @@ func Default() *Persister {
 // PersistURL 下载 rawURL 并转存到对象存储，返回写入 files 表的记录。
 //
 // 任一步失败都返回错误，由调用方决定是否降级（当前调用方选择尽力而为）。
+// 该入口不带用户归属，生成结果应使用 PersistURLForUser。
 func (p *Persister) PersistURL(ctx context.Context, rawURL string) (*model.File, error) {
+	return p.PersistURLForUser(ctx, rawURL, 0)
+}
+
+// PersistURLForUser 与 PersistURL 相同，但把结果登记到指定用户名下，
+// 使生成结果可以作为后续视频生成的参考输入复用。
+func (p *Persister) PersistURLForUser(ctx context.Context, rawURL string, userID int) (*model.File, error) {
 	target, err := parseSourceURL(rawURL)
 	if err != nil {
 		return nil, err
@@ -154,7 +161,7 @@ func (p *Persister) PersistURL(ctx context.Context, rawURL string) (*model.File,
 		return nil, errors.New("仅支持 JPEG/PNG/WebP/GIF 图片")
 	}
 
-	return p.persistBytes(ctx, data, ext, contentType, resultKeyPrefix, model.FilePurposeResult)
+	return p.persistBytes(ctx, data, ext, contentType, resultKeyPrefix, model.FilePurposeResult, userID)
 }
 
 // PersistBytes 把已经在内存中的图片转存到对象存储并登记 files 表。
@@ -169,7 +176,7 @@ func (p *Persister) PersistBytes(ctx context.Context, data []byte) (*model.File,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return p.persistBytes(ctx, data, ext, contentType, "", model.FilePurposeUpload)
+	return p.persistBytes(ctx, data, ext, contentType, "", model.FilePurposeUpload, 0)
 }
 
 // resultKeyPrefix 生成结果在对象存储中的前缀。
@@ -179,8 +186,8 @@ const resultKeyPrefix = "result/image/"
 // persistBytes 执行「上传对象 + 登记记录」。
 // 调用方负责确定扩展名与 Content-Type，并控制 context 的时限。
 // keyPrefix 为空时沿用 <ext>/<file_id> 的旧布局（图片上传）；非空时使用
-// <keyPrefix><file_id>（生成结果）。
-func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentType, keyPrefix, purpose string) (*model.File, error) {
+// <keyPrefix><file_id>（生成结果）。userID 为 0 表示无归属的历史/公开上传。
+func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentType, keyPrefix, purpose string, userID int) (*model.File, error) {
 	store, err := p.newStore(p.cfg.ServiceType, "")
 	if err != nil {
 		return nil, err
@@ -212,6 +219,7 @@ func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentT
 			TTLSeconds:     int(p.cfg.TTL / time.Second),
 			CreatedAt:      now,
 			ExpiresAt:      &expiresAt,
+			UserID:         userID,
 			MediaType:      model.FileMediaTypeImage,
 			Purpose:        purpose,
 			ContentType:    contentType,

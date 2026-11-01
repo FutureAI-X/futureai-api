@@ -308,37 +308,40 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 ### 4.5 视频生成
 
-`POST /v1/videos/generations` 只接受下表字段，请求体中的其他字段一律忽略。`model`、`content`、`resolution`、`duration`、`ratio` 均为必填，缺失或取值非法返回 400。
+`POST /v1/videos/generations` 只接受下表字段，请求体中的其他字段一律忽略。`model`、`prompt`、`resolution`、`duration`、`ratio` 必填；三个媒体数组可以为空。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `model` | string | 平台模型名（不是供应商侧模型 ID） |
-| `content` | object[] | 内容项数组，见下表 |
+| `prompt` | string | 提示词，必填 |
+| `images` | string[] | 参考图片的 `file_id` 数组，可空 |
+| `videos` | string[] | 参考视频的 `file_id` 数组，可空 |
+| `audios` | string[] | 参考音频的 `file_id` 数组，可空 |
 | `resolution` | string | 分辨率档位，如 `480P` / `1K` / `2K` |
-| `duration` | integer | 时长（秒），必须为正整数 |
+| `duration` | integer | 输出时长（秒），必须为正整数 |
 | `ratio` | string | 画幅，如 `16:9` / `adaptive` |
 
-`content` 只接受四类内容项，其余 `type` 返回 400：
+`images` / `videos` / `audios` 只接受 `/v1/files/upload/complete` 返回的 `file_id`，不接受外部 URL；数组里出现 URL 返回 400。`prompt` 必填，三个数组可以为空（纯文生视频）。同一个 `file_id` 在同一个数组里重复出现只处理一次。
 
-| type | 必填字段 | 说明 |
-|---|---|---|
-| `text` | `text` | 提示词。至少需要一个非空 `text` 项 |
-| `image_url` | `image_url.url` | 参考图 |
-| `video_url` | `video_url.url` | 参考视频 |
-| `audio_url` | `audio_url.url` | 参考音频 |
+每个参考文件必须属于调用方，且满足：
 
-三类 URL 必须是 `http(s)` 绝对地址。`role` 原样透传，常用值为 `reference_image` / `reference_video` / `reference_audio`。
+- `purpose` 为 `reference`（上传的参考媒体）或 `result`（自己生成的媒体结果）；
+- `status` 为 `ready`；
+- 未过期，且剩余有效期不少于 30 分钟；
+- 媒体类型与所在数组匹配（`images` → image，`videos` → video，`audios` → audio）；
+- 视频参考文件有可用的时长信息。
+
+服务端把 `file_id` 解析成最长 2 小时有效的短期签名 URL（不超过文件剩余有效期）再交给上游；签名 URL 不会返回给客户端，也不会写入任务快照。`role`（`reference_image` 等）由供应商适配层按数组类型自动补全，不属于公开字段。
 
 请求示例：
 
 ```json
 {
   "model": "MiniMax-H3",
-  "content": [
-    { "type": "text", "text": "从首帧平滑过渡到尾帧" },
-    { "type": "image_url", "image_url": { "url": "https://example.com/ref.png" }, "role": "reference_image" },
-    { "type": "video_url", "video_url": { "url": "https://example.com/ref.mp4" }, "role": "reference_video" }
-  ],
+  "prompt": "从首帧平滑过渡到尾帧，保持参考图中角色的外观与服装一致。",
+  "images": ["file_..."],
+  "videos": ["file_..."],
+  "audios": ["file_..."],
   "resolution": "2K",
   "duration": 5,
   "ratio": "adaptive"
@@ -357,7 +360,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 { "code": "fail", "message": "供应商调用失败" }
 ```
 
-参数、身份或模型配置错误沿用 `/v1` 现有语义（参数错误 400、端点不存在 404、无可用供应商 503 等）；提交结果不确定时返回 200 与 `code=fail`，任务状态为 `unknown`，由对账循环继续确认。
+参数、身份、模型配置或参考文件校验错误沿用 `/v1` 现有语义（参数/类型错误 400、文件不存在或无权使用 404、文件尚未就绪 409、文件已过期或即将过期 410、端点不存在 404、无可用供应商 503 等）；提交结果不确定时返回 200 与 `code=fail`，任务状态为 `unknown`，由对账循环继续确认。
 
 视频生成当前不扣积分：任务按 `credits = 0` 创建，因此不会出现 402，也不会产生积分流水。
 

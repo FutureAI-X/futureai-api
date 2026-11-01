@@ -96,7 +96,7 @@ func TestPersistURLSuccess(t *testing.T) {
 		_, _ = w.Write(png)
 	})
 
-	file, err := persister.PersistURL(context.Background(), srv.URL+"/source")
+	file, err := persister.PersistURLForUser(context.Background(), srv.URL+"/source", 42)
 	if err != nil {
 		t.Fatalf("转存失败: %v", err)
 	}
@@ -116,6 +116,9 @@ func TestPersistURLSuccess(t *testing.T) {
 	}
 	if file.Bytes != int64(len(png)) {
 		t.Errorf("Bytes = %d, want %d", file.Bytes, len(png))
+	}
+	if file.UserID != 42 {
+		t.Errorf("UserID = %d, want 42", file.UserID)
 	}
 	if file.ServiceType != storage.ServiceTencentCOS {
 		t.Errorf("ServiceType = %q", file.ServiceType)
