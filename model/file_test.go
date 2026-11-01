@@ -41,3 +41,52 @@ func TestFileTableName(t *testing.T) {
 		t.Errorf("TableName() = %q, want files", got)
 	}
 }
+
+func TestGenerateFileIDWithExt(t *testing.T) {
+	cases := []struct {
+		ext  string
+		want string
+	}{
+		{"mp4", ".mp4"},
+		{".jpg", ".jpg"},
+		{"", ""},
+		{"  .wav ", ".wav"},
+	}
+
+	for _, tc := range cases {
+		id := GenerateFileIDWithExt(tc.ext)
+		if !strings.HasPrefix(id, "file_") {
+			t.Errorf("ID = %q，缺少 file_ 前缀", id)
+		}
+		if tc.want == "" {
+			if strings.Contains(id, ".") {
+				t.Errorf("ID = %q，不应包含扩展名", id)
+			}
+			continue
+		}
+		if !strings.HasSuffix(id, tc.want) {
+			t.Errorf("ID = %q，期望以 %q 结尾", id, tc.want)
+		}
+	}
+}
+
+// 现有图片上传/成图转存不设置 visibility/status，钩子必须补成公开可读的默认值。
+func TestFileBeforeCreateDefaults(t *testing.T) {
+	f := &File{}
+	if err := f.BeforeCreate(nil); err != nil {
+		t.Fatalf("BeforeCreate 失败: %v", err)
+	}
+	if f.Visibility != FileVisibilityPublic || f.Status != FileStatusReady {
+		t.Errorf("默认值 = (%q, %q), want (%q, %q)",
+			f.Visibility, f.Status, FileVisibilityPublic, FileStatusReady)
+	}
+
+	// 新上传显式设置的值不能被覆盖。
+	f2 := &File{Visibility: FileVisibilityPrivate, Status: FileStatusPending}
+	if err := f2.BeforeCreate(nil); err != nil {
+		t.Fatalf("BeforeCreate 失败: %v", err)
+	}
+	if f2.Visibility != FileVisibilityPrivate || f2.Status != FileStatusPending {
+		t.Errorf("显式值被覆盖: (%q, %q)", f2.Visibility, f2.Status)
+	}
+}

@@ -3,16 +3,57 @@ package model
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // MaxFileIDLen 文件 ID 的最大长度，与 files.file_id 的列宽一致。
 const MaxFileIDLen = 64
 
-// File 对外可读文件的登记记录。
+// 文件可见性。
 //
-// 本表由负责上传的一方写入，本服务只读：GET /v1/images/get/:file_id
-// 按 file_id 查出 url，再把内容流式转发给调用方。
+// 存量记录与公开结果文件为 public；参考媒体（视频/音频/图片）为 private，
+// 不会通过无认证的 GET /v1/images/get/:file_id 暴露。
+const (
+	FileVisibilityPublic  = "public"
+	FileVisibilityPrivate = "private"
+)
+
+// 文件处理状态。
+//
+// 存量记录与结果文件为 ready；准备直传时为 pending；校验失败为 failed。
+const (
+	FileStatusPending = "pending"
+	FileStatusReady   = "ready"
+	FileStatusFailed  = "failed"
+)
+
+// 文件媒体类型。
+const (
+	FileMediaTypeImage = "image"
+	FileMediaTypeVideo = "video"
+	FileMediaTypeAudio = "audio"
+)
+
+// 文件用途。
+const (
+	FilePurposeReference = "reference" // 参考媒体（输入）
+	FilePurposeResult    = "result"    // 生成结果（输出）
+	FilePurposeUpload    = "upload"    // 公开图片上传（旧 /v1/uploads/images）
+)
+
+// ErrFileNotPending 表示文件不在 pending 状态，无法完成上传。
+var ErrFileNotPending = errors.New("文件不在待处理状态")
+
+// File 文件登记记录。
+//
+// 本表同时承载两类记录：
+//   - public + ready：对外可读的结果文件，GET /v1/images/get/:file_id 可读取；
+//   - private + pending/ready：上传的参考媒体，不会通过公开接口暴露。
 //
 // 读取侧以 expires_at 为准判断是否过期（NULL / 零值表示长期有效）。
 // ttl_seconds 仅作为写入方计算过期时间时的原始依据保留，读取时不参与判断，
@@ -42,6 +83,62 @@ type File struct {
 	// 保留期满后记录本身才会被清理（见 filestore 的清理任务）。
 	// 刻意为空表示对象尚未删除；长期有效的记录永远不会被清理。
 	ObjectDeletedAt *time.Time `json:"object_deleted_at"`
+
+	// ── 参考媒体（私有文件）──
+	//
+	// 以下字段对存量公开结果文件保持零值/默认值；上传参考媒体时填写。
+
+	// UserID 上传者。参考媒体只允许上传者使用；存量公开文件为 0。
+	UserID int `json:"user_id" gorm:"index;not null;default:0"`
+
+	// Visibility public=公开结果文件；private=私有参考媒体。
+	Visibility string `json:"visibility" gorm:"size:16;not null;default:'public'"`
+
+	// Status pending=已 prepare 待完成；ready=可用；failed=校验失败。
+	Status string `json:"status" gorm:"index;size:16;not null;default:'ready'"`
+
+	// MediaType image/video/audio；存量公开文件为空。
+	MediaType string `json:"media_type" gorm:"size:16;not null;default:''"`
+
+	// Purpose reference=参考媒体, result=生成结果, upload=公开图片上传；存量为空。
+	Purpose string `json:"purpose" gorm:"size:16;not null;default:''"`
+
+	// ContentType 实际 MIME 类型（以服务端探测结果为准）。
+	ContentType string `json:"content_type" gorm:"size:128;not null;default:''"`
+
+	// Bytes 实际对象大小。
+	Bytes int64 `json:"bytes" gorm:"not null;default:0"`
+
+	// DurationMS 视频/音频时长（毫秒）；图片为 0。
+	DurationMS int64 `json:"duration_ms" gorm:"not null;default:0"`
+
+	// Width / Height 视频/图片宽高。
+	Width  int `json:"width" gorm:"not null;default:0"`
+	Height int `json:"height" gorm:"not null;default:0"`
+
+	// MediaMeta 额外探测结果 JSON：fps、编码、容器格式等。
+	MediaMeta string `json:"media_meta,omitempty" gorm:"type:text"`
+
+	// OriginalName 客户端上传时的文件名（已清洗）。
+	OriginalName string `json:"original_name" gorm:"size:255;not null;default:''"`
+
+	// ErrorMessage 完成校验失败时的原因。
+	ErrorMessage string `json:"error_message,omitempty" gorm:"size:512;not null;default:''"`
+}
+
+// BeforeCreate 为存量写入方补默认值。
+//
+// 现有图片上传/成图转存只关心公开文件，不会设置 visibility/status；
+// 这里默认成 public/ready，保证它们的行为与新增字段之前完全一致。
+// 新的参考媒体上传会显式设置 private/pending，不受影响。
+func (f *File) BeforeCreate(tx *gorm.DB) error {
+	if f.Visibility == "" {
+		f.Visibility = FileVisibilityPublic
+	}
+	if f.Status == "" {
+		f.Status = FileStatusReady
+	}
+	return nil
 }
 
 // TableName 指定表名
@@ -57,6 +154,74 @@ func GenerateFileID() string {
 	b := make([]byte, 12)
 	rand.Read(b)
 	return "file_" + hex.EncodeToString(b)
+}
+
+// GenerateFileIDWithExt 生成带扩展名的文件 ID，形如 file_<24位hex>.mp4。
+// ext 由调用方的固定映射给出，不接受外部输入。
+func GenerateFileIDWithExt(ext string) string {
+	ext = strings.TrimPrefix(strings.TrimSpace(ext), ".")
+	id := GenerateFileID()
+	if ext == "" {
+		return id
+	}
+	return id + "." + ext
+}
+
+// SumUserMediaBytes 统计用户当前占用的私有媒体字节数。
+//
+// 只统计 private 且 pending/ready 的记录；failed 记录的对象会被清理，
+// 不再计入配额。pending 记录在 complete 前 bytes 为 0。
+func SumUserMediaBytes(userID int, now time.Time) (int64, error) {
+	var total int64
+	err := DB.Model(&File{}).
+		Where("user_id = ? AND visibility = ? AND status IN ? AND (expires_at IS NULL OR expires_at > ?)",
+			userID, FileVisibilityPrivate,
+			[]string{FileStatusPending, FileStatusReady}, now).
+		Select("COALESCE(SUM(bytes), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+// UpdateFileReady 将 pending 的参考媒体置为 ready。
+//
+// 使用事务 + 行锁：complete 可能被并发调用（客户端重试），
+// 只有第一个请求能完成状态转换；后续请求看到 ready 后直接返回。
+// updates 中的 status/error_message 由本函数统一覆盖，调用方不需要传。
+func UpdateFileReady(fileID string, userID int, updates map[string]interface{}) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var f File
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("file_id = ? AND user_id = ?", fileID, userID).
+			First(&f).Error; err != nil {
+			return err
+		}
+
+		// 已 ready：幂等返回，不覆盖已写入的元数据。
+		if f.Status == FileStatusReady {
+			return nil
+		}
+		if f.Status != FileStatusPending {
+			return ErrFileNotPending
+		}
+
+		if updates == nil {
+			updates = map[string]interface{}{}
+		}
+		updates["status"] = FileStatusReady
+		updates["error_message"] = ""
+		return tx.Model(&File{}).Where("id = ?", f.ID).Updates(updates).Error
+	})
+}
+
+// UpdateFileFailed 将 pending 的参考媒体标记为失败。
+// 终态守卫：只更新 pending 记录，避免覆盖已 ready 的文件。
+func UpdateFileFailed(fileID string, userID int, message string) error {
+	return DB.Model(&File{}).
+		Where("file_id = ? AND user_id = ? AND status = ?", fileID, userID, FileStatusPending).
+		Updates(map[string]interface{}{
+			"status":        FileStatusFailed,
+			"error_message": message,
+		}).Error
 }
 
 // GetFileByFileID 按文件 ID 查询记录

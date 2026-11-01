@@ -104,9 +104,18 @@ func TestPersistURLSuccess(t *testing.T) {
 	if !regexp.MustCompile(`^file_[0-9a-f]{24}\.png$`).MatchString(file.FileID) {
 		t.Errorf("file_id 形态异常: %q", file.FileID)
 	}
-	wantKey := "png/" + file.FileID
+	wantKey := "result/image/" + file.FileID
 	if file.FileKey != wantKey {
 		t.Errorf("FileKey = %q, want %q", file.FileKey, wantKey)
+	}
+	if file.Purpose != model.FilePurposeResult {
+		t.Errorf("Purpose = %q, want %q", file.Purpose, model.FilePurposeResult)
+	}
+	if file.MediaType != model.FileMediaTypeImage || file.ContentType != "image/png" {
+		t.Errorf("媒体信息 = (%q, %q)", file.MediaType, file.ContentType)
+	}
+	if file.Bytes != int64(len(png)) {
+		t.Errorf("Bytes = %d, want %d", file.Bytes, len(png))
 	}
 	if file.ServiceType != storage.ServiceTencentCOS {
 		t.Errorf("ServiceType = %q", file.ServiceType)
@@ -159,6 +168,15 @@ func TestPersistBytesSuccess(t *testing.T) {
 	wantKey := "png/" + file.FileID
 	if file.FileKey != wantKey {
 		t.Errorf("FileKey = %q, want %q", file.FileKey, wantKey)
+	}
+	if file.Purpose != model.FilePurposeUpload {
+		t.Errorf("Purpose = %q, want %q", file.Purpose, model.FilePurposeUpload)
+	}
+	if file.MediaType != model.FileMediaTypeImage || file.ContentType != "image/png" {
+		t.Errorf("媒体信息 = (%q, %q)", file.MediaType, file.ContentType)
+	}
+	if file.Bytes != int64(len(png)) {
+		t.Errorf("Bytes = %d, want %d", file.Bytes, len(png))
 	}
 	if file.ServiceType != storage.ServiceTencentCOS {
 		t.Errorf("ServiceType = %q", file.ServiceType)

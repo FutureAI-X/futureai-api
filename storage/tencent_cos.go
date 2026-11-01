@@ -40,10 +40,11 @@ var _ Store = (*TencentCOS)(nil)
 
 // TencentCOS 腾讯云 COS 实现。
 type TencentCOS struct {
-	bucketURL string
-	secretID  string
-	secretKey string
-	client    *cos.Client
+	bucketURL  string
+	bucketName string
+	secretID   string
+	secretKey  string
+	client     *cos.Client
 }
 
 // NewTencentCOS 创建 COS 客户端。
@@ -64,6 +65,19 @@ func NewTencentCOS(cfg TencentCOSConfig) (*TencentCOS, error) {
 		return nil, fmt.Errorf("%w: %s / %s 未配置", ErrNotConfigured, tencentCOSSecretIDEnv, tencentCOSSecretKeyEnv)
 	}
 
+	// POST Object policy 需要桶名；标准 COS 域名形如
+	// <bucket>.cos.<region>.myqcloud.com，取第一个标签即可。
+	// 自定义域名时留空，媒体上传的 PresignPost 会明确报错，不影响现有图片功能。
+	bucketName := ""
+	var ciURL *url.URL
+	host := u.Hostname()
+	if i := strings.Index(host, ".cos."); i > 0 {
+		bucketName = host[:i]
+		if parsed, parseErr := url.Parse(strings.Replace(bucketURL, ".cos.", ".ci.", 1)); parseErr == nil {
+			ciURL = parsed
+		}
+	}
+
 	transport := cfg.Transport
 	if transport == nil {
 		// 复用共享 Transport：SDK 的签名层只包裹 RoundTripper，
@@ -75,7 +89,7 @@ func NewTencentCOS(cfg TencentCOSConfig) (*TencentCOS, error) {
 		transport = common.TrustedEndpointHTTPClient().Transport
 	}
 
-	client := cos.NewClient(&cos.BaseURL{BucketURL: u}, &http.Client{
+	client := cos.NewClient(&cos.BaseURL{BucketURL: u, CIURL: ciURL}, &http.Client{
 		Transport: &cos.AuthorizationTransport{
 			SecretID:  secretID,
 			SecretKey: secretKey,
@@ -84,10 +98,11 @@ func NewTencentCOS(cfg TencentCOSConfig) (*TencentCOS, error) {
 	})
 
 	return &TencentCOS{
-		bucketURL: bucketURL,
-		secretID:  secretID,
-		secretKey: secretKey,
-		client:    client,
+		bucketURL:  bucketURL,
+		bucketName: bucketName,
+		secretID:   secretID,
+		secretKey:  secretKey,
+		client:     client,
 	}, nil
 }
 

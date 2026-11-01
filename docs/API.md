@@ -179,7 +179,9 @@
 | GET | `/v1/models` | 可用模型列表 |
 | POST | `/v1/images/generations` | 图像生成 |
 | POST | `/v1/videos/generations` | 视频生成（见 4.5 节） |
-| POST | `/v1/uploads/images` | 图片上传（单文件上限 10MB） |
+| POST | `/v1/uploads/images` | 图片上传（单文件上限 10MB，行为不变） |
+| POST | `/v1/files/upload/prepare` | 参考媒体上传：申请直传凭证（见 4.6 节） |
+| POST | `/v1/files/upload/complete` | 参考媒体上传：完成校验并登记（见 4.6 节） |
 | GET | `/v1/images/get/:file_id` | 公开文件读取（无需认证，见 2.4 节） |
 | GET | `/v1/tasks/:task_id` | 查询任务 |
 
@@ -374,6 +376,91 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 上游的 `queued` / `running` 在平台侧统一显示为 `submitted`；`succeeded` / `failed` / `cancelled` 分别对应 `completed` / `failed` / `cancelled`。状态机见 4.4 节。
 
 > **注意**：使用前需要在管理后台创建 `/v1/videos/generations` 端点、类型为 `video` 的模型，并完成模型↔端点绑定、供应商（METASO，Base URL `https://metaso.cn/api/minimax/v2`）与供应商模型的映射。
+
+### 4.6 参考媒体上传
+
+`POST /v1/files/upload/prepare` 与 `POST /v1/files/upload/complete` 用于上传后续生成所需的参考图片、参考视频和参考音频。上传的文件保存在平台的对象存储中，只有上传者可以使用，不会通过 `/v1/images/get/:file_id` 公开。
+
+这两个端点只处理**参考媒体**；原有 `/v1/uploads/images` 保持不变，仍用于公开图片上传。
+
+#### 准备上传
+
+```json
+POST /v1/files/upload/prepare
+{
+  "media_type": "video",
+  "filename": "reference.mp4",
+  "content_type": "video/mp4",
+  "size": 12345678
+}
+```
+
+`media_type` 为 `image` / `video` / `audio`。响应：
+
+```json
+{
+  "upload_id": "file_...",
+  "file_id": "file_...",
+  "url": "https://<bucket>.cos.<region>.myqcloud.com/",
+  "fields": {
+    "key": "staging/file_....mp4",
+    "policy": "...",
+    "q-sign-algorithm": "sha1",
+    "q-ak": "...",
+    "q-key-time": "...",
+    "q-signature": "...",
+    "Content-Type": "video/mp4",
+    "success_action_status": "200"
+  },
+  "expires_at": "2026-11-01T12:30:00Z",
+  "session_expires_at": "2026-11-01T12:40:00Z"
+}
+```
+
+客户端把 `fields` 中的字段**全部放在 `file` 字段之前**，以 `multipart/form-data` POST 到 `url`，`file` 字段放文件内容。签名字段顺序不能调整；Electron 建议在主进程读取文件并上传，避免 CORS 和大文件内存问题。
+
+#### 完成上传
+
+```json
+POST /v1/files/upload/complete
+{ "upload_id": "file_..." }
+```
+
+服务端会 HEAD 对象、校验魔数、调用 CI 解析媒体信息，并校验格式、宽高、宽高比、时长、编码、帧率，全部通过后将 staging 对象复制到正式 key 并登记。响应：
+
+```json
+{
+  "file_id": "file_....mp4",
+  "media_type": "video",
+  "content_type": "video/mp4",
+  "bytes": 12345678,
+  "duration_ms": 5175,
+  "width": 832,
+  "height": 480,
+  "expires_at": "2026-11-01T18:40:00Z"
+}
+```
+
+`complete` 是幂等的：已完成的 `upload_id` 再次调用会返回同一份元数据。
+
+#### 限制
+
+| 类型 | 格式 | 编码 | 大小 | 时长 | 宽高 | 宽高比 | 帧率 |
+|---|---|---|---|---|---|---|---|
+| 图片 | JPG/JPEG、PNG、WEBP、HEIC、HEIF | — | ≤30MB | — | 每边 [300, 5500] | [0.4, 2.5] | — |
+| 音频 | WAV、MP3 | — | ≤15MB | [2, 30]s | — | — | — |
+| 视频 | MP4、MOV | 视频 H.264/AVC、H.265/HEVC；音频 AAC、MP3 | ≤200MB | [2, 30]s | 每边 [300, 5500] | [0.4, 2.5] | [23.9, 60] |
+
+- 静音视频允许；存在音频流时必须是 AAC/MP3。
+- 新上传不接受 GIF、AVIF、独立 M4A/AAC 音频。
+- POST policy 有效期 30 分钟；`complete` 必须在 40 分钟内调用。
+- 上传成功后文件保留 6 小时（`expires_at`），过期后自动清理。
+- 每个用户的参考媒体总配额为 10GB（未过期文件之和）。
+- `file_id` 是私有参考媒体，不能通过 `/v1/images/get/:file_id` 读取；公开读取接口只服务 public + ready 的结果文件。
+
+服务端最终把对象存放在 `reference/<media_type>/<file_id>`（例如 `reference/video/file_....mp4`）。参考媒体是私有对象，不会通过公开读取接口暴露。
+
+> **部署注意**：建议给 COS 桶的 `staging/` 前缀配置生命周期规则（例如 1 天后删除），兜底清理客户端上传后未调用 `complete` 的临时对象。
 
 ## 5 管理员接口
 

@@ -154,7 +154,7 @@ func (p *Persister) PersistURL(ctx context.Context, rawURL string) (*model.File,
 		return nil, errors.New("仅支持 JPEG/PNG/WebP/GIF 图片")
 	}
 
-	return p.persistBytes(ctx, data, ext, contentType)
+	return p.persistBytes(ctx, data, ext, contentType, resultKeyPrefix, model.FilePurposeResult)
 }
 
 // PersistBytes 把已经在内存中的图片转存到对象存储并登记 files 表。
@@ -169,12 +169,18 @@ func (p *Persister) PersistBytes(ctx context.Context, data []byte) (*model.File,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return p.persistBytes(ctx, data, ext, contentType)
+	return p.persistBytes(ctx, data, ext, contentType, "", model.FilePurposeUpload)
 }
+
+// resultKeyPrefix 生成结果在对象存储中的前缀。
+// 旧结果文件仍保留在 png/、jpg/ 等扩展名前缀下，新结果统一走 result/image/。
+const resultKeyPrefix = "result/image/"
 
 // persistBytes 执行「上传对象 + 登记记录」。
 // 调用方负责确定扩展名与 Content-Type，并控制 context 的时限。
-func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentType string) (*model.File, error) {
+// keyPrefix 为空时沿用 <ext>/<file_id> 的旧布局（图片上传）；非空时使用
+// <keyPrefix><file_id>（生成结果）。
+func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentType, keyPrefix, purpose string) (*model.File, error) {
 	store, err := p.newStore(p.cfg.ServiceType, "")
 	if err != nil {
 		return nil, err
@@ -187,6 +193,9 @@ func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentT
 			return nil, err
 		}
 		key := ext + "/" + fileID
+		if keyPrefix != "" {
+			key = keyPrefix + fileID
+		}
 
 		if err := store.Upload(ctx, key, data, contentType); err != nil {
 			return nil, err
@@ -203,6 +212,10 @@ func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentT
 			TTLSeconds:     int(p.cfg.TTL / time.Second),
 			CreatedAt:      now,
 			ExpiresAt:      &expiresAt,
+			MediaType:      model.FileMediaTypeImage,
+			Purpose:        purpose,
+			ContentType:    contentType,
+			Bytes:          int64(len(data)),
 		}
 
 		if err := p.createFile(file); err != nil {

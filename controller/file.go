@@ -69,6 +69,13 @@ func GetImageFile(c *gin.Context) {
 		return
 	}
 
+	// 参考媒体（private）与上传中的记录不能通过公开接口读取。
+	// 空值按存量记录的 public/ready 处理，保证旧文件行为不变。
+	if !filePubliclyReadable(record) {
+		fileNotFound(c)
+		return
+	}
+
 	now := time.Now()
 	if fileExpired(record.ExpiresAt, now) {
 		c.JSON(http.StatusGone, gin.H{"code": "fail", "message": "文件已过期"})
@@ -183,6 +190,23 @@ func proxyFileContent(c *gin.Context, record *model.File, now time.Time) {
 // fileNotFound 统一的 404 响应
 func fileNotFound(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{"code": "fail", "message": "文件不存在"})
+}
+
+// filePubliclyReadable 判断记录是否允许通过公开读取接口访问。
+//
+// 空 visibility/status 视为 public/ready：存量记录与旧写入方没有这两个字段，
+// 必须保持原有可读行为。新上传的参考媒体显式写 private/pending，不会命中。
+func filePubliclyReadable(f *model.File) bool {
+	if f == nil {
+		return false
+	}
+	if f.Visibility != "" && f.Visibility != model.FileVisibilityPublic {
+		return false
+	}
+	if f.Status != "" && f.Status != model.FileStatusReady {
+		return false
+	}
+	return true
 }
 
 // publicBaseURLEnv 对外访问地址的环境变量名。

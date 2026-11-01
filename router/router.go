@@ -67,6 +67,10 @@ func SetRouter(server *gin.Engine) {
 		// 图片上传
 		apiRouter.POST("/uploads/images", controller.UploadImage)
 
+		// 参考媒体上传（图片/视频/音频，直传 COS）
+		apiRouter.POST("/files/upload/prepare", controller.FileUploadPrepare)
+		apiRouter.POST("/files/upload/complete", controller.FileUploadComplete)
+
 		// 任务查询
 		apiRouter.GET("/tasks/:task_id", controller.GetTask)
 	}
