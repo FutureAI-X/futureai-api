@@ -72,6 +72,7 @@ export function Header({ leftExtra }: HeaderProps) {
               { title: '主页', href: '/' },
               { title: '控制台', href: '/dashboard/profile' },
               { title: '模型广场', href: '/pricing' },
+              { title: '文档', href: '/docs' },
             ].map((link) => {
               const isActive =
                 link.href === '/'
@@ -92,14 +93,6 @@ export function Header({ leftExtra }: HeaderProps) {
                 </Link>
               )
             })}
-            <a
-              href='https://future-ai.feishu.cn/wiki/P8tuwmPiCiMrRtk5UEYccXDCn6d'
-              target='_blank'
-              rel='noopener noreferrer'
-              className='text-muted-foreground hover:text-foreground rounded-lg px-3 py-1.5 text-sm font-medium transition-colors'
-            >
-              文档
-            </a>
             <div className='bg-border/40 mx-2 h-4 w-px' />
             {user ? (
               <ProfileDropdown user={user} />
