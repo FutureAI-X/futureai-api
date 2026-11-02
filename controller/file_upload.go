@@ -574,14 +574,9 @@ func validateImageProbe(p *storage.ImageProbe) error {
 	if p == nil || p.Width <= 0 || p.Height <= 0 {
 		return errors.New("无法解析图片宽高")
 	}
-	if p.Width < mediaMinDimension || p.Width > mediaMaxDimension ||
-		p.Height < mediaMinDimension || p.Height > mediaMaxDimension {
-		return fmt.Errorf("图片宽高需在 %d-%d 像素", mediaMinDimension, mediaMaxDimension)
-	}
-	aspect := float64(p.Width) / float64(p.Height)
-	if aspect < mediaMinAspect || aspect > mediaMaxAspect {
-		return fmt.Errorf("图片宽高比需在 %.1f-%.1f", mediaMinAspect, mediaMaxAspect)
-	}
+	// 图片不限制宽高与宽高比：不同上游模型支持的尺寸范围差异很大，
+	// 平台侧统一卡范围会把上游本来能处理的图片挡在上传阶段。
+	// 宽高仍会被记录到 files 表，供排查与展示使用；视频的限制见 validateVideoProbe。
 	switch p.Format {
 	case "", "jpeg", "png", "webp", "heic", "heif":
 		return nil

@@ -751,7 +751,13 @@ func GetTask(c *gin.Context) {
 		json.Unmarshal([]byte(task.QueryResponse), &data)
 	}
 
-	data = applyPublicFileURL(data, task.FileID)
+	// 优先返回存储桶签名地址，客户端直连对象存储下载；
+	// 签名失败或记录不支持时回落到应用代理地址，保证旧行为仍可用。
+	if signedURL, expiresAt, ok := signedResultFileURL(c.Request.Context(), task.FileID); ok {
+		data = applyResultFileURL(data, signedURL, expiresAt)
+	} else {
+		data = applyPublicFileURL(data, task.FileID)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"taskId":  task.TaskID,
@@ -803,10 +809,29 @@ func isVideoTask(task *model.Task) bool {
 	return ep.Path == videoGenerationsPath
 }
 
-// applyPublicFileURL 调整任务响应中的 url 字段。
+// applyResultFileURL 用存储桶签名地址填充任务响应。
 //
 //   - 原上游地址原样移到 url_vendor；
-//   - url 改为本服务的公开读取地址 {PUBLIC_BASE_URL}/v1/images/get/{file_id}；
+//   - url 改为对象存储的签名下载地址；
+//   - url_expires_at 标明签名地址的失效时间，客户端应在过期后重新查询任务。
+//
+// 只影响响应，不回写 query_response：库里始终保留上游原始结果。
+func applyResultFileURL(data map[string]interface{}, signedURL string, expiresAt time.Time) map[string]interface{} {
+	if data == nil {
+		data = map[string]interface{}{}
+	}
+	if vendorURL, ok := data["url"]; ok {
+		data["url_vendor"] = vendorURL
+	}
+	data["url"] = signedURL
+	data["url_expires_at"] = expiresAt.UTC().Format(time.RFC3339)
+	return data
+}
+
+// applyPublicFileURL 是签名地址不可用时的回落路径，调整任务响应中的 url 字段。
+//
+//   - 原上游地址原样移到 url_vendor；
+//   - url 改为本服务的公开读取代理地址 {PUBLIC_BASE_URL}/v1/images/get/{file_id}；
 //   - 没有 file_id（转存失败或尚未转存），或对外地址未配置时，
 //     url 保持原值，与 url_vendor 相同。
 //

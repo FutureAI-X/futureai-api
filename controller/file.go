@@ -210,7 +210,8 @@ func filePubliclyReadable(f *model.File) bool {
 }
 
 // publicBaseURLEnv 对外访问地址的环境变量名。
-// 用于把文件 ID 拼成调用方可以直接访问的绝对 URL。
+// 用于把文件 ID 拼成调用方可以直接访问的绝对 URL，是任务响应签名地址
+// 不可用时的回落地址；旧的图片上传接口也用它拼接返回 URL。
 const publicBaseURLEnv = "PUBLIC_BASE_URL"
 
 var warnPublicBaseURLOnce sync.Once
@@ -218,12 +219,13 @@ var warnPublicBaseURLOnce sync.Once
 // configuredPublicBaseURL 读取对外访问地址。
 //
 // 支持完整 origin（https://futureaiapi.com）或裸域名（futureaiapi.com，按 https 处理），
-// 末尾斜杠会被去掉。未配置或非法时返回空串，调用方回落到上游原始地址。
+// 末尾斜杠会被去掉。未配置或非法时返回空串，此时签名地址仍可正常返回，
+// 只是签名失败时无法回落到应用代理地址。
 func configuredPublicBaseURL() string {
 	raw := strings.TrimSpace(os.Getenv(publicBaseURLEnv))
 	if raw == "" {
 		warnPublicBaseURLOnce.Do(func() {
-			common.SysErrorf("[PublicURL] %s 未配置，任务响应中的 url 将回落到上游原始地址", publicBaseURLEnv)
+			common.SysErrorf("[PublicURL] %s 未配置，结果文件签名失败时将无法回落到应用代理地址", publicBaseURLEnv)
 		})
 		return ""
 	}
@@ -235,7 +237,7 @@ func configuredPublicBaseURL() string {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		warnPublicBaseURLOnce.Do(func() {
-			common.SysErrorf("[PublicURL] %s 配置无效(%q)，任务响应中的 url 将回落到上游原始地址", publicBaseURLEnv, raw)
+			common.SysErrorf("[PublicURL] %s 配置无效(%q)，结果文件签名失败时将无法回落到应用代理地址", publicBaseURLEnv, raw)
 		})
 		return ""
 	}
@@ -246,6 +248,80 @@ func configuredPublicBaseURL() string {
 		})
 	}
 	return u.Scheme + "://" + u.Host
+}
+
+// resultSignedURLMaxTTL 任务响应中存储桶签名地址的最长有效期。
+// 结果文件本身默认保留 24 小时，签名有效期还会被文件剩余有效期截断；
+// 旧的公开代理地址本来就活到文件过期，这里不会让凭证活得更久。
+const resultSignedURLMaxTTL = 24 * time.Hour
+
+// resultSignTTL 计算结果文件的签名有效期，并保证不超过文件剩余有效期。
+// 预留 1 分钟余量，避免签名地址比对象存活更久；剩余不足 1 分钟时不再签发。
+func resultSignTTL(expiresAt *time.Time, now time.Time, maxTTL time.Duration) (time.Duration, bool) {
+	if maxTTL <= 0 {
+		return 0, false
+	}
+	if expiresAt != nil && !expiresAt.IsZero() {
+		remaining := expiresAt.Sub(now)
+		if remaining <= time.Minute {
+			return 0, false
+		}
+		if remaining-time.Minute < maxTTL {
+			maxTTL = remaining - time.Minute
+		}
+	}
+	if maxTTL <= 0 {
+		return 0, false
+	}
+	return maxTTL, true
+}
+
+// signedResultFileURL 为任务响应签发对象存储的短期下载地址。
+//
+// 直连存储桶可以让客户端下载不经过应用服务器，降低本服务的带宽与连接压力。
+// 签名在本地完成，不产生额外网络请求。返回 ok=false 时调用方回落到
+// 现有的 /v1/images/get/{file_id} 代理地址，行为与旧版本一致。
+func signedResultFileURL(ctx context.Context, fileID string) (string, time.Time, bool) {
+	if strings.TrimSpace(fileID) == "" {
+		return "", time.Time{}, false
+	}
+
+	record, err := model.GetFileByFileID(fileID)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			common.SysErrorf("[ResultURL] 查询结果文件失败: file_id=%s, err=%v", fileID, err)
+		}
+		return "", time.Time{}, false
+	}
+	// 只签发公开可读的结果文件；私有参考媒体不能借此绕过归属校验。
+	if !filePubliclyReadable(record) {
+		return "", time.Time{}, false
+	}
+
+	now := time.Now()
+	if fileExpired(record.ExpiresAt, now) {
+		return "", time.Time{}, false
+	}
+	ttl, ok := resultSignTTL(record.ExpiresAt, now, resultSignedURLMaxTTL)
+	if !ok {
+		return "", time.Time{}, false
+	}
+
+	store, err := storage.MediaFrom(record.ServiceType, record.ServiceAddress)
+	if err != nil {
+		// 未知存储类型（多为历史上未登记 service_type 的记录）回落代理地址。
+		if !errors.Is(err, storage.ErrNotSupported) {
+			common.SysErrorf("[ResultURL] 存储不可用: file_id=%s, err=%v", fileID, err)
+		}
+		return "", time.Time{}, false
+	}
+	signed, err := store.PresignGet(ctx, record.FileKey, ttl)
+	if err != nil {
+		common.SysErrorf("[ResultURL] 结果文件签名失败: file_id=%s, err=%v", fileID, err)
+		return "", time.Time{}, false
+	}
+
+	return signed, now.Add(ttl), true
 }
 
 // publicFileURL 生成文件的公开读取地址；未配置对外地址时返回空串。

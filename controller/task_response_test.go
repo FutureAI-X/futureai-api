@@ -2,7 +2,84 @@ package controller
 
 import (
 	"testing"
+	"time"
 )
+
+// 签名地址是主路径：url 指向存储桶，上游原始地址保留在 url_vendor，
+// 同时给出失效时间供客户端决定何时重新查询任务。
+func TestApplyResultFileURL(t *testing.T) {
+	signed := "https://bucket.cos.example.com/result/image/file_x.png?q-signature=abc"
+	expiresAt := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	data := map[string]interface{}{
+		"url":      "https://vendor.example.com/result.png",
+		"b64_json": "AAAA",
+	}
+
+	got := applyResultFileURL(data, signed, expiresAt)
+
+	if got["url"] != signed {
+		t.Errorf("url = %v, want %s", got["url"], signed)
+	}
+	if got["url_vendor"] != "https://vendor.example.com/result.png" {
+		t.Errorf("url_vendor = %v, 未保留上游原始地址", got["url_vendor"])
+	}
+	if got["url_expires_at"] != "2026-11-02T12:00:00Z" {
+		t.Errorf("url_expires_at = %v, want RFC3339 时间", got["url_expires_at"])
+	}
+	if got["b64_json"] != "AAAA" {
+		t.Errorf("b64_json 被意外修改: %v", got["b64_json"])
+	}
+}
+
+func TestApplyResultFileURLNilData(t *testing.T) {
+	signed := "https://bucket.cos.example.com/result/image/file_x.png?q-signature=abc"
+	got := applyResultFileURL(nil, signed, time.Unix(0, 0))
+
+	if got == nil {
+		t.Fatal("有签名地址时应创建 data")
+	}
+	if got["url"] != signed {
+		t.Errorf("url = %v, want %s", got["url"], signed)
+	}
+	if _, ok := got["url_vendor"]; ok {
+		t.Error("原本没有 url 时不应写入 url_vendor")
+	}
+}
+
+// 签名有效期不能超过文件剩余寿命；剩余不足 1 分钟时不再签发。
+func TestResultSignTTL(t *testing.T) {
+	now := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) *time.Time {
+		v := now.Add(d)
+		return &v
+	}
+
+	cases := []struct {
+		name    string
+		expires *time.Time
+		maxTTL  time.Duration
+		wantTTL time.Duration
+		wantOK  bool
+	}{
+		{"长期有效用满上限", nil, resultSignedURLMaxTTL, resultSignedURLMaxTTL, true},
+		{"剩余不足上限时截断", at(2 * time.Hour), resultSignedURLMaxTTL, 2*time.Hour - time.Minute, true},
+		{"剩余超过上限时取上限", at(48 * time.Hour), resultSignedURLMaxTTL, resultSignedURLMaxTTL, true},
+		{"剩余恰好 1 分钟不签发", at(time.Minute), resultSignedURLMaxTTL, 0, false},
+		{"剩余不足 1 分钟不签发", at(30 * time.Second), resultSignedURLMaxTTL, 0, false},
+		{"已过期不签发", at(-time.Second), resultSignedURLMaxTTL, 0, false},
+		{"上限非正不签发", nil, 0, 0, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTTL, gotOK := resultSignTTL(tc.expires, now, tc.maxTTL)
+			if gotOK != tc.wantOK || gotTTL != tc.wantTTL {
+				t.Errorf("resultSignTTL() = (%s, %v), want (%s, %v)",
+					gotTTL, gotOK, tc.wantTTL, tc.wantOK)
+			}
+		})
+	}
+}
 
 func TestApplyPublicFileURLWithFileID(t *testing.T) {
 	t.Setenv(publicBaseURLEnv, "https://futureaiapi.com")

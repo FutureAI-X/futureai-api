@@ -121,13 +121,11 @@ func TestValidateImageProbe(t *testing.T) {
 		wantErr bool
 	}{
 		{"正常", &storage.ImageProbe{Width: 1000, Height: 1000, Format: "jpeg"}, false},
-		{"下限", &storage.ImageProbe{Width: 300, Height: 300, Format: "png"}, false},
-		{"上限", &storage.ImageProbe{Width: 5500, Height: 5500, Format: "webp"}, false},
+		{"极小尺寸不限制", &storage.ImageProbe{Width: 1, Height: 1, Format: "png"}, false},
+		{"超大尺寸不限制", &storage.ImageProbe{Width: 20000, Height: 20000, Format: "webp"}, false},
+		{"极端宽高比不限制", &storage.ImageProbe{Width: 10000, Height: 100, Format: "jpeg"}, false},
 		{"HEIC", &storage.ImageProbe{Width: 1080, Height: 1920, Format: "heic"}, false},
-		{"宽度过小", &storage.ImageProbe{Width: 299, Height: 1000, Format: "jpeg"}, true},
-		{"高度过大", &storage.ImageProbe{Width: 1000, Height: 5501, Format: "jpeg"}, true},
-		{"宽高比过小", &storage.ImageProbe{Width: 300, Height: 1000, Format: "jpeg"}, true},
-		{"宽高比过大", &storage.ImageProbe{Width: 1000, Height: 380, Format: "jpeg"}, true},
+		{"无法解析宽高", &storage.ImageProbe{Width: 0, Height: 1000, Format: "jpeg"}, true},
 		{"格式不支持", &storage.ImageProbe{Width: 1000, Height: 1000, Format: "gif"}, true},
 		{"nil", nil, true},
 	}

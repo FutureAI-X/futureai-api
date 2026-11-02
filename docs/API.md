@@ -365,14 +365,15 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 只有 `completed` 时 `data` 才有值。非终态表示仍在推进中，应继续轮询（建议间隔 5 秒左右），不要当作失败。视频生成任务当前按 0 积分创建（见 4.5 节），上表的积分列对它不适用。
 
-`completed` 响应还包含 `file_id`：成图已转存到对象存储时为该文件 ID，转存失败时为空字符串。文件有效期由 `FILE_TTL_SECONDS` 配置，默认 24 小时，到期后 `/v1/images/get/:file_id` 返回 `410`；记录会在对象删除 7 天后回收，之后再访问返回 `404`。
+`completed` 响应还包含 `file_id`：成图已转存到对象存储时为该文件 ID，转存失败时为空字符串。文件有效期由 `FILE_TTL_SECONDS` 配置，默认 24 小时。到期后不再签发新的签名地址，旧的 `/v1/images/get/:file_id` 代理返回 `410`；记录会在对象删除 7 天后回收，之后再访问返回 `404`。
 
-`data` 中的两个地址字段口径如下：
+`data` 中的地址字段口径如下：
 
-- `data.url`：有 `file_id` 时为平台公开读取地址 `{请求域名}/v1/images/get/{file_id}`；没有 `file_id` 时保持上游原始地址。
+- `data.url`：有 `file_id` 时为对象存储的签名下载地址，客户端可直连存储桶下载，不再经过应用服务器。
+- `data.url_expires_at`：签名地址的失效时间（RFC3339）。过期后重新查询任务即可取得新地址；仅当 `data.url` 是签名地址时返回。
 - `data.url_vendor`：上游供应商返回的原始地址，始终保留，转存失败时可直接使用它取图。
 
-域名取自服务端环境变量 `PUBLIC_BASE_URL`，因此返回的是可直接访问的绝对地址。该变量支持完整 origin（如 `https://futureaiapi.com`）或裸域名（按 `https` 处理）；未配置或配置非法时，`data.url` 回落到上游原始地址。
+签名有效期不超过文件剩余有效期，最长 24 小时。签名地址不可用（存储类型不支持、签名失败等）时，`data.url` 回落到应用代理地址 `{PUBLIC_BASE_URL}/v1/images/get/{file_id}`；若 `PUBLIC_BASE_URL` 未配置或非法，则与旧版本一致，回落到上游原始地址。代理接口仍然可用，旧客户端不受影响。
 
 视频任务不套用上述地址改写：`data.url` 就是上游的限时下载地址，没有 `file_id` 与 `url_vendor`，详见 4.5 节。
 
@@ -510,7 +511,7 @@ POST /v1/files/upload/complete
 { "upload_id": "file_..." }
 ```
 
-服务端会 HEAD 对象、校验魔数、调用 CI 解析媒体信息，并校验格式、宽高、宽高比、时长、编码、帧率，全部通过后将 staging 对象复制到正式 key 并登记。响应：
+服务端会 HEAD 对象、校验魔数、调用 CI 解析媒体信息，并按媒体类型校验格式、时长、编码、帧率等；视频另校验宽高与宽高比。全部通过后将 staging 对象复制到正式 key 并登记。响应：
 
 ```json
 {
@@ -531,7 +532,7 @@ POST /v1/files/upload/complete
 
 | 类型 | 格式 | 编码 | 大小 | 时长 | 宽高 | 宽高比 | 帧率 |
 |---|---|---|---|---|---|---|---|
-| 图片 | JPG/JPEG、PNG、WEBP、HEIC、HEIF | — | ≤30MB | — | 每边 [300, 5500] | [0.4, 2.5] | — |
+| 图片 | JPG/JPEG、PNG、WEBP、HEIC、HEIF | — | ≤30MB | — | 不限 | 不限 | — |
 | 音频 | WAV、MP3 | — | ≤15MB | [2, 30]s | — | — | — |
 | 视频 | MP4、MOV | 视频 H.264/AVC、H.265/HEVC；音频 AAC、MP3 | ≤200MB | [2, 30]s | 每边 [300, 5500] | [0.4, 2.5] | [23.9, 60] |
 
