@@ -463,6 +463,8 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 上传图片后，把 `complete` 返回的 `file_id` 填进图像生成接口的 `image_ids`（见 4.1）；上传视频/音频后填进视频生成接口的 `images` / `videos` / `audios`（见 4.5）。用户自己生成、仍在有效期内的图片结果也可以作为后续生成的参考图。
 
+Electron 客户端的完整接入示例（主进程直传、IPC、错误处理）见 [CLIENT_IMAGE_UPLOAD.md](CLIENT_IMAGE_UPLOAD.md)。
+
 这两个端点只处理**参考媒体**；原有 `/v1/uploads/images` 保持不变，仍用于公开图片上传。
 
 #### 准备上传

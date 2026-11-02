@@ -13,6 +13,7 @@
 | 部署到服务器 | [deploy/README.md](deploy/README.md) |
 | 部署出问题了 | [deploy/NOTES.md](deploy/NOTES.md) |
 | 查接口 | [docs/API.md](docs/API.md) |
+| Electron 客户端上传参考图 | [docs/CLIENT_IMAGE_UPLOAD.md](docs/CLIENT_IMAGE_UPLOAD.md) |
 
 ## 技术栈
 

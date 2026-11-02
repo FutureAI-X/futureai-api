@@ -15,6 +15,7 @@
 | 部署至服务器 | [../deploy/README.md](../deploy/README.md) |
 | 查询接口 | [API.md](API.md) |
 | Electron 客户端更新检查接入 | [CLIENT_UPDATE.md](CLIENT_UPDATE.md) |
+| Electron 客户端图片上传接入 | [CLIENT_IMAGE_UPLOAD.md](CLIENT_IMAGE_UPLOAD.md) |
 | 环境变量完整说明 | [ENV.md](ENV.md) |
 
 ---
