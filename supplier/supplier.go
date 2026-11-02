@@ -27,6 +27,11 @@ type ImageGenerateRequest struct {
 	Resolution string   `json:"resolution"`
 	ImageURLs  []string `json:"image_urls"`
 
+	// ImageIDs 是平台通用上传接口返回的 file_id 数组。
+	// 非空时 controller 只认它，忽略 ImageURLs，并在调用上游前解析成短期签名 URL。
+	// 供应商适配层不直接消费本字段：发往上游的始终是 ImageURLs。
+	ImageIDs []string `json:"image_ids"`
+
 	// VendorModelID 为供应商侧的模型 ID，由 controller 按映射关系填充。
 	// 它不是对外标准字段：json:"-" 既让它进不了快照，
 	// 也保证调用方无法通过请求体把它顶掉。

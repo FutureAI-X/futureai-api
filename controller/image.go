@@ -15,8 +15,10 @@ import (
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/filestore"
 	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/storage"
 	"github.com/FutureAI-X/futureai-api/supplier"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // maxIdempotencyKeyLen 幂等键长度上限（与 tasks.idempotency_key 列宽一致）
@@ -50,6 +52,21 @@ func ImageGenerate(c *gin.Context) {
 	// 补齐标准默认值，且必须在计费之前：计费条件匹配的是补齐后的值，
 	// 否则省略 resolution 的请求会计基础价、实际按 1k 出图，价格与生成结果不符。
 	req.ApplyDefaults()
+
+	// image_ids 的形态与数量先本地校验：参数错误不查端点、不扣费、不建任务。
+	// 空数组视为未使用 file_id 路径，回退 image_urls。
+	useFileIDs := useImageFileIDs(req.ImageIDs)
+	if useFileIDs {
+		if err := validateImageFileIDs(req.ImageIDs); err != nil {
+			common.SysErrorf("[ImageGenerate] image_ids 校验失败: userID=%d, err=%v", c.GetInt("user_id"), err)
+			c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": err.Error()})
+			return
+		}
+	}
+
+	// 快照保存调用方原始请求（原始 image_urls + image_ids），必须在把 file_id
+	// 解析并覆盖 ImageURLs 之前取好，否则落库的会是带签名的临时地址。
+	requestSnapshot := marshalRequestBody(req)
 
 	common.SysLogf("[ImageGenerate] 收到请求: model=%s", modelName)
 
@@ -156,7 +173,30 @@ func ImageGenerate(c *gin.Context) {
 		}
 	}
 
-	// 9. 先扣费、后调用上游。
+	// 9. 解析 image_ids：校验归属/用途/状态/类型/有效期，并生成短期签名 URL。
+	//
+	// 放在幂等键之后：参考文件过期后客户端重试同一个 Idempotency-Key，
+	// 应当返回原任务而不是 410。
+	// 放在扣费与建任务之前：文件无效时调用方不该被扣费，也不该留下任务行。
+	// 供应商适配层只认 URL，解析结果直接覆盖 ImageURLs；快照已在上面取好。
+	if useFileIDs {
+		signedURLs, err := resolveImageReferences(c.Request.Context(), userID, req.ImageIDs)
+		if err != nil {
+			var refErr *imageReferenceError
+			if errors.As(err, &refErr) {
+				common.SysErrorf("[ImageGenerate] 参考文件校验失败: userID=%d, status=%d, message=%s",
+					userID, refErr.status, refErr.message)
+				c.JSON(refErr.status, gin.H{"code": "fail", "message": refErr.message})
+				return
+			}
+			common.SysErrorf("[ImageGenerate] 解析参考文件失败: userID=%d, err=%v", userID, err)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "参考文件暂时不可用，请稍后再试"})
+			return
+		}
+		req.ImageURLs = signedURLs
+	}
+
+	// 10. 先扣费、后调用上游。
 	// 顺序至关重要：若先调用供应商再扣费，零余额用户可以让平台先产生真实成本，
 	// 随后扣费失败返回 402，形成「无限免费消耗上游额度」。
 	task := model.Task{
@@ -169,7 +209,8 @@ func ImageGenerate(c *gin.Context) {
 		Credits:    credits.Total,
 		// 落库的是标准字段快照（已补齐默认值），即计费实际依据的那份数据：
 		// 供应商侧模型 ID 被 json:"-" 排除，回溯时可据此复现条件匹配过程。
-		RequestBody:    marshalRequestBody(req),
+		// 快照在 file_id 解析前取好，保留调用方原始字段而不是签名 URL。
+		RequestBody:    requestSnapshot,
 		IdempotencyKey: idemKey,
 	}
 
@@ -195,7 +236,7 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 10. 构造供应商客户端
+	// 11. 构造供应商客户端
 	cfg := supplier.Config{
 		BaseURL: vendor.BaseURL,
 		APIKey:  apiKey,
@@ -209,7 +250,7 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 11. 调用供应商 API。标准字段原样传下去，供应商侧模型 ID 单独给出：
+	// 12. 调用供应商 API。标准字段原样传下去，供应商侧模型 ID 单独给出：
 	// 供应商需要同时知道「调用方请求的是哪个模型」（多个模型可能映射到同一个
 	// vendor_model_id，要靠它区分变体）和「该往上游发哪个模型 ID」。
 	req.VendorModelID = vendorModel.VendorModelID
@@ -223,7 +264,7 @@ func ImageGenerate(c *gin.Context) {
 
 	result := s.ImageGenerate(submitCtx, req)
 
-	// 12. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 退还积分
+	// 13. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 退还积分
 	if result.Code != "success" && result.FailureKind != supplier.FailureUnknown {
 		common.SysErrorf("[ImageGenerate] 供应商明确拒绝: vendor=%s, model=%s, kind=%s",
 			vendor.Name, modelName, result.FailureKind)
@@ -234,7 +275,7 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 13. 结果不确定（超时、连接中断、响应读不完整）。
+	// 14. 结果不确定（超时、连接中断、响应读不完整）。
 	//
 	// 这里**不能退款**：上游很可能已经建单并计费，把它当失败处理就是
 	// supplier 层注释点名的那个资损来源——「上游照常出图、用户全额退款」，
@@ -254,7 +295,7 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 14. 提交成功：记录供应商响应并交给对账循环轮询。
+	// 15. 提交成功：记录供应商响应并交给对账循环轮询。
 	//
 	// 这一步必须在把 taskId 返回给调用方之前成功：vendor_response 是重启后
 	// 找回上游任务的唯一线索，写失败而进程随后退出，就再也查不到这个任务了。
@@ -269,11 +310,11 @@ func ImageGenerate(c *gin.Context) {
 
 	common.SysLogf("[ImageGenerate] 任务创建成功: taskId=%s, vendor=%s, model=%s", task.TaskID, vendor.Name, modelName)
 
-	// 15. 立即安排一次轮询；抢不到并发位也无妨——任务保持非终态，
+	// 16. 立即安排一次轮询；抢不到并发位也无妨——任务保持非终态，
 	// 下一轮对账循环会接手。这里**绝不**因为「排不上队」而退款。
 	ScheduleTaskPoll(task.TaskID)
 
-	// 16. 返回系统 taskId
+	// 17. 返回系统 taskId
 	c.JSON(http.StatusOK, gin.H{
 		"code":   "success",
 		"taskId": task.TaskID,
@@ -356,6 +397,167 @@ func marshalRequestBodyFor(tag string, v interface{}) string {
 // 请求体目前没有大小限制，若不封顶，一个上万元素的数组会产生荒谬的扣费
 // （并让调用方必然 402）。超出部分不再计费，仅记日志告警。
 const maxRefImagesPerRequest = 100
+
+// maxRefImageIDs image_ids 单次请求允许的最大参考图张数（去重后）。
+// 与旧 image_urls 路径不同，这里显式拒绝而不是静默封顶：
+// 调用方传了 16 张却只按 15 张计费、16 张全部出图，等于少收钱；
+// 直接 400 让调用方改请求，计费与实际执行永远一致。
+const maxRefImageIDs = 15
+
+const (
+	// imageReferenceSignTTL 给上游的参考图预签名有效期。
+	// 文件本身只有 6 小时 TTL，实际有效期还会被剩余时长截断。
+	imageReferenceSignTTL = time.Hour
+	// imageReferenceMinRemaining 参考文件至少还要保留这么久才允许提交生成。
+	imageReferenceMinRemaining = 30 * time.Minute
+)
+
+// imageReferenceError 参考文件校验失败，携带对调用方可见的 HTTP 状态码。
+type imageReferenceError struct {
+	status  int
+	message string
+}
+
+func (e *imageReferenceError) Error() string { return e.message }
+
+// useImageFileIDs 判断本次请求是否走 file_id 路径。
+// 规则：image_ids 非空才生效；空数组或缺省时回退 image_urls。
+func useImageFileIDs(ids []string) bool { return len(ids) > 0 }
+
+// validateImageFileIDs 校验 image_ids 的形态与数量。
+//
+// 必须在计费、幂等查询和任何数据库访问之前调用：参数错误不应产生任务行，
+// 也不应让调用方为一次注定失败的请求付钱。
+func validateImageFileIDs(ids []string) error {
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return errors.New("image_ids 中存在空的 file_id")
+		}
+		if strings.Contains(id, "://") {
+			return errors.New("image_ids 只接受平台 file_id，不接受 URL")
+		}
+		if !strings.HasPrefix(id, "file_") {
+			return fmt.Errorf("image_ids 中存在无效的 file_id: %s", id)
+		}
+		if len(id) > model.MaxFileIDLen {
+			return errors.New("image_ids 中的 file_id 过长")
+		}
+		seen[id] = struct{}{}
+	}
+	// 上限按去重后计数：同一张图重复出现不该把合法请求顶成 400。
+	if len(seen) > maxRefImageIDs {
+		return fmt.Errorf("image_ids 去重后最多 %d 张", maxRefImageIDs)
+	}
+	return nil
+}
+
+// dedupeImageFileIDs 去重并保持首次出现顺序；空串在 validate 阶段已被拒绝。
+func dedupeImageFileIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// countRefImageIDs 统计 file_id 参考图张数（去重后）。
+// 超限请求在 validateImageFileIDs 阶段已返回 400，这里不需要封顶。
+func countRefImageIDs(ids []string) int {
+	return len(dedupeImageFileIDs(ids))
+}
+
+// effectiveRefImageCount 返回本次请求实际生效的参考图张数。
+// file_id 字段非空时只数 file_id（URL 被忽略），否则沿用 URL 去重计数。
+// 计费口径必须与实际发往上游的字段完全一致，否则会出现「传了但没算」或「算了但没传」。
+func effectiveRefImageCount(req supplier.ImageGenerateRequest) int {
+	if useImageFileIDs(req.ImageIDs) {
+		return countRefImageIDs(req.ImageIDs)
+	}
+	return countRefImages(req.ImageURLs)
+}
+
+// resolveImageReferences 把 image_ids 解析成上游可直接抓取的短期签名 URL。
+//
+// 允许 purpose=reference（上传的参考图）和 purpose=result（用户自己的生成结果），
+// 但必须属于当前用户、已完成处理、未过期，且媒体类型为图片。
+// HEIC/HEIF 暂不支持：上游是否兼容未确认，提前拒绝避免扣费后才失败。
+func resolveImageReferences(ctx context.Context, userID int, ids []string) ([]string, error) {
+	now := time.Now()
+	ids = dedupeImageFileIDs(ids)
+	urls := make([]string, 0, len(ids))
+
+	for _, id := range ids {
+		file, err := model.GetFileByFileID(id)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, &imageReferenceError{http.StatusNotFound, "参考文件不存在或无权使用"}
+			}
+			return nil, fmt.Errorf("查询参考文件 %s 失败: %w", id, err)
+		}
+
+		if file.UserID != userID ||
+			(file.Purpose != model.FilePurposeReference && file.Purpose != model.FilePurposeResult) {
+			return nil, &imageReferenceError{http.StatusNotFound, "参考文件不存在或无权使用"}
+		}
+		if file.Status != model.FileStatusReady {
+			return nil, &imageReferenceError{http.StatusConflict, "参考文件尚未完成处理"}
+		}
+		if file.MediaType != model.FileMediaTypeImage {
+			return nil, &imageReferenceError{http.StatusBadRequest, "image_ids 中存在类型不匹配的参考文件"}
+		}
+		switch strings.ToLower(strings.TrimSpace(file.ContentType)) {
+		case "image/heic", "image/heif":
+			return nil, &imageReferenceError{http.StatusBadRequest,
+				"暂不支持 HEIC/HEIF 参考图，请转换为 JPG/PNG/WEBP 后重新上传"}
+		}
+		if strings.TrimSpace(file.FileKey) == "" {
+			return nil, &imageReferenceError{http.StatusServiceUnavailable, "参考文件存储信息不完整"}
+		}
+
+		ttl := imageReferenceSignTTL
+		if file.ExpiresAt != nil && !file.ExpiresAt.IsZero() {
+			remaining := file.ExpiresAt.Sub(now)
+			if remaining < imageReferenceMinRemaining {
+				return nil, &imageReferenceError{http.StatusGone, "参考文件已过期或即将过期，请重新上传"}
+			}
+			if remaining < ttl {
+				// 留 1 分钟余量，避免签名地址比对象存活更久。
+				ttl = remaining - time.Minute
+			}
+		}
+		if ttl <= 0 {
+			return nil, &imageReferenceError{http.StatusGone, "参考文件即将过期，请重新上传"}
+		}
+
+		store, err := storage.MediaFrom(file.ServiceType, file.ServiceAddress)
+		if err != nil {
+			common.SysErrorf("[ImageGenerate] 参考文件存储不可用: fileID=%s, err=%v", id, err)
+			return nil, &imageReferenceError{http.StatusServiceUnavailable, "参考文件存储暂不可用"}
+		}
+		signed, err := store.PresignGet(ctx, file.FileKey, ttl)
+		if err != nil {
+			common.SysErrorf("[ImageGenerate] 参考文件签名失败: fileID=%s, err=%v", id, err)
+			return nil, &imageReferenceError{http.StatusServiceUnavailable, "参考文件存储暂不可用"}
+		}
+		urls = append(urls, signed)
+	}
+
+	return urls, nil
+}
 
 // refImageEndpoints 支持参考图附加计费的端点白名单。
 // 刻意用白名单而非「非对话端点」的反向判断：将来若有多模态对话端点复用
@@ -456,7 +658,9 @@ func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGe
 	refImageCount := 0
 	if creditRule.RefImageCredits > 0 && isRefImageModel(modelType) {
 		if isRefImageEndpoint(endpointPath) {
-			refImageCount = countRefImages(req.ImageURLs)
+			// 只数本次实际生效的字段：image_ids 非空时 URL 被忽略，
+			// 不能把调用方额外塞进来的 URL 也算成钱。
+			refImageCount = effectiveRefImageCount(req)
 			creditsAmount += float64(refImageCount) * creditRule.RefImageCredits
 		} else {
 			// 配了参考图计费却收不到钱：这是误配，必须可见

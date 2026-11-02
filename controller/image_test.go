@@ -116,6 +116,127 @@ func TestCountRefImagesAtMaxBoundary(t *testing.T) {
 	}
 }
 
+// ── image_ids：file_id 参考图路径 ──
+
+// 空数组必须回退 image_urls：客户端先发 image_ids: [] 占位、
+// 后续迁移到 file_id 时不应把现有的 URL 路径弄坏。
+func TestUseImageFileIDsOnlyWhenNonEmpty(t *testing.T) {
+	cases := []struct {
+		name string
+		ids  []string
+		want bool
+	}{
+		{"未提供", nil, false},
+		{"空数组回退 image_urls", []string{}, false},
+		{"非空生效", []string{"file_abc"}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := useImageFileIDs(tc.ids); got != tc.want {
+				t.Errorf("useImageFileIDs(%v) = %v, want %v", tc.ids, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateImageFileIDs(t *testing.T) {
+	ids := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = "file_" + strconv.Itoa(i)
+		}
+		return out
+	}
+
+	exact := ids(maxRefImageIDs)
+	tooMany := ids(maxRefImageIDs + 1)
+	// 原始长度超限但去重后恰好等于上限：不应拒绝。
+	dupWithinLimit := append(append([]string(nil), exact...), exact[0], exact[1])
+
+	cases := []struct {
+		name    string
+		ids     []string
+		wantErr bool
+	}{
+		{"nil 合法", nil, false},
+		{"恰好上限", exact, false},
+		{"重复项去重后不超限", dupWithinLimit, false},
+		{"去重后超限", tooMany, true},
+		{"空元素", []string{"file_a", "   "}, true},
+		{"URL 形式", []string{"https://example.com/a.png"}, true},
+		{"前缀不符", []string{"abc"}, true},
+		{"超长", []string{"file_" + strings.Repeat("a", model.MaxFileIDLen)}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateImageFileIDs(tc.ids)
+			if tc.wantErr && err == nil {
+				t.Errorf("validateImageFileIDs(%v) = nil, want error", tc.ids)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("validateImageFileIDs(%v) = %v, want nil", tc.ids, err)
+			}
+		})
+	}
+}
+
+func TestCountRefImageIDsDeduplicates(t *testing.T) {
+	got := countRefImageIDs([]string{"file_a", "file_b", "file_a", " file_b "})
+	if got != 2 {
+		t.Errorf("countRefImageIDs 去重后 = %d, want 2", got)
+	}
+}
+
+// 计费口径跟随生效字段：image_ids 非空时 URL 必须被忽略，
+// 否则调用方可以塞一堆 URL 来虚增（或未来被误算）参考图张数。
+func TestEffectiveRefImageCountFollowsEffectiveField(t *testing.T) {
+	urls := []string{"https://a.png", "https://b.png"}
+
+	cases := []struct {
+		name string
+		req  supplier.ImageGenerateRequest
+		want int
+	}{
+		{"无 file_id 按 URL 计数", supplier.ImageGenerateRequest{ImageURLs: urls}, 2},
+		{"file_id 非空时忽略 URL", supplier.ImageGenerateRequest{
+			ImageURLs: urls, ImageIDs: []string{"file_a"},
+		}, 1},
+		{"file_id 空数组回退 URL", supplier.ImageGenerateRequest{
+			ImageURLs: urls, ImageIDs: []string{},
+		}, 2},
+		{"file_id 去重计数", supplier.ImageGenerateRequest{
+			ImageIDs: []string{"file_a", "file_a", "file_b"},
+		}, 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := effectiveRefImageCount(tc.req); got != tc.want {
+				t.Errorf("effectiveRefImageCount(%+v) = %d, want %d", tc.req, got, tc.want)
+			}
+		})
+	}
+}
+
+// 快照要保留调用方原始的两个参考图字段，签名 URL 解析发生在快照之后。
+func TestMarshalRequestBodyKeepsOriginalReferenceFields(t *testing.T) {
+	req := supplier.ImageGenerateRequest{
+		Model:     "m",
+		ImageURLs: []string{"https://a.png"},
+		ImageIDs:  []string{"file_a"},
+	}
+
+	got := marshalRequestBody(req)
+
+	for _, want := range []string{`"image_ids":["file_a"]`, `"image_urls":["https://a.png"]`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("快照缺少 %s: %s", want, got)
+		}
+	}
+}
+
 // ── 参考图加价的两道闸门 ──
 
 // 多模态对话端点的请求体同样会带 images / image_urls，白名单能防止它们被误加价。
@@ -186,10 +307,10 @@ func TestMarshalRequestBodyExcludesVendorModelID(t *testing.T) {
 	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
 		t.Fatalf("快照应为合法 JSON: %v", err)
 	}
-	if len(decoded) != 5 {
+	if len(decoded) != 6 {
 		t.Fatalf("快照字段集不符: %v", decoded)
 	}
-	for _, k := range []string{"model", "prompt", "size", "resolution", "image_urls"} {
+	for _, k := range []string{"model", "prompt", "size", "resolution", "image_urls", "image_ids"} {
 		if _, ok := decoded[k]; !ok {
 			t.Errorf("快照缺少标准字段 %s", k)
 		}

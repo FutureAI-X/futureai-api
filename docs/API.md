@@ -261,12 +261,54 @@
 | `size` | string | 画幅比例，如 `16:9` / `1:1`，默认 `16:9` |
 | `resolution` | string | 分辨率档位，如 `1k` / `2k`，默认 `1k` |
 | `image_urls` | string[] | 参考图 URL 数组，同时决定参考图附加计费张数 |
+| `image_ids` | string[] | 参考图 file_id 数组（由 `/v1/files/upload/complete` 返回）。非空时优先生效，忽略 `image_urls`；去重后最多 15 张 |
 
 `size` 与 `resolution` 省略时按上表默认值补齐，且补齐发生在计费之前，因此省略 `resolution` 的请求按 `resolution=1k` 匹配计费条件，与实际生成的分辨率一致。调用方显式传入的值原样保留。
 
-`image_urls` 只接受字符串数组：单个字符串（如 `"image_urls": "https://..."`）会被判为类型错误返回 400，而不是被忽略。需要参考图时在报文中写上该字段即可，无需传任何供应商相关参数。
+#### `image_urls` 与 `image_ids` 的优先级
 
-请求示例：
+- `image_ids` 非空（数组里至少有一项）时，只使用 `image_ids`，`image_urls` 被完全忽略。
+- `image_ids` 缺省或为空数组 `[]` 时，回退到 `image_urls`，行为与旧版本完全一致。
+- 两个字段都只接受字符串数组：单个字符串会被判为类型错误返回 400，而不是被忽略。
+
+#### `image_ids` 的校验规则
+
+`image_ids` 中的每一项必须是平台上传接口返回的 `file_id`（`file_` 开头），并满足：
+
+- 属于当前 API Key 对应的用户；
+- 用途为 `reference`（上传的参考图）或 `result`（该用户自己生成的图片结果）；
+- 处理状态为 `ready`；
+- 媒体类型为图片；
+- 未过期，且剩余有效期不少于 30 分钟。
+
+校验失败不会扣费、不会创建任务，直接返回 4xx/503：
+
+| 状态码 | 场景 |
+|---|---|
+| 400 | file_id 形态错误、去重后超过 15 张、不是图片、HEIC/HEIF |
+| 404 | 文件不存在、不属于当前用户、用途不符 |
+| 409 | 文件尚未完成处理 |
+| 410 | 文件已过期或剩余有效期不足 30 分钟 |
+| 503 | 文件存储暂不可用 |
+
+服务端把 `file_id` 解析成短期签名 URL 后交给上游，签名有效期不超过 1 小时、且不超过文件剩余有效期。调用方不需要也不会看到签名地址。
+
+`image_ids` 路径暂不支持 HEIC/HEIF 参考图（上游兼容性未确认），请先转换为 JPG/PNG/WEBP 再上传。
+
+参考图附加计费按本次实际生效的字段计数：`image_ids` 非空时按去重后的 file_id 张数计费；否则按去重后的 `image_urls` 张数计费（旧路径上限仍为 100 张）。使用 `Idempotency-Key` 重试时，即使参考文件在此之间过期，仍会返回原任务。
+
+file_id 请求示例：
+
+```json
+{
+  "model": "gpt-image-2.5-flare-ext",
+  "prompt": "a cat sitting on a windowsill",
+  "resolution": "2k",
+  "image_ids": ["file_1a2b3c4d5e6f"]
+}
+```
+
+URL 请求示例（旧版兼容）：
 
 ```json
 {
@@ -277,7 +319,7 @@
 }
 ```
 
-`image_urls` 应传上传接口返回的 URL，不要内联 base64 data URI：请求体上限为 1MB，一张 10MB 的图 base64 之后约 13MB，会在网关层即被拒绝（413）。
+`image_urls` 应传上传接口返回的 URL，不要内联 base64 data URI：请求体上限为 1MB，一张 10MB 的图 base64 之后约 13MB，会在网关层即被拒绝（413）。新接入建议直接使用 `image_ids`，避免自行托管参考图。
 
 ### 4.2 请求体大小限制
 
@@ -418,6 +460,8 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 ### 4.6 参考媒体上传
 
 `POST /v1/files/upload/prepare` 与 `POST /v1/files/upload/complete` 用于上传后续生成所需的参考图片、参考视频和参考音频。上传的文件保存在平台的对象存储中，只有上传者可以使用，不会通过 `/v1/images/get/:file_id` 公开。
+
+上传图片后，把 `complete` 返回的 `file_id` 填进图像生成接口的 `image_ids`（见 4.1）；上传视频/音频后填进视频生成接口的 `images` / `videos` / `audios`（见 4.5）。用户自己生成、仍在有效期内的图片结果也可以作为后续生成的参考图。
 
 这两个端点只处理**参考媒体**；原有 `/v1/uploads/images` 保持不变，仍用于公开图片上传。
 
