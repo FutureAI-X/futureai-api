@@ -682,9 +682,12 @@ export function Home() {
                 开始使用
                 <span className='ml-1.5 inline-block transition-transform duration-200 group-hover:translate-x-0.5'>→</span>
               </Link>
-              <button className='btn btn-outline btn-lg border-border/50 hover:border-border hover:bg-muted/50'>
+              <Link
+                to='/docs'
+                className='btn btn-outline btn-lg border-border/50 hover:border-border hover:bg-muted/50'
+              >
                 查看文档
-              </button>
+              </Link>
             </div>
 
             {/* Supported Apps */}

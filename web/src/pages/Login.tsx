@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 export function Login() {
   const navigate = useNavigate()
@@ -168,14 +168,12 @@ export function Login() {
           <p className='text-muted-foreground text-xs leading-relaxed'>
             本站点不开放注册入口，购买咨询服务赠送平台账号及等价值积分
           </p>
-          <a
-            href='https://future-ai.feishu.cn/wiki/P8tuwmPiCiMrRtk5UEYccXDCn6d'
-            target='_blank'
-            rel='noopener noreferrer'
+          <Link
+            to='/docs/consulting'
             className='text-primary mt-1.5 inline-block text-xs font-medium underline underline-offset-4 hover:opacity-80'
           >
             了解详情 →
-          </a>
+          </Link>
         </div>
 
         {/* 底部链接 */}
