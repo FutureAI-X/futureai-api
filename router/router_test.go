@@ -34,6 +34,29 @@ func TestPublicFileRouteNeedsNoAuth(t *testing.T) {
 	}
 }
 
+// TestAppVersionRouteIsPublic 验证更新检查接口无需认证：
+// 故意传非法 platform，期望拿到处理函数返回的 400，而不是认证中间件的 401。
+func TestAppVersionRouteIsPublic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	server := gin.New()
+	SetRouter(server)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/apps/futureai-image/version?platform=linux&current_version=1.2.3",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatal("更新检查接口不应要求认证")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("状态码 = %d, want 400（非法 platform 由处理函数返回）", rec.Code)
+	}
+}
+
 // TestAuthenticatedV1RouteStillRequiresAuth 作为对照：同一前缀下的
 // 认证端点仍必须要求 API Key。
 func TestAuthenticatedV1RouteStillRequiresAuth(t *testing.T) {

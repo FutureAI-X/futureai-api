@@ -256,6 +256,8 @@ func migrateDB() error {
 		&CreditRuleCondition{},
 		&CreditLog{},
 		&File{},
+		&App{},
+		&AppRelease{},
 	)
 	if err != nil {
 		return err
@@ -593,6 +595,28 @@ func addTableComments() error {
 
 		// tasks 新增列
 		`COMMENT ON COLUMN tasks.file_id IS '成图在 files 表中的文件ID，空表示未落库'`,
+
+		// apps 表注释
+		`COMMENT ON TABLE apps IS '客户端应用表，供升级检查接口按标识定位应用'`,
+		`COMMENT ON COLUMN apps.id IS '应用唯一标识，自增主键'`,
+		`COMMENT ON COLUMN apps.key IS '客户端上报的稳定标识（如 futureai-image），创建后不可修改'`,
+		`COMMENT ON COLUMN apps.name IS '应用展示名称'`,
+		`COMMENT ON COLUMN apps.description IS '应用备注'`,
+		`COMMENT ON COLUMN apps.status IS '应用状态：1=启用, 2=禁用（禁用后公开接口按不存在处理）'`,
+		`COMMENT ON COLUMN apps.created_at IS '记录创建时间'`,
+		`COMMENT ON COLUMN apps.updated_at IS '记录最后更新时间'`,
+
+		// app_releases 表注释
+		`COMMENT ON TABLE app_releases IS '客户端版本发布表，保留历史版本，支持上下架'`,
+		`COMMENT ON COLUMN app_releases.id IS '版本记录唯一标识，自增主键'`,
+		`COMMENT ON COLUMN app_releases.app_id IS '关联的客户端应用ID，关联 apps 表'`,
+		`COMMENT ON COLUMN app_releases.platform IS '平台：windows=Windows, macos=macOS'`,
+		`COMMENT ON COLUMN app_releases.version IS '严格三段版本号 x.y.z，用于比较是否有更新'`,
+		`COMMENT ON COLUMN app_releases.update_url IS '更新地址（网盘链接或文档页面），客户端用浏览器打开'`,
+		`COMMENT ON COLUMN app_releases.release_notes IS '更新说明，展示在客户端弹窗中'`,
+		`COMMENT ON COLUMN app_releases.status IS '状态：1=上架, 2=下架；公开接口取已上架的最高版本'`,
+		`COMMENT ON COLUMN app_releases.created_at IS '发布时间'`,
+		`COMMENT ON COLUMN app_releases.updated_at IS '记录最后更新时间'`,
 	}
 
 	// credit_rules.ref_image_params 是历史遗留列：老库里有，而新库由 AutoMigrate

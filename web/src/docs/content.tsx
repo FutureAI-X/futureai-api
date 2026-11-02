@@ -21,6 +21,7 @@ import {
   DocP,
   DocStrong,
   DocUl,
+  NetdiskCard,
   QrCard,
   Step,
   Steps,
@@ -218,23 +219,43 @@ const apiKey = (
   </div>
 )
 
-// ── 六、FutureAI Image 接入 ──
+// ── 六、FutureAI Image 下载与接入 ──
 const imageAccess = (
   <div>
+    <DocH2>下载安装</DocH2>
     <DocP>
-      在 FutureAI Image 中填入 API Key 和 API 域名，即可使用本站点的模型。
+      FutureAI Image 支持 Windows 和 macOS，任选一个网盘下载安装。
     </DocP>
 
+    <div className='mt-4 grid gap-3 sm:grid-cols-2'>
+      <NetdiskCard
+        name='百度网盘'
+        url='https://pan.baidu.com/s/1Z9wV66Uyh9KvdN2jPDo-5g?pwd=5wif'
+        code='5wif'
+      />
+      <NetdiskCard
+        name='夸克网盘'
+        url='https://pan.quark.cn/s/7bf01c20435c?pwd=i4fL'
+        code='i4fL'
+      />
+    </div>
+
+    <DocP>
+      链接已包含提取码；如未自动填入，请复制上方提取码。链接失效可
+      <DocLink to='/docs/contact'>联系我们</DocLink>。
+    </DocP>
+
+    <DocH2>配置 API Key</DocH2>
     <Steps>
-      <Step n={1} title='先创建 API Key'>
+      <Step n={1} title='创建 API Key'>
         <p>
-          如果还没有 API Key，请先按照
+          还没有 API Key？按
           <DocLink to='/docs/api-key'>《创建 API Key》</DocLink>
-          完成创建并复制。
+          创建并复制。
         </p>
       </Step>
-      <Step n={2} title='填入 FutureAI Image 的模型管理'>
-        <p>打开 FutureAI Image 的模型管理页面，把 API Key 填入对应输入框。</p>
+      <Step n={2} title='填入模型管理'>
+        <p>打开模型管理页面，把 API Key 填入对应输入框。</p>
         <DocImage
           src={image('futureai-image-settings.png')}
           alt='FutureAI Image 模型管理页面'
@@ -243,9 +264,9 @@ const imageAccess = (
       </Step>
       <Step n={3} title='填写 API 域名'>
         <p>
-          该页面最下方有 1 个「API 域名」输入框，默认为
+          API 域名默认为
           <DocStrong> https://futureaiapi.com</DocStrong>
-          ，一般无需修改。如后续域名发生变更，将在此处更新。
+          ，一般无需修改。
         </p>
         <CodeLine value='https://futureaiapi.com' />
       </Step>
@@ -306,7 +327,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         slug: 'image',
         title: 'FutureAI Image',
-        summary: '把 API Key 和 API 域名填入 FutureAI Image，开始使用模型。',
+        summary: '下载安装 FutureAI Image，并把 API Key 和 API 域名填入客户端。',
         icon: ImageIcon,
         content: imageAccess,
       },

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ImageOff, Info, Sparkles } from 'lucide-react'
+import { AlertTriangle, CloudDownload, ExternalLink, ImageOff, Info, Sparkles } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { CopyButton } from '../components/CopyButton'
 
@@ -215,6 +215,49 @@ export function QrCard({
         </p>
       ) : null}
     </figure>
+  )
+}
+
+// ── 网盘下载卡片 ──
+// 提取码单独展示且可复制：链接里的 ?pwd= 在浏览器中通常会自动填入，
+// 但复制到网盘 App、或自动填充失败时，用户仍需要手动输入。
+
+export function NetdiskCard({
+  name,
+  url,
+  code,
+}: {
+  name: string
+  url: string
+  code: string
+}) {
+  return (
+    <div className='border-border/70 bg-muted/20 flex flex-col rounded-xl border p-5'>
+      <div className='flex items-center gap-2'>
+        <CloudDownload className='text-primary size-4' />
+        <h3 className='text-sm font-semibold'>{name}</h3>
+      </div>
+
+      <div className='border-border/70 bg-background mt-4 flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5'>
+        <div className='min-w-0'>
+          <p className='text-muted-foreground text-[11px]'>提取码</p>
+          <code className='font-mono text-sm font-semibold tracking-wider'>
+            {code}
+          </code>
+        </div>
+        <CopyButton text={code} />
+      </div>
+
+      <a
+        href={url}
+        target='_blank'
+        rel='noreferrer'
+        className='bg-primary hover:bg-primary/90 mt-4 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium text-white transition-colors'
+      >
+        <ExternalLink className='size-3.5' />
+        打开网盘
+      </a>
+    </div>
   )
 }
 

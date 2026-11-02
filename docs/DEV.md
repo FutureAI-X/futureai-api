@@ -14,6 +14,7 @@
 | 在本地验证部署架构（Nginx 网关） | [GATEWAY.md](GATEWAY.md) |
 | 部署至服务器 | [../deploy/README.md](../deploy/README.md) |
 | 查询接口 | [API.md](API.md) |
+| Electron 客户端更新检查接入 | [CLIENT_UPDATE.md](CLIENT_UPDATE.md) |
 | 环境变量完整说明 | [ENV.md](ENV.md) |
 
 ---

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom'
-import { User, Coins, PanelLeft, Users, Radio, Key, Box, Link2, Globe, FileText, History } from 'lucide-react'
+import { User, Coins, PanelLeft, Users, Radio, Key, Box, Link2, Globe, FileText, History, Package, Rocket } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { Header } from '../../components/Header'
 
@@ -43,6 +43,13 @@ export function DashboardLayout() {
           { title: '模型管理', href: '/dashboard/admin/models', icon: Box },
           { title: '供应商管理', href: '/dashboard/admin/vendors', icon: Radio },
           { title: '供应商模型', href: '/dashboard/admin/vendor-models', icon: Link2 },
+        ],
+      })
+      nav.push({
+        group: '版本管理',
+        items: [
+          { title: '应用管理', href: '/dashboard/admin/apps', icon: Package },
+          { title: '版本发布', href: '/dashboard/admin/app-releases', icon: Rocket },
         ],
       })
       nav.push({

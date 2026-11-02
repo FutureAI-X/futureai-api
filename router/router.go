@@ -27,6 +27,16 @@ func SetRouter(server *gin.Engine) {
 		pricingRouter.GET("", controller.GetPricing)
 	}
 
+	// 客户端更新检查（公开，按来源 IP 限流）。
+	// 客户端可能在用户登录前就发起检查，因此不能挂在任何认证中间件下。
+	appVersionRouter := server.Group("/api/apps")
+	appVersionRouter.Use(middleware.IPRateLimit(
+		common.GetEnvOrDefault("APP_VERSION_RATE_LIMIT_PER_MINUTE", 120),
+	))
+	{
+		appVersionRouter.GET("/:app_key/version", controller.GetAppVersion)
+	}
+
 	// 需要登录的接口
 	userRouter := server.Group("/api/user")
 	userRouter.Use(middleware.UserAuth())
@@ -135,5 +145,18 @@ func SetRouter(server *gin.Engine) {
 
 		adminRouter.GET("/task-logs", controller.AdminGetTaskLogs)
 		adminRouter.GET("/task-logs/:id", controller.AdminGetTaskLogDetail)
+
+		// 客户端版本管理
+		adminRouter.GET("/apps", controller.AdminGetApps)
+		adminRouter.POST("/apps", controller.AdminCreateApp)
+		adminRouter.PUT("/apps/:id", controller.AdminUpdateApp)
+		adminRouter.PUT("/apps/:id/status", controller.AdminUpdateAppStatus)
+		adminRouter.DELETE("/apps/:id", controller.AdminDeleteApp)
+
+		adminRouter.GET("/app-releases", controller.AdminGetAppReleases)
+		adminRouter.POST("/app-releases", controller.AdminCreateAppRelease)
+		adminRouter.PUT("/app-releases/:id", controller.AdminUpdateAppRelease)
+		adminRouter.PUT("/app-releases/:id/status", controller.AdminUpdateAppReleaseStatus)
+		adminRouter.DELETE("/app-releases/:id", controller.AdminDeleteAppRelease)
 	}
 }
