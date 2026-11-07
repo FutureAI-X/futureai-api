@@ -27,6 +27,14 @@ type ImageGenerateRequest struct {
 	Resolution string   `json:"resolution"`
 	ImageURLs  []string `json:"image_urls"`
 
+	// Quality / OutputFormat / Complexity 是部分模型开放的可选生成参数
+	// （当前为 gpt-image-2.6-ext）。它们由 models.param_spec 决定是否可用：
+	// 规格里没有对应字段时控制器会清空，不传给上游。
+	// omitempty 让未使用这些参数的请求快照保持原有字段集。
+	Quality      string `json:"quality,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
+	Complexity   string `json:"complexity,omitempty"`
+
 	// ImageIDs 是平台通用上传接口返回的 file_id 数组。
 	// 非空时 controller 只认它，忽略 ImageURLs，并在调用上游前解析成短期签名 URL。
 	// 供应商适配层不直接消费本字段：发往上游的始终是 ImageURLs。
@@ -86,8 +94,9 @@ func IsCreditParamName(name string) bool {
 
 // CreditParams 返回参与参数组合计费的字段（参数名 → 值）。
 //
-// 只列字符串字段：image_urls 是数组，按约定永远命中不了参数组合条件
-// （与文档中「条件仅支持顶层字符串参数」一致），因此不参与匹配。
+// 只列计费相关的字符串字段：image_urls 是数组，按约定永远命中不了参数组合条件
+// （与文档中「条件仅支持顶层字符串参数」一致）；quality / output_format /
+// complexity 不影响单价，也不是计费维度，因此同样不参与匹配。
 // 键必须与 creditParamNames 一致。
 //
 // size / resolution 按平台规范做去空白归一化。分辨率统一为大写（1K / 2K / 4K），

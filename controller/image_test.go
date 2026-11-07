@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/FutureAI-X/futureai-api/imageparam"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/FutureAI-X/futureai-api/supplier"
 	"github.com/gin-gonic/gin"
@@ -19,14 +20,17 @@ import (
 
 // 标准之外的字段不能被解析进来：它们既进不了计费条件，也进不了快照和上游请求。
 // VendorModelID 尤其重要——它由服务端填充，调用方注入就等于绕过模型映射。
-func TestImageGenerateRequestIgnoresNonStandardFields(t *testing.T) {
+func TestImageGenerateRequestParsesStandardFieldsAndIgnoresOthers(t *testing.T) {
 	body := `{
-		"model": "gpt-image-2.5-flare-ext",
+		"model": "gpt-image-2.6-flare-ext",
 		"prompt": "a cat",
 		"size": "1024x1024",
 		"resolution": "2k",
-		"image_urls": ["https://a.png"],
 		"quality": "high",
+		"output_format": "webp",
+		"complexity": "medium",
+		"image_urls": ["https://a.png"],
+		"aspect_ratio": "16:9",
 		"n": 4,
 		"seed": 7,
 		"version": "sunburst",
@@ -42,19 +46,60 @@ func TestImageGenerateRequestIgnoresNonStandardFields(t *testing.T) {
 	if req.VendorModelID != "" {
 		t.Errorf("调用方不该能注入 VendorModelID，实际 %q", req.VendorModelID)
 	}
-	if req.Model != "gpt-image-2.5-flare-ext" || req.Prompt != "a cat" ||
+	if req.Model != "gpt-image-2.6-flare-ext" || req.Prompt != "a cat" ||
 		req.Size != "1024x1024" || req.Resolution != "2k" || len(req.ImageURLs) != 1 {
 		t.Fatalf("标准字段解析结果不符: %+v", req)
+	}
+	if req.Quality != "high" || req.OutputFormat != "webp" || req.Complexity != "medium" {
+		t.Fatalf("可选标准字段解析结果不符: %+v", req)
 	}
 
 	params := req.CreditParams()
 	if len(params) != 4 {
 		t.Errorf("参与计费的字段集不符: %v", params)
 	}
-	for _, name := range []string{"quality", "n", "seed", "version", "vendor_model_id"} {
+	for _, name := range []string{"n", "seed", "version", "vendor_model_id", "aspect_ratio"} {
 		if _, ok := params[name]; ok {
 			t.Errorf("非标准字段 %s 不该参与计费", name)
 		}
+	}
+	// quality / output_format / complexity 是请求字段，但不是计费维度：
+	// 单张价格只由 version × resolution 决定。
+	for _, name := range []string{"quality", "output_format", "complexity"} {
+		if _, ok := params[name]; ok {
+			t.Errorf("可选参数 %s 不该参与计费", name)
+		}
+	}
+}
+
+// 规格没有声明的可选字段必须被清空：它们不能进入快照，也不能传给上游。
+// 2.5 / gpt-image-2 / MOSS 的规格都没有 quality / output_format / complexity。
+func TestClearUnsupportedImageParams(t *testing.T) {
+	spec, err := imageparam.ParseSpec(`{
+		"params": [
+			{"key": "prompt", "widget": "textarea"},
+			{"key": "quality", "widget": "segmented", "options": ["auto", "high"]}
+		]
+	}`)
+	if err != nil {
+		t.Fatalf("ParseSpec: %v", err)
+	}
+
+	req := supplier.ImageGenerateRequest{
+		Resolution:   "2K",
+		Quality:      "high",
+		OutputFormat: "webp",
+		Complexity:   "low",
+	}
+
+	clearUnsupportedImageParams(&req, spec)
+
+	if req.Quality != "high" {
+		t.Errorf("规格声明的 quality 被误清空: %q", req.Quality)
+	}
+	if req.Resolution != "" || req.OutputFormat != "" || req.Complexity != "" {
+		t.Errorf("规格未声明的字段未清空: resolution=%q output_format=%q complexity=%q",
+			req.Resolution, req.OutputFormat, req.Complexity)
 	}
 }
 

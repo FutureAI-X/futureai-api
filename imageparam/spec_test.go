@@ -69,6 +69,65 @@ func TestGptImageDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestGptImage26DefaultsAndValidation(t *testing.T) {
+	spec := mustSpec(t, "gpt-image-2.6-flare-ext")
+	values := Values{"prompt": "a cat"}
+	if err := spec.ApplyDefaults(values); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	if values["size"] != "16:9" || values["resolution"] != "1K" {
+		t.Fatalf("尺寸默认值不符: size=%v resolution=%v", values["size"], values["resolution"])
+	}
+	if values["quality"] != "auto" || values["output_format"] != "png" {
+		t.Fatalf("可选参数默认值不符: quality=%v output_format=%v", values["quality"], values["output_format"])
+	}
+	// complexity 不设默认：用户不选就不发送，由上游决定。
+	if _, ok := values["complexity"]; ok {
+		t.Fatalf("complexity 不该有默认值: %v", values["complexity"])
+	}
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate defaults: %v", err)
+	}
+
+	values["quality"] = "xhigh"
+	values["output_format"] = "webp"
+	values["complexity"] = "high"
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate optional params: %v", err)
+	}
+
+	values["quality"] = "ultra"
+	err := spec.Validate(values)
+	if err == nil || err.Code != "PARAM_UNSUPPORTED_VALUE" {
+		t.Fatalf("Validate unsupported quality = %v, want PARAM_UNSUPPORTED_VALUE", err)
+	}
+
+	values["quality"] = "auto"
+	values["output_format"] = "svg"
+	err = spec.Validate(values)
+	if err == nil || err.Code != "PARAM_UNSUPPORTED_VALUE" {
+		t.Fatalf("Validate svg = %v, want PARAM_UNSUPPORTED_VALUE", err)
+	}
+
+	values["output_format"] = "gif"
+	err = spec.Validate(values)
+	if err == nil || err.Code != "PARAM_UNSUPPORTED_VALUE" {
+		t.Fatalf("Validate gif = %v, want PARAM_UNSUPPORTED_VALUE", err)
+	}
+
+	values["output_format"] = "png"
+	values["size"] = "21:9"
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate 21:9: %v", err)
+	}
+
+	values["size"] = "3:1"
+	err = spec.Validate(values)
+	if err == nil || err.Code != "PARAM_SIZE_RATIO_UNSUPPORTED" {
+		t.Fatalf("Validate 3:1 = %v, want PARAM_SIZE_RATIO_UNSUPPORTED", err)
+	}
+}
+
 func TestMossPixelSize(t *testing.T) {
 	spec := mustSpec(t, "moss-image-base-1.0")
 	values := Values{"prompt": "a cat", "size": "1440x1440"}
@@ -127,12 +186,32 @@ func TestRefFileSize(t *testing.T) {
 	}
 }
 
+// 请求字段是否存在按 path 判断：key 可以与 path 不同，
+// 控制器清空不支持字段时必须用 HasPath，不能用 HasKey。
+func TestHasPathUsesRequestPath(t *testing.T) {
+	spec, err := ParseSpec(`{"params":[{"key":"image_quality","path":"quality","widget":"segmented","options":["auto"]}]}`)
+	if err != nil {
+		t.Fatalf("ParseSpec: %v", err)
+	}
+	if !spec.HasPath("quality") {
+		t.Error("HasPath(quality) = false, want true")
+	}
+	if spec.HasKey("quality") {
+		t.Error("HasKey(quality) = true, 但规格的 key 是 image_quality")
+	}
+	if !spec.HasKey("image_quality") {
+		t.Error("HasKey(image_quality) = false, want true")
+	}
+}
+
 func TestParseSpecRejectsUnsupported(t *testing.T) {
 	cases := []string{
 		`{"params":[{"key":"prompt","widget":"file"}]}`,
 		`{"params":[{"key":"prompt","widget":"textarea","unknown":true}]}`,
 		`{"params":[{"key":"size","widget":"ratio_size","ratios":["1:1"],"default":{"by":"x"}}]}`,
 		`{"params":[{"key":"prompt","widget":"textarea","visible_when":{"field":"x","op":"eq","value":1}}]}`,
+		// segmented 只能映射到枚举型字段，不能借 path 修改 size 等控件语义
+		`{"params":[{"key":"quality","path":"size","widget":"segmented","options":["high"]}]}`,
 	}
 	for _, raw := range cases {
 		if _, err := ParseSpec(raw); err == nil {

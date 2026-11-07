@@ -24,7 +24,7 @@ frame_count, frame_duration_ms,
 svg.model, svg.reasoning.effort
 ```
 
-新增参数时必须同时完成三件事，缺一不可：
+当前代码已注册 `prompt`、`size`、`resolution`、`quality`、`output_format`、`complexity`、`image_ids`、`image_urls`；其余路径随对应控件接入时再登记。新增参数时必须同时完成三件事，缺一不可：
 
 1. 在 `ImageGenerateRequest` 增加字段；
 2. 在请求字段注册表登记路径；

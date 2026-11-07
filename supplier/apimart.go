@@ -54,10 +54,16 @@ type apimartImageModelSpec struct {
 	// resolutions 平台开放给该模型的分辨率档位（平台统一大写）。
 	resolutions []string
 	// lowercaseResolution 为 true 时，发给上游的 resolution 转成小写。
-	// gpt-image-2 文档要求 1k / 2k / 4k，gpt-image-2.5-ext 要求 1K / 2K / 4K。
+	// gpt-image-2 / gpt-image-2.6-ext 要求 1k / 2k / 4k，gpt-image-2.5-ext 要求 1K / 2K / 4K。
 	lowercaseResolution bool
 	// maxReferenceImages 上游单次请求支持的最大参考图张数。
 	maxReferenceImages int
+	// qualityLevels / outputFormats / complexityLevels 为该模型开放的可选参数取值。
+	// nil 表示模型不支持该参数：收到非空值直接拒绝，避免把上游会忽略的字段
+	// 当成已生效的配置放行。
+	qualityLevels    []string
+	outputFormats    []string
+	complexityLevels []string
 }
 
 // apimartImageSizes15 gpt-image-2 / gpt-image-2-ext 支持的画幅比例。
@@ -77,6 +83,15 @@ var apimartImageSizes10 = []string{
 // apimartImageResolutions 平台对外统一的分辨率档位。
 // 发往上游时由模型的 lowercaseResolution 决定是否转小写。
 var apimartImageResolutions = []string{"1K", "2K", "4K"}
+
+// gpt-image-2.6-ext 开放的可选参数取值。
+// quality 不影响单张价格；output_format 本期只开放静态图片格式（SVG/GIF 暂不接入）；
+// complexity 省略时由上游决定。
+var (
+	apimartImage26QualityLevels    = []string{"auto", "low", "medium", "high", "xhigh", "max"}
+	apimartImage26OutputFormats    = []string{"png", "jpeg", "webp"}
+	apimartImage26ComplexityLevels = []string{"low", "medium", "high"}
+)
 
 // apimartPixelRule 接受像素尺寸的 APIMart 模型的约束。
 //
@@ -101,7 +116,7 @@ var apimartPixelRule = PixelRule{
 //
 // gpt-image-2 与 gpt-image-2-ext 是上游同一个模型的两个名字，平台侧两种
 // 配置都允许，因此都登记。两者参数完全一致：15 种比例或像素尺寸、
-// 15 张参考图、resolution 小写。gpt-image-2.5 系列只接受比例。
+// 15 张参考图、resolution 小写。gpt-image-2.5 / 2.6 系列只接受比例。
 var apimartImageModels = map[string]apimartImageModelSpec{
 	"gpt-image-2": {
 		sizeRule: SizeRule{
@@ -142,6 +157,32 @@ var apimartImageModels = map[string]apimartImageModelSpec{
 		},
 		resolutions:        apimartImageResolutions,
 		maxReferenceImages: 16,
+	},
+	"gpt-image-2.6-flare-ext": {
+		version: "flare",
+		sizeRule: SizeRule{
+			AllowRatio: true,
+			Ratios:     apimartImageSizes10,
+		},
+		resolutions:         apimartImageResolutions,
+		lowercaseResolution: true,
+		maxReferenceImages:  16,
+		qualityLevels:       apimartImage26QualityLevels,
+		outputFormats:       apimartImage26OutputFormats,
+		complexityLevels:    apimartImage26ComplexityLevels,
+	},
+	"gpt-image-2.6-sunburst-ext": {
+		version: "sunburst",
+		sizeRule: SizeRule{
+			AllowRatio: true,
+			Ratios:     apimartImageSizes10,
+		},
+		resolutions:         apimartImageResolutions,
+		lowercaseResolution: true,
+		maxReferenceImages:  16,
+		qualityLevels:       apimartImage26QualityLevels,
+		outputFormats:       apimartImage26OutputFormats,
+		complexityLevels:    apimartImage26ComplexityLevels,
 	},
 }
 
@@ -210,8 +251,36 @@ func (a *apimart) ValidateImageRequest(req ImageGenerateRequest) error {
 	if !spec.supportsResolution(req.Resolution) {
 		return fmt.Errorf("resolution 只支持 %s", strings.Join(spec.resolutions, "、"))
 	}
+	if err := validateEnumOption("quality", req.Quality, spec.qualityLevels); err != nil {
+		return err
+	}
+	if err := validateEnumOption("output_format", req.OutputFormat, spec.outputFormats); err != nil {
+		return err
+	}
+	if err := validateEnumOption("complexity", req.Complexity, spec.complexityLevels); err != nil {
+		return err
+	}
 
 	return validateAPIMartReferenceCount(req, spec.maxReferenceImages)
+}
+
+// validateEnumOption 校验可选枚举字段。
+// 空值表示调用方未指定，始终合法；模型规格未登记该参数时拒绝非空值，
+// 与 size/resolution 一样保持 fail-closed。
+func validateEnumOption(name, value string, allowed []string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if len(allowed) == 0 {
+		return fmt.Errorf("模型不支持 %s 参数", name)
+	}
+	for _, item := range allowed {
+		if strings.EqualFold(item, value) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s 只支持 %s", name, strings.Join(allowed, "、"))
 }
 
 // validateAPIMartReferenceCount 校验实际生效的参考图数组不超过该模型的上限。
@@ -246,9 +315,10 @@ func validateAPIMartReferenceCount(req ImageGenerateRequest, max int) error {
 //
 // size / resolution 直接写入：默认值已在计费前由 ApplyDefaults 补齐，
 // 传空串上游会当作未指定，反而绕开了默认值。resolution 的大小写由模型规格
-// 决定（gpt-image-2 小写、gpt-image-2.5-ext 大写），未登记模型按平台默认大写
+// 决定（gpt-image-2 / 2.6-ext 小写、gpt-image-2.5-ext 大写），未登记模型按平台默认大写
 // 兜底（这类请求在 ValidateImageRequest 阶段已被拒绝）。
-// image_urls 为空时不写入。平台一次任务只生成一张图，因此 n 固定为 1。
+// image_urls / quality / output_format / complexity 为空时不写入。
+// 平台一次任务只生成一张图，因此 n 固定为 1。
 func buildRequest(req ImageGenerateRequest) map[string]interface{} {
 	spec, _ := apimartImageSpecFor(req.Model)
 
@@ -261,6 +331,17 @@ func buildRequest(req ImageGenerateRequest) map[string]interface{} {
 	}
 	if len(req.ImageURLs) > 0 {
 		body["image_urls"] = req.ImageURLs
+	}
+
+	// 上游枚举大小写不敏感，这里统一转小写，保证同一取值只产生一种线上写法。
+	for key, value := range map[string]string{
+		"quality":       req.Quality,
+		"output_format": req.OutputFormat,
+		"complexity":    req.Complexity,
+	} {
+		if v := strings.ToLower(strings.TrimSpace(value)); v != "" {
+			body[key] = v
+		}
 	}
 
 	applyImageVersion(body, req.Model)

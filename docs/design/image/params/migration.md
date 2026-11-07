@@ -9,8 +9,8 @@
 | `gpt-image-2` / `gpt-image-2-ext` | 比例 15 种或像素；`step=16`，单边 ≤ 3840，总像素 ≤ 8,294,400，宽高比 1:3–3:1 | 1K/2K/4K | 15 | 2000 |
 | `gpt-image-2.5-flare-ext` / `sunburst-ext` | 比例 10 种 | 1K/2K/4K | 16 | 2000 |
 | `moss-image-base-1.0` / `sft-1.0` | 像素；`step=16`，单边 256–2048，总像素 ≤ 2,097,152 | 无 | 0 | 4000 |
-| `gpt-image-2.6-ext` | 比例 10 种（auto 暂不开放） | 1K | 16 | 32000 |
-| `gpt-image-2.6` 正式版 | 比例 10 种（auto 暂不开放） | 1K | 16 | 32000 |
+| `gpt-image-2.6-flare-ext` / `sunburst-ext` | 比例 10 种（auto 暂不开放） | 1K/2K/4K | 16 | 2000 |
+| `gpt-image-2.6` 正式版（按 token 计费） | 比例 10 种（auto 暂不开放） | 1K | 16 | 32000 |
 
 2.6 的 GIF/SVG 参数与 `auto` 尺寸在后续阶段补入；本期种子只包含静态图片。
 
@@ -19,6 +19,8 @@
 - [gpt-image-2-ext.md](../gpt-image-2-ext.md)
 - [gpt-image-2.5-flare-ext.md](../gpt-image-2.5-flare-ext.md)
 - [gpt-image-2.5-sunburst-ext.md](../gpt-image-2.5-sunburst-ext.md)
+- [gpt-image-2.6-flare-ext.md](../gpt-image-2.6-flare-ext.md)
+- [gpt-image-2.6-sunburst-ext.md](../gpt-image-2.6-sunburst-ext.md)
 - [moss-image-base-1.0.md](../moss-image-base-1.0.md)
 - [moss-image-sft-1.0.md](../moss-image-sft-1.0.md)
 
@@ -82,7 +84,7 @@ P4：清理。删除供应商适配层中的参数约束、`SizeRule` 与相关�
 |---|---|---|
 | 通用结构的复杂度 | 条件 DSL、动态值、序列化表达式都会增加引擎面积 | 严格限制语法，不做算术；每种能力都有测试向量 |
 | 服务端仍需逐参数实现 | 通用规格只降低客户端成本，不替代请求字段与上游翻译 | [server.md](server.md) 的注册表强制三件事同时完成 |
-| 计费联动 | 当前计费条件只有四个字段，2.6 的 `quality`、`n`、`frame_count` 无法定价 | 与 2.6 同期扩展计费模块 |
+| 计费联动 | 当前计费条件只有四个字段；2.6 Ext 的 `quality` / `output_format` / `complexity` 不参与定价，`n` / `frame_count` 后续需要倍数计费 | Ext 不需要扩展；开放 `n` 或 GIF 时再扩展计费模块 |
 | 多结果 | 任务存储与 API 响应目前按单资产设计 | 2.6 正式版接入时单独设计 |
 | `auto` 尺寸缺失 | 2.6 的 GIF 依赖 `size=auto`，本期未开放 | 开放 GIF 前补齐 auto 尺寸与结果渲染 |
 | L5 运行时数据依赖 | 蒙版尺寸依赖用户上传的首图 | 首期只在服务端阻断，客户端做提示 |

@@ -102,12 +102,20 @@ func ImageGenerate(c *gin.Context) {
 
 	// 平台统一使用大写分辨率档位；旧接口对大小写不敏感。
 	req.Resolution = strings.ToUpper(strings.TrimSpace(req.Resolution))
+	// quality / output_format / complexity 的枚举值上游不区分大小写，
+	// 平台统一转小写，与 param_spec 中的 options 保持一致。
+	req.Quality = strings.ToLower(strings.TrimSpace(req.Quality))
+	req.OutputFormat = strings.ToLower(strings.TrimSpace(req.OutputFormat))
+	req.Complexity = strings.ToLower(strings.TrimSpace(req.Complexity))
 	values := imageparam.Values{
-		"prompt":     req.Prompt,
-		"size":       req.Size,
-		"resolution": req.Resolution,
-		"image_ids":  req.ImageIDs,
-		"image_urls": req.ImageURLs,
+		"prompt":        req.Prompt,
+		"size":          req.Size,
+		"resolution":    req.Resolution,
+		"quality":       req.Quality,
+		"output_format": req.OutputFormat,
+		"complexity":    req.Complexity,
+		"image_ids":     req.ImageIDs,
+		"image_urls":    req.ImageURLs,
 	}
 	if paramErr := spec.ApplyDefaults(values); paramErr != nil {
 		writeParamError(c, paramErr)
@@ -116,14 +124,16 @@ func ImageGenerate(c *gin.Context) {
 	req.Prompt = stringValue(values["prompt"])
 	req.Size = stringValue(values["size"])
 	req.Resolution = stringValue(values["resolution"])
+	req.Quality = stringValue(values["quality"])
+	req.OutputFormat = stringValue(values["output_format"])
+	req.Complexity = stringValue(values["complexity"])
 	if paramErr := spec.Validate(values); paramErr != nil {
 		writeParamError(c, paramErr)
 		return
 	}
-	// 规格没有 resolution 时忽略调用方传入的值，避免它进入计费条件与上游请求。
-	if !spec.HasKey("resolution") {
-		req.Resolution = ""
-	}
+	// 规格没有对应字段时忽略调用方传入的值，避免它进入快照与上游请求。
+	// 2.5、gpt-image-2、MOSS 都没有这些字段，客户端误传会被静默丢弃。
+	clearUnsupportedImageParams(&req, spec)
 
 	// 3. 验证模型是否支持此端点
 	modelEndpoints, err := model.GetModelEndpoints(m.ID)
@@ -649,6 +659,28 @@ func stringValue(v any) string {
 		return s
 	}
 	return ""
+}
+
+// clearUnsupportedImageParams 清空模型规格没有声明的可选字段。
+//
+// 平台请求结构体包含所有模型的并集字段，但某个模型是否真正接受取决于它的
+// param_spec。规格里没有的字段必须在这里清掉，否则会进入请求快照和上游请求，
+// 让调用方误以为配置生效。
+func clearUnsupportedImageParams(req *supplier.ImageGenerateRequest, spec *imageparam.Spec) {
+	fields := []struct {
+		path string
+		dest *string
+	}{
+		{"resolution", &req.Resolution},
+		{"quality", &req.Quality},
+		{"output_format", &req.OutputFormat},
+		{"complexity", &req.Complexity},
+	}
+	for _, field := range fields {
+		if !spec.HasPath(field.path) {
+			*field.dest = ""
+		}
+	}
 }
 
 // countRefImageIDs 统计 file_id 参考图张数（去重后）。

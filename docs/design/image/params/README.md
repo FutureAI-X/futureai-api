@@ -1,6 +1,6 @@
 # 图像生成参数规格与校验引擎
 
-> 状态：第一阶段已实现。服务端 `imageparam` 包、`models.param_spec`、管理端接口与客户端规格驱动渲染已接入；当前支持 `textarea`、`segmented`、`ratio_size`、`pixel_size`、`ref_images`。条件、动态值、`emit`、命名校验器与其余控件尚未实现。
+> 状态：第一阶段已实现。服务端 `imageparam` 包、`models.param_spec`、管理端接口与客户端规格驱动渲染已接入；当前支持 `textarea`、`segmented`、`ratio_size`、`pixel_size`、`ref_images`。`gpt-image-2.6-ext` 已通过 `segmented` 接入 `quality` / `output_format` / `complexity`。条件、动态值、`emit`、命名校验器与其余控件尚未实现。
 
 ## 1 背景与目标
 

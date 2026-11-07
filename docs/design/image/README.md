@@ -23,7 +23,7 @@
 
 控制器按以下顺序处理请求。任何参数错误都在扣费之前返回，不产生任务行。
 
-1. 解析请求体并补齐标准默认值。`size` 缺省为 `16:9`，`resolution` 缺省为 `1K`。
+1. 解析请求体并按模型参数规格补齐默认值。`size` 缺省为 `16:9`，`resolution` 缺省为 `1K`；规格声明 `quality` / `output_format` 时分别补 `auto` / `png`，`complexity` 不补默认值。
 2. 保存调用方原始请求快照。快照必须在 file_id 解析与字段清理之前生成。
 3. 查找端点、模型、模型与端点的绑定关系，选择第一个可用供应商。
 4. 解密供应商 API Key，构造供应商实现，读取能力声明。
@@ -118,6 +118,8 @@
 | `gpt-image-2-ext` / `gpt-image-2` | [gpt-image-2-ext.md](gpt-image-2-ext.md) |
 | `gpt-image-2.5-flare-ext` | [gpt-image-2.5-flare-ext.md](gpt-image-2.5-flare-ext.md) |
 | `gpt-image-2.5-sunburst-ext` | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
+| `gpt-image-2.6-flare-ext` | [gpt-image-2.6-flare-ext.md](gpt-image-2.6-flare-ext.md) |
+| `gpt-image-2.6-sunburst-ext` | [gpt-image-2.6-sunburst-ext.md](gpt-image-2.6-sunburst-ext.md) |
 
 参数规格的字段定义、校验顺序与两端复用方式见 [params/README.md](params/README.md)。该目录描述的是待实现的设计，当前代码仍使用供应商适配层与客户端常量中的硬编码约束。
 
@@ -126,7 +128,7 @@
 新增一个图像模型时，按以下清单补齐：
 
 1. 在 `supplier` 包实现 `Supplier` 接口。同步接口还需要实现 `ImageCapabilityProvider` 和 `ImageRequestValidator`。
-2. APIMart 模型要在 `supplier/apimart.go` 的 `apimartImageModels` 登记模型规格（size 集合、分辨率档位及大小写、参考图上限、version），未登记会在扣费前被拒绝。
+2. APIMart 模型要在 `supplier/apimart.go` 的 `apimartImageModels` 登记模型规格（size 集合、分辨率档位及大小写、参考图上限、version，以及 quality / output_format / complexity 等可选参数的允许值），未登记会在扣费前被拒绝。
 3. 在 `NewSupplier` 与 `NewTaskQuerier` 注册供应商名称。
 4. 同步接口使用 `common.LongOutboundHTTPClient`，避免通用客户端的响应头超时。
 5. 在控制器侧确认参考图、计费与状态映射符合预期。

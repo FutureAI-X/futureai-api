@@ -4,11 +4,15 @@
 
 ## 1 计费联动
 
-参数规格不携带价格。当前计费规则只支持 `model`、`prompt`、`size`、`resolution` 四个条件字段，2.6 的 `quality`、`n`、`frame_count` 无法表达。必须与 2.6 同期完成以下改造：
+参数规格不携带价格。当前计费规则只支持 `model`、`prompt`、`size`、`resolution` 四个条件字段。
+
+2.6 Ext 的单张价格只由 `version` × `resolution` 决定，`quality`、`output_format`、`complexity` 不影响价格，因此本次接入不需要扩展计费字段，也不需要对 `quality` 做预扣与结算。`version` 由两个平台模型名承载，计费按 `model` 即可区分。
+
+后续开放 `n` 或 GIF 时仍需完成：
 
 1. 计费条件支持任意已注册的参数路径，不再限制为四个字段；
 2. 数值参数支持 `multiplier`，`n` 与 `frame_count` 按倍数计费；
-3. `quality=auto` 的预扣金额按最高档估算，任务结束后按实际档位结算或退款。
+3. 多结果或 GIF 的预扣与结算规则另行设计。
 
 这部分属于计费模块，不在参数引擎内实现，但参数规格必须为其提供稳定的 `key` 与 `path`。
 
@@ -31,7 +35,7 @@
 1. 任务结果从单资产扩展为资产数组；
 2. API 响应在 `n > 1` 时返回多个结果；
 3. 对 GIF、SVG 的结果类型做正确标注；
-4. 供应商适配层按 `output_format` 选择上游参数。
+4. 供应商适配层按 `output_format` 选择上游参数（静态图片格式本期已完成，GIF/SVG 仍待接入）。
 
 ## 3 GPT-Image-2.6 接入清单
 
@@ -40,8 +44,9 @@
 | `output_format` | `segmented` 或 `select`，合法值由 `options` 表达 | 请求字段、上游映射 |
 | `size=auto` | 暂不开放（后续） | 开放 GIF 前必须补齐 auto 尺寸与结果渲染 |
 | `size` 比例 | `ratio_size` + `ratios` | 无新增，沿用现有适配 |
-| `resolution` 仅 1K | `hidden` + `default=1K` | 无新增 |
-| `quality` | `select` | 请求字段、上游映射、计费档位 |
+| `resolution` | Ext 为 `segmented`（1K/2K/4K）；按 token 计费的 2.6 正式版仅 1K 时可用 `hidden` + `default=1K` | 无新增 |
+| `quality` | `segmented`（6 个选项；更多时用 `select`） | 请求字段、上游映射；不影响计费 |
+| `complexity` | `segmented`（low/medium/high，无默认值） | 请求字段、上游映射；不影响计费 |
 | `n` | `number` | 请求字段、多结果存储与响应（后续）、计费倍数 |
 | `background` | `select` | 请求字段、上游映射 |
 | `output_compression` | `number` + `visible_when` | 请求字段、上游映射 |
@@ -54,6 +59,6 @@
 | 多结果（后续） | 本期不声明，正式版接入时另行设计 | 任务结果数组、API 响应、客户端渲染器 |
 | 计费联动 | 规格不承载价格 | 扩展计费条件与倍数 |
 
-本期 2.6 Ext 只接静态图片格式（png/jpeg/webp）；GIF/SVG 与 `auto` 尺寸依赖未完成的结果渲染与 auto 支持，暂不进入规格。
+本次 2.6 Ext 只接静态图片格式（png/jpeg/webp）；GIF/SVG 与 `auto` 尺寸依赖未完成的结果渲染与 auto 支持，暂不进入规格。`output_format`、`quality`、`complexity` 已按上表接入：三者都是普通 `segmented` 参数，由 `param_spec` 表达合法值，服务端在扣费前校验并映射到上游请求体。
 
-两个平台模型名的问题：2.6 Ext 的 `flare` 与 `sunburst` 建议继续拆成两个平台模型名，与 2.5 的命名保持一致。理由是计费条件只支持 `model` 等字段，`version` 不是计费维度，客户端也不需要额外的版本选择器。若选择单模型 + `version` 参数，则计费模块必须支持按 `version` 定价。
+两个平台模型名的问题：2.6 Ext 的 `flare` 与 `sunburst` 已拆成两个平台模型名，与 2.5 的命名保持一致。理由是计费条件只支持 `model` 等字段，`version` 不是计费维度，客户端也不需要额外的版本选择器。若选择单模型 + `version` 参数，则计费模块必须支持按 `version` 定价。

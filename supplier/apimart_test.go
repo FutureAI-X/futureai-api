@@ -118,8 +118,8 @@ func TestCreditParamNamesReturnsCopy(t *testing.T) {
 	}
 }
 
-// 数组字段与任意名字都不参与计费：配上去永远匹配不上。
-func TestIsCreditParamNameRejectsNonStandardFields(t *testing.T) {
+// 数组字段、可选参数与任意名字都不参与计费：配上去永远匹配不上。
+func TestIsCreditParamNameRejectsNonBillingFields(t *testing.T) {
 	for _, name := range []string{"image_urls", "quality", "n", "seed", "version", "", "Model"} {
 		if IsCreditParamName(name) {
 			t.Errorf("%q 不该被当作可计费的标准字段", name)
@@ -144,6 +144,8 @@ func TestApplyImageVersionSetsVersionByRequestedModel(t *testing.T) {
 	}{
 		{"flare 变体", "gpt-image-2.5-flare-ext", "flare", true},
 		{"sunburst 变体", "gpt-image-2.5-sunburst-ext", "sunburst", true},
+		{"2.6 flare 变体", "gpt-image-2.6-flare-ext", "flare", true},
+		{"2.6 sunburst 变体", "gpt-image-2.6-sunburst-ext", "sunburst", true},
 		{"未登记的调用方模型不写 version", "gpt-image-2.5-unknown-ext", nil, false},
 		{"调用方模型名为空不写 version", "", nil, false},
 	}
@@ -219,6 +221,49 @@ func TestBuildRequestMapsStandardFields(t *testing.T) {
 	}
 	if len(body) != len(wants)+1 {
 		t.Errorf("请求体多出未预期的字段: %v", body)
+	}
+}
+
+// 2.6 的可选参数按小写写入请求体；空值不写，避免覆盖上游默认行为。
+func TestBuildRequestMapsGPTImage26OptionalFields(t *testing.T) {
+	body := buildRequest(ImageGenerateRequest{
+		Model:         "gpt-image-2.6-flare-ext",
+		Prompt:        "a cat",
+		Size:          "16:9",
+		Resolution:    "2K",
+		Quality:       "HIGH",
+		OutputFormat:  "WEBP",
+		Complexity:    "Medium",
+		VendorModelID: "gpt-image-2.6-ext",
+	})
+
+	wants := map[string]interface{}{
+		"model":         "gpt-image-2.6-ext",
+		"version":       "flare",
+		"resolution":    "2k",
+		"quality":       "high",
+		"output_format": "webp",
+		"complexity":    "medium",
+		"n":             1,
+	}
+	for k, want := range wants {
+		if got := body[k]; got != want {
+			t.Errorf("%s = %v, want %v（请求体=%v）", k, got, want, body)
+		}
+	}
+
+	// 可选参数为空时不写入；complexity 不设默认值，用户不选就由上游决定。
+	empty := buildRequest(ImageGenerateRequest{
+		Model:         "gpt-image-2.6-flare-ext",
+		Prompt:        "a cat",
+		Size:          "1:1",
+		Resolution:    "1K",
+		VendorModelID: "gpt-image-2.6-ext",
+	})
+	for _, key := range []string{"quality", "output_format", "complexity"} {
+		if _, ok := empty[key]; ok {
+			t.Errorf("%s 为空时不该写入请求体: %v", key, empty)
+		}
 	}
 }
 
@@ -559,6 +604,25 @@ func TestAPIMartValidateImageRequest(t *testing.T) {
 		{"2.5 超限 17 张 image_ids", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids17}, true},
 		{"2.5 超限 17 张 image_urls", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls17}, true},
 
+		// gpt-image-2.6-ext：10 种比例、16 张参考图、resolution 小写，
+		// 并开放 quality / output_format / complexity 三个可选参数。
+		{"2.6 flare 合法比例", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "16:9", Resolution: "2k"}, false},
+		{"2.6 sunburst 变体同样可用", ImageGenerateRequest{Model: "gpt-image-2.6-sunburst-ext", Prompt: "cat", Size: "21:9", Resolution: "4K"}, false},
+		{"2.6 合法可选参数", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", Quality: "auto", OutputFormat: "webp", Complexity: "high"}, false},
+		{"2.6 可选参数大小写不敏感", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", Quality: "HIGH", OutputFormat: "JPEG", Complexity: "Medium"}, false},
+		{"2.6 不支持像素", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1024x1024", Resolution: "1k"}, true},
+		{"2.6 不支持 auto", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "auto", Resolution: "1k"}, true},
+		{"2.6 不支持 3:1", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "3:1", Resolution: "1k"}, true},
+		{"2.6 上限 16 张 image_urls", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls16}, false},
+		{"2.6 超限 17 张 image_urls", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls17}, true},
+		{"2.6 非法 quality", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", Quality: "ultra"}, true},
+		{"2.6 非法 output_format", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", OutputFormat: "gif"}, true},
+		{"2.6 svg 本期不开放", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", OutputFormat: "svg"}, true},
+		{"2.6 非法 complexity", ImageGenerateRequest{Model: "gpt-image-2.6-flare-ext", Prompt: "cat", Size: "1:1", Resolution: "1k", Complexity: "xhigh"}, true},
+		{"2.5 不支持 quality", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", Quality: "high"}, true},
+		{"2.5 不支持 output_format", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", OutputFormat: "webp"}, true},
+		{"gpt-image-2 不支持 complexity", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1:1", Resolution: "1k", Complexity: "low"}, true},
+
 		// gpt-image-2 / gpt-image-2-ext：15 种比例、15 张参考图、resolution 小写
 		{"gpt-image-2 合法比例", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "16:9", Resolution: "2K"}, false},
 		{"gpt-image-2-ext 别名同样可用", ImageGenerateRequest{Model: "gpt-image-2-ext", Prompt: "cat", Size: "3:1", Resolution: "4k"}, false},
@@ -628,6 +692,8 @@ func TestBuildRequestFormatsResolutionPerModel(t *testing.T) {
 		{"gpt-image-2-ext", "1K", "1k"},
 		{testAPIMartModel, "2k", "2K"},
 		{"gpt-image-2.5-sunburst-ext", "4K", "4K"},
+		{"gpt-image-2.6-flare-ext", "2K", "2k"},
+		{"gpt-image-2.6-sunburst-ext", "4k", "4k"},
 	}
 
 	for _, tc := range cases {

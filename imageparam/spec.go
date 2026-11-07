@@ -151,11 +151,22 @@ var (
 		"ref_images": true,
 	}
 	allowedPaths = map[string]bool{
-		"prompt":      true,
-		"size":        true,
-		"resolution":  true,
-		"image_ids":   true,
-		"image_urls":  true,
+		"prompt":        true,
+		"size":          true,
+		"resolution":    true,
+		"quality":       true,
+		"output_format": true,
+		"complexity":    true,
+		"image_ids":     true,
+		"image_urls":    true,
+	}
+	// allowedSegmentedPaths 是 segmented 控件可以映射的请求字段。
+	// 新增枚举型参数时在这里登记，避免把控件误配到 size 这类非枚举字段。
+	allowedSegmentedPaths = map[string]bool{
+		"resolution":    true,
+		"quality":       true,
+		"output_format": true,
+		"complexity":    true,
 	}
 	allowedGroups = map[string]bool{
 		"basic":     true,
@@ -247,8 +258,8 @@ func (s *Spec) ValidateSpec() error {
 				return fmt.Errorf("参数 %s: textarea 的 path 只能是 prompt", p.Key)
 			}
 		case "segmented":
-			if p.Path != "resolution" {
-				return fmt.Errorf("参数 %s: segmented 的 path 只能是 resolution", p.Key)
+			if !allowedSegmentedPaths[p.Path] {
+				return fmt.Errorf("参数 %s: segmented 的 path 只能是 resolution / quality / output_format / complexity", p.Key)
 			}
 		case "ratio_size", "pixel_size":
 			if p.Path != "size" {
@@ -585,6 +596,21 @@ func (s *Spec) HasKey(key string) bool {
 	}
 	for i := range s.Params {
 		if s.Params[i].Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// HasPath 判断规格中是否存在映射到指定请求字段路径的参数。
+// 规格允许 key 与 path 不同（例如 key=image_quality、path=quality），
+// 请求字段是否存在必须按 path 判断，不能按 key 判断。
+func (s *Spec) HasPath(path string) bool {
+	if s == nil {
+		return false
+	}
+	for i := range s.Params {
+		if s.Params[i].Path == path {
 			return true
 		}
 	}

@@ -120,7 +120,7 @@ func (CreditRuleCondition) TableName() string {
 //
 // 用 id 升序而非创建时间：ReplaceCreditRuleItems 每次保存都是先删后建，
 // 因此 id 顺序就等于管理端表单里的顺序。条件的顺序同理，它决定
-// 「resolution=1K & quality=high」里各段的先后。
+// 「resolution=1K & size=16:9」里各段的先后。
 //
 // 三个查询点共用本函数，避免只改一处导致顺序在不同接口间不一致。
 func PreloadRuleItems(db *gorm.DB) *gorm.DB {

@@ -64,6 +64,7 @@
 |---|---|
 | 比例 + 像素混合接口、前端只比例 | [gpt-image-2-ext.md](../gpt-image-2-ext.md) |
 | 仅比例 | [gpt-image-2.5-flare-ext.md](../gpt-image-2.5-flare-ext.md) |
+| 仅比例 + 多个可选枚举参数 | [gpt-image-2.6-flare-ext.md](../gpt-image-2.6-flare-ext.md) |
 | 仅像素、带预设 | [moss-image-base-1.0.md](../moss-image-base-1.0.md) |
 | 不支持参考图 | [moss-image-sft-1.0.md](../moss-image-sft-1.0.md) |
 | 无 resolution | [moss-image-base-1.0.md](../moss-image-base-1.0.md) |
