@@ -45,7 +45,7 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些�
 
 ### 4.1 参数规格（param_spec）
 
-迁移后，本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。
+本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。
 
 ```json
 {
@@ -101,7 +101,7 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些�
 - `version=flare` 是上游风格字段，属于适配层行为，不写入 `param_spec`。
 - prompt 上限 2000 是平台策略，与客户端现有上限一致。
 - 参考图单张 10MB、合计 256MB，接口上限 16 张。
-- 本节是迁移目标。P1 之前，校验仍由 `supplier/apimart.go` 的 `apimartImageModels` 执行。
+- 当前实现已接入 `imageparam` 引擎；`supplier/apimart.go` 的旧校验暂时保留作为双保险。
 
 ## 5 请求体转换
 

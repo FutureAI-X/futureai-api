@@ -28,6 +28,10 @@ export interface AdminModel {
   status: number
   /** 模型类型：image / video / text / music / other */
   type: string
+  /** 图像模型的参数规格；未配置为 null */
+  param_spec: Record<string, unknown> | null
+  /** 规格是否已配置且通过元校验 */
+  param_spec_valid: boolean
   created_at: string
 }
 
@@ -66,6 +70,13 @@ export function updateModelStatus(id: number, status: number) {
   return request<{ success: boolean; message: string }>(`${BASE}/models/${id}/status`, {
     method: 'PUT',
     body: JSON.stringify({ status }),
+  })
+}
+
+export function updateModelParamSpec(id: number, paramSpec: Record<string, unknown> | null) {
+  return request<{ success: boolean; message: string }>(`${BASE}/models/${id}/param-spec`, {
+    method: 'PUT',
+    body: JSON.stringify({ param_spec: paramSpec }),
   })
 }
 

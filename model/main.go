@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/FutureAI-X/futureai-api/common"
+	"github.com/FutureAI-X/futureai-api/imageparam"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -79,6 +80,12 @@ func InitDB() error {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
 
+	// 为存量图像模型写入默认参数规格。只在 param_spec 为空时写入，
+	// 不覆盖管理端已经保存的配置。
+	if err := seedImageParamSpecs(); err != nil {
+		common.SysError("failed to seed image param specs: " + err.Error())
+	}
+
 	// 创建默认 root 用户（如果不存在）
 	err = CreateRootUserIfNeed()
 	if err != nil {
@@ -92,6 +99,34 @@ func InitDB() error {
 	// 模型类型参与参考图加价判定，值不合法会让扣费静默偏离预期
 	warnInvalidModelTypes()
 
+	return nil
+}
+
+// seedImageParamSpecs 为存量图像模型写入默认参数规格。
+//
+// 只更新 param_spec 为 NULL、空串或 JSON null 的行；管理端已经保存的配置不会被覆盖。
+// 写入前先执行元校验，避免坏种子进入数据库。
+func seedImageParamSpecs() error {
+	seeds := imageparam.SeedSpecs()
+	for name, spec := range seeds {
+		if strings.TrimSpace(spec) == "" {
+			common.SysErrorf("[模型] 参数规格种子为空: %s", name)
+			continue
+		}
+		if _, err := imageparam.ParseSpec(spec); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		res := DB.Model(&Model{}).
+			Where("name = ? AND (type = ? OR type = '')", name, ModelTypeImage).
+			Where("param_spec IS NULL OR btrim(param_spec::text) IN ('', 'null')").
+			Update("param_spec", gorm.Expr("?::jsonb", spec))
+		if res.Error != nil {
+			return fmt.Errorf("%s: %w", name, res.Error)
+		}
+		if res.RowsAffected > 0 {
+			common.SysLogf("[模型] 已写入参数规格: %s", name)
+		}
+	}
 	return nil
 }
 

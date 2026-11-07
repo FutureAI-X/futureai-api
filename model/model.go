@@ -2,6 +2,8 @@ package model
 
 import (
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // Model 模型信息
@@ -60,6 +62,10 @@ type Model struct {
 
 	// 描述
 	Description string `json:"description,omitempty" gorm:"type:text"`
+
+	// ParamSpec 图像模型的参数规格 JSON；非图像模型为空。
+	// 空值在数据库中是 NULL，在 JSON 中是 null。
+	ParamSpec JSONText `json:"param_spec,omitempty" gorm:"type:jsonb"`
 
 	// 状态：1=启用, 2=禁用
 	Status int `json:"status" gorm:"default:1"`
@@ -159,6 +165,16 @@ func UpdateModel(id int, updates map[string]interface{}) error {
 // UpdateModelStatus 更新模型状态
 func UpdateModelStatus(id int, status int) error {
 	return DB.Model(&Model{}).Where("id = ?", id).Update("status", status).Error
+}
+
+// UpdateModelParamSpec 更新模型的参数规格。
+// spec 为 nil 表示清除配置；非 nil 时必须是已通过元校验的 JSON。
+func UpdateModelParamSpec(id int, spec *string) error {
+	if spec == nil {
+		return DB.Model(&Model{}).Where("id = ?", id).Update("param_spec", gorm.Expr("NULL")).Error
+	}
+	return DB.Model(&Model{}).Where("id = ?", id).
+		Update("param_spec", gorm.Expr("?::jsonb", *spec)).Error
 }
 
 // DeleteModel 删除模型（硬删除，直接从表中删除）

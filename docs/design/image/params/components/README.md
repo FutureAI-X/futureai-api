@@ -2,6 +2,8 @@
 
 每个控件独立成文，包含用途、JSON 设计、字段、校验、前端组件与服务端行为。通用字段、条件、动态值与序列化规则见 [../schema.md](../schema.md)。
 
+当前实现支持 `textarea`、`segmented`、`ratio_size`、`pixel_size`、`ref_images`。其余控件（`text`、`select`、`number`、`switch`、`file`、`hidden`）保留为后续设计，服务端元校验会拒绝未实现的控件。
+
 ## 1 控件列表
 
 | widget | 值类型 | 用途 | 文档 |

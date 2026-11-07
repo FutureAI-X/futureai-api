@@ -35,7 +35,7 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 ### 4.1 参数规格（param_spec）
 
-迁移后，本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。本规格与 [gpt-image-2.5-flare-ext](gpt-image-2.5-flare-ext.md) 完全一致，只有适配层写入的 `version` 不同。
+本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。本规格与 [gpt-image-2.5-flare-ext](gpt-image-2.5-flare-ext.md) 完全一致，只有适配层写入的 `version` 不同。
 
 ```json
 {
@@ -90,7 +90,7 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 - `size` 只暴露比例，`widget` 为 `ratio_size`，不配置 `modes` 与 `pixel`。
 - `resolution` 在规格中统一为大写，发往上游时保持大写。
 - prompt 上限 2000 是平台策略，与客户端现有上限一致。
-- 本节是迁移目标。P1 之前，校验仍由 `supplier/apimart.go` 的 `apimartImageModels` 执行。
+- 当前实现已接入 `imageparam` 引擎；`supplier/apimart.go` 的旧校验暂时保留作为双保险。
 
 ## 5 请求体转换
 

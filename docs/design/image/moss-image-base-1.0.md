@@ -43,7 +43,7 @@ MOSS 是同步接口：一次 `POST` 直接返回图片 URL，没有 `task_id`�
 
 ### 4.1 参数规格（param_spec）
 
-迁移后，本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。
+本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。
 
 ```json
 {
@@ -96,7 +96,7 @@ MOSS 是同步接口：一次 `POST` 直接返回图片 URL，没有 `task_id`�
 - 规格中没有 `ref_images`。服务端按“不支持参考图”静默忽略参考图字段。
 - `required=true` 且没有 `default` 时，前端使用第一个预设作为初始值。
 - 预设值均满足 `step=16`、单边 256–2048、总像素 ≤ 2,097,152；上线前需与 MOSS 文档复核。
-- 本节是迁移目标。P1 之前，校验仍由 `supplier/moss.go` 的 `ValidateImageRequest` 执行。
+- 当前实现已接入 `imageparam` 引擎；`supplier/moss.go` 的旧校验暂时保留作为双保险。
 
 ## 5 请求体转换
 

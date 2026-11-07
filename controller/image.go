@@ -14,6 +14,7 @@ import (
 
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/filestore"
+	"github.com/FutureAI-X/futureai-api/imageparam"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/FutureAI-X/futureai-api/storage"
 	"github.com/FutureAI-X/futureai-api/supplier"
@@ -49,11 +50,8 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 补齐标准默认值，且必须在计费之前：计费条件匹配的是补齐后的值，
-	// 否则省略 resolution 的请求会计基础价、实际按 1K 出图，价格与生成结果不符。
-	req.ApplyDefaults()
-
-	// 快照保存调用方原始请求（原始 image_urls + image_ids），必须在把 file_id
+	// 默认值从模型参数规格读取，在查到模型后补齐；快照保留调用方原始请求。
+	// 快照必须在把 file_id
 	// 解析并覆盖 ImageURLs 之前取好，否则落库的会是带签名的临时地址。
 	// 供应商不支持参考图时也会在下面清空字段，因此快照必须在这里取。
 	requestSnapshot := marshalRequestBody(req)
@@ -74,6 +72,57 @@ func ImageGenerate(c *gin.Context) {
 		common.SysErrorf("[ImageGenerate] 模型不存在或已禁用: model=%s, err=%v", modelName, err)
 		c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": "模型不存在或已禁用"})
 		return
+	}
+
+	if m.Type != model.ModelTypeImage && m.Type != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": "该模型不支持图像生成端点"})
+		return
+	}
+
+	// 2.5 读取模型参数规格。规格缺失或非法直接失败，不回退到旧校验。
+	spec, specErr := imageparam.ParseSpec(string(m.ParamSpec))
+	if specErr != nil {
+		if errors.Is(specErr, imageparam.ErrSpecMissing) {
+			common.SysErrorf("[ImageGenerate] 模型未配置参数规格: model=%s", modelName)
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"code":       "fail",
+				"error_code": "PARAM_SPEC_MISSING",
+				"message":    "该模型参数配置缺失，暂不可用",
+			})
+			return
+		}
+		common.SysErrorf("[ImageGenerate] 模型参数规格无效: model=%s, err=%v", modelName, specErr)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code":       "fail",
+			"error_code": "PARAM_SPEC_INVALID",
+			"message":    "该模型参数配置无效，暂不可用",
+		})
+		return
+	}
+
+	// 平台统一使用大写分辨率档位；旧接口对大小写不敏感。
+	req.Resolution = strings.ToUpper(strings.TrimSpace(req.Resolution))
+	values := imageparam.Values{
+		"prompt":     req.Prompt,
+		"size":       req.Size,
+		"resolution": req.Resolution,
+		"image_ids":  req.ImageIDs,
+		"image_urls": req.ImageURLs,
+	}
+	if paramErr := spec.ApplyDefaults(values); paramErr != nil {
+		writeParamError(c, paramErr)
+		return
+	}
+	req.Prompt = stringValue(values["prompt"])
+	req.Size = stringValue(values["size"])
+	req.Resolution = stringValue(values["resolution"])
+	if paramErr := spec.Validate(values); paramErr != nil {
+		writeParamError(c, paramErr)
+		return
+	}
+	// 规格没有 resolution 时忽略调用方传入的值，避免它进入计费条件与上游请求。
+	if !spec.HasKey("resolution") {
+		req.Resolution = ""
 	}
 
 	// 3. 验证模型是否支持此端点
@@ -152,23 +201,33 @@ func ImageGenerate(c *gin.Context) {
 		caps = cp.ImageCapabilities()
 	}
 
-	// 8. 参考图处理。供应商不支持参考图时彻底忽略：不校验、不解析 file_id、
-	// 不计参考图费用，也不把字段传给上游。
-	useFileIDs := caps.SupportsReferenceImages && useImageFileIDs(req.ImageIDs)
-	if !caps.SupportsReferenceImages {
+	// 8. 参考图处理。规格没有 ref_images 或 max_count 为 0 时彻底忽略：
+	// 不校验、不解析 file_id、不计参考图费用，也不把字段传给上游。
+	refRule := spec.RefImagesRule()
+	refsSupported := refRule != nil && refRule.MaxCount > 0
+	if !refsSupported {
 		if useImageFileIDs(req.ImageIDs) || countRefImages(req.ImageURLs) > 0 {
-			common.SysLogf("[ImageGenerate] 供应商 %s 不支持参考图，已忽略 image_urls/image_ids: userID=%d",
-				vendor.Name, userID)
+			common.SysLogf("[ImageGenerate] 模型 %s 不支持参考图，已忽略 image_urls/image_ids: userID=%d",
+				modelName, userID)
 		}
 		req.ImageIDs = nil
 		req.ImageURLs = nil
-	} else if useFileIDs {
+	} else if !caps.SupportsReferenceImages {
+		common.SysErrorf("[ImageGenerate] 参数规格支持参考图，但供应商 %s 不支持: model=%s", vendor.Name, modelName)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code":       "fail",
+			"error_code": "PARAM_SPEC_INVALID",
+			"message":    "该模型参数配置无效，暂不可用",
+		})
+		return
+	} else if useImageFileIDs(req.ImageIDs) {
 		if err := validateImageFileIDs(req.ImageIDs); err != nil {
 			common.SysErrorf("[ImageGenerate] image_ids 校验失败: userID=%d, err=%v", userID, err)
 			c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": err.Error()})
 			return
 		}
 	}
+	useFileIDs := refsSupported && useImageFileIDs(req.ImageIDs)
 
 	// 9. 供应商特有的请求校验。必须在扣费与建任务之前：参数错误不该产生任务行。
 	if validator, ok := s.(supplier.ImageRequestValidator); ok {
@@ -181,7 +240,7 @@ func ImageGenerate(c *gin.Context) {
 
 	// 10. 计算积分消耗。条件按标准字段匹配：差异化计费规则可能以 model 作为条件，
 	// 此处匹配的是调用方传入的模型名，供应商侧模型 ID 不作为计费条件。
-	credits, err := resolveCredits(m.ID, m.Type, req, endpoint.Path, caps.SupportsReferenceImages)
+	credits, err := resolveCredits(m.ID, m.Type, req, endpoint.Path, refsSupported)
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 计费规则解析失败: model=%s, err=%v", modelName, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费规则，暂不可用"})
@@ -216,8 +275,13 @@ func ImageGenerate(c *gin.Context) {
 	// 放在扣费与建任务之前：文件无效时调用方不该被扣费，也不该留下任务行。
 	// 供应商适配层只认 URL，解析结果直接覆盖 ImageURLs；快照已在上面取好。
 	if useFileIDs {
-		signedURLs, err := resolveImageReferences(c.Request.Context(), userID, req.ImageIDs)
+		signedURLs, err := resolveImageReferences(c.Request.Context(), userID, req.ImageIDs, refRule)
 		if err != nil {
+			var paramErr *imageparam.Error
+			if errors.As(err, &paramErr) {
+				writeParamError(c, paramErr)
+				return
+			}
 			var refErr *imageReferenceError
 			if errors.As(err, &refErr) {
 				common.SysErrorf("[ImageGenerate] 参考文件校验失败: userID=%d, status=%d, message=%s",
@@ -565,6 +629,24 @@ func dedupeImageFileIDs(ids []string) []string {
 	return out
 }
 
+// writeParamError 输出统一的参数错误响应。
+func writeParamError(c *gin.Context, err *imageparam.Error) {
+	c.JSON(http.StatusBadRequest, gin.H{
+		"code":       "fail",
+		"error_code": err.Code,
+		"param":      err.Param,
+		"message":    err.Message,
+	})
+}
+
+// stringValue 把参数值转成字符串；非字符串按空串处理。
+func stringValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
 // countRefImageIDs 统计 file_id 参考图张数（去重后）。
 // 超限请求在 validateImageFileIDs 阶段已返回 400，这里不需要封顶。
 func countRefImageIDs(ids []string) int {
@@ -586,10 +668,11 @@ func effectiveRefImageCount(req supplier.ImageGenerateRequest) int {
 // 允许 purpose=reference（上传的参考图）和 purpose=result（用户自己的生成结果），
 // 但必须属于当前用户、已完成处理、未过期，且媒体类型为图片。
 // HEIC/HEIF 暂不支持：上游是否兼容未确认，提前拒绝避免扣费后才失败。
-func resolveImageReferences(ctx context.Context, userID int, ids []string) ([]string, error) {
+func resolveImageReferences(ctx context.Context, userID int, ids []string, rule *imageparam.RefImagesRule) ([]string, error) {
 	now := time.Now()
 	ids = dedupeImageFileIDs(ids)
 	urls := make([]string, 0, len(ids))
+	refFiles := make([]imageparam.RefFile, 0, len(ids))
 
 	for _, id := range ids {
 		file, err := model.GetFileByFileID(id)
@@ -645,8 +728,16 @@ func resolveImageReferences(ctx context.Context, userID int, ids []string) ([]st
 			return nil, &imageReferenceError{http.StatusServiceUnavailable, "参考文件存储暂不可用"}
 		}
 		urls = append(urls, signed)
+		refFiles = append(refFiles, imageparam.RefFile{
+			ID:          id,
+			Bytes:       file.Bytes,
+			ContentType: file.ContentType,
+		})
 	}
 
+	if err := imageparam.ValidateRefFiles(rule, refFiles); err != nil {
+		return nil, err
+	}
 	return urls, nil
 }
 

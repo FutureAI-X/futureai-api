@@ -128,6 +128,7 @@ func SetRouter(server *gin.Engine) {
 		adminRouter.GET("/models", controller.AdminGetModels)
 		adminRouter.POST("/models", controller.AdminCreateModel)
 		adminRouter.PUT("/models/:id", controller.AdminUpdateModel)
+		adminRouter.PUT("/models/:id/param-spec", controller.AdminUpdateModelParamSpec)
 		adminRouter.PUT("/models/:id/status", controller.AdminUpdateModelStatus)
 		adminRouter.DELETE("/models/:id", controller.AdminDeleteModel)
 

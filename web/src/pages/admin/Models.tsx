@@ -9,6 +9,7 @@ import {
   X,
   Coins,
   Link2,
+  Settings2,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { MODEL_TYPE_OPTIONS, modelTypeLabel } from '../../lib/model-type'
@@ -18,6 +19,7 @@ import {
   updateModel,
   updateModelStatus,
   deleteModel,
+  updateModelParamSpec,
   type AdminModel,
 } from '../../api/admin-model'
 import { ConfirmDialog } from '../../components/admin/ConfirmDialog'
@@ -27,6 +29,20 @@ import { ModelEndpointManager } from '../../components/admin/ModelEndpointManage
 const STATUS_CONFIG: Record<number, { label: string; className: string }> = {
   1: { label: '正常', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
   2: { label: '已禁用', className: 'bg-red-500/10 text-red-600 dark:text-red-400' },
+}
+
+const DEFAULT_PARAM_SPEC = {
+  params: [
+    {
+      key: 'prompt',
+      widget: 'textarea',
+      label: '提示词',
+      group: 'basic',
+      required: true,
+      min_length: 1,
+      max_length: 2000,
+    },
+  ],
 }
 
 export function AdminModels() {
@@ -43,6 +59,13 @@ export function AdminModels() {
   const [endpointOpen, setEndpointOpen] = useState(false)
   const [endpointRow, setEndpointRow] = useState<AdminModel | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
+
+  // 参数配置
+  const [paramOpen, setParamOpen] = useState(false)
+  const [paramRow, setParamRow] = useState<AdminModel | null>(null)
+  const [paramText, setParamText] = useState('')
+  const [paramError, setParamError] = useState('')
+  const [paramSaving, setParamSaving] = useState(false)
 
   // 表单
   const [formName, setFormName] = useState('')
@@ -111,6 +134,66 @@ export function AdminModels() {
     finally { setFormSaving(false) }
   }
 
+  const openParam = (m: AdminModel) => {
+    setParamRow(m)
+    setParamText(JSON.stringify(m.param_spec ?? DEFAULT_PARAM_SPEC, null, 2))
+    setParamError('')
+    setParamOpen(true)
+  }
+
+  const formatParam = () => {
+    try {
+      const parsed = JSON.parse(paramText)
+      setParamText(JSON.stringify(parsed, null, 2))
+      setParamError('')
+    } catch {
+      setParamError('JSON 格式不正确')
+    }
+  }
+
+  const handleSaveParam = async () => {
+    if (!paramRow) return
+    let parsed: Record<string, unknown> | null = null
+    if (paramText.trim()) {
+      try {
+        parsed = JSON.parse(paramText)
+      } catch {
+        setParamError('JSON 格式不正确')
+        return
+      }
+    }
+    setParamSaving(true)
+    setParamError('')
+    try {
+      const res = await updateModelParamSpec(paramRow.id, parsed)
+      if (!res.success) { setParamError(res.message || '保存失败'); return }
+      setParamOpen(false)
+      setParamRow(null)
+      loadModels()
+    } catch {
+      setParamError('网络错误')
+    } finally {
+      setParamSaving(false)
+    }
+  }
+
+  const handleClearParam = async () => {
+    if (!paramRow) return
+    setParamSaving(true)
+    setParamError('')
+    try {
+      const res = await updateModelParamSpec(paramRow.id, null)
+      if (!res.success) { setParamError(res.message || '清除失败'); return }
+      setParamOpen(false)
+      setParamRow(null)
+      loadModels()
+    } catch {
+      setParamError('网络错误')
+    } finally {
+      setParamSaving(false)
+    }
+  }
+
   const handleToggle = async (m: AdminModel) => {
     setActionLoading(true)
     try {
@@ -132,20 +215,21 @@ export function AdminModels() {
 
   // ESC
   useEffect(() => {
-    if (drawerOpen || deleteOpen) document.body.style.overflow = 'hidden'
+    if (drawerOpen || deleteOpen || paramOpen) document.body.style.overflow = 'hidden'
     else document.body.style.overflow = ''
     return () => { document.body.style.overflow = '' }
-  }, [drawerOpen, deleteOpen])
+  }, [drawerOpen, deleteOpen, paramOpen])
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (deleteOpen) setDeleteOpen(false)
       else if (drawerOpen) setDrawerOpen(false)
+      else if (paramOpen) setParamOpen(false)
     }
     document.addEventListener('keydown', handleEsc)
     return () => document.removeEventListener('keydown', handleEsc)
-  }, [drawerOpen, deleteOpen])
+  }, [drawerOpen, deleteOpen, paramOpen])
 
   return (
     <div data-page-fill className='flex h-full min-h-0 flex-col gap-6'>
@@ -223,6 +307,15 @@ export function AdminModels() {
                         <button onClick={() => { setEndpointRow(m); setEndpointOpen(true) }} className='hover:bg-blue-500/10 text-blue-600 dark:text-blue-400 inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors'>
                           <Link2 className='size-3.5' /> 端点
                         </button>
+                        {m.type === 'image' && (
+                          <button onClick={() => openParam(m)}
+                            className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
+                              m.param_spec_valid === false
+                                ? 'hover:bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                                : 'hover:bg-muted')}>
+                            <Settings2 className='size-3.5' /> 参数
+                          </button>
+                        )}
                         <button onClick={() => handleToggle(m)}
                           className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
                             m.status === 1 ? 'hover:bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'hover:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400')}>
@@ -303,6 +396,47 @@ export function AdminModels() {
                 className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors disabled:opacity-50'>
                 {formSaving && <Loader2 className='size-4 animate-spin' />}
                 {formSaving ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 参数配置 */}
+      {paramOpen && paramRow && (
+        <div className='fixed inset-0 z-[100] flex items-center justify-center'>
+          <div className='bg-background/80 fixed inset-0 backdrop-blur-sm' onClick={() => setParamOpen(false)} />
+          <div className='bg-background border-border/60 relative z-10 flex max-h-[90vh] w-full max-w-3xl flex-col rounded-xl border shadow-lg'>
+            <div className='flex items-center justify-between border-b border-border/40 px-6 py-4'>
+              <div>
+                <h2 className='text-lg font-semibold'>参数配置</h2>
+                <p className='text-muted-foreground mt-1 text-xs'>{paramRow.name}</p>
+              </div>
+              <button onClick={() => setParamOpen(false)} className='hover:bg-muted rounded-lg p-1.5 transition-colors'><X className='size-4' /></button>
+            </div>
+            <div className='min-h-0 flex-1 space-y-3 overflow-auto p-6'>
+              {paramError && <div className='bg-destructive/10 text-destructive rounded-lg px-4 py-3 text-sm'>{paramError}</div>}
+              <p className='text-muted-foreground text-xs'>
+                保存前服务端会校验 JSON 结构。当前支持 textarea、segmented、ratio_size、pixel_size、ref_images。
+              </p>
+              <textarea
+                value={paramText}
+                onChange={(e) => setParamText(e.target.value)}
+                spellCheck={false}
+                className='border-border/60 bg-background focus-visible:ring-ring min-h-[420px] w-full rounded-lg border p-3 font-mono text-xs leading-5 focus-visible:ring-2 focus-visible:outline-none'
+              />
+            </div>
+            <div className='flex flex-wrap items-center justify-end gap-3 border-t border-border/40 px-6 py-4'>
+              <button onClick={() => setParamOpen(false)} disabled={paramSaving}
+                className='border-border/60 hover:bg-muted inline-flex h-9 items-center justify-center rounded-lg border px-4 text-sm font-medium transition-colors'>取消</button>
+              <button onClick={formatParam} disabled={paramSaving}
+                className='border-border/60 hover:bg-muted inline-flex h-9 items-center justify-center rounded-lg border px-4 text-sm font-medium transition-colors'>格式化</button>
+              <button onClick={handleClearParam} disabled={paramSaving}
+                className='text-destructive hover:bg-destructive/10 inline-flex h-9 items-center justify-center rounded-lg px-4 text-sm font-medium transition-colors'>清除</button>
+              <button onClick={handleSaveParam} disabled={paramSaving}
+                className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors disabled:opacity-50'>
+                {paramSaving && <Loader2 className='size-4 animate-spin' />}
+                {paramSaving ? '保存中...' : '保存'}
               </button>
             </div>
           </div>

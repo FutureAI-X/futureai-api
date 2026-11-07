@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/gin-gonic/gin"
@@ -25,16 +27,25 @@ func ListModels(c *gin.Context) {
 	// 纯增量字段，标准客户端会直接忽略。
 	data := make([]gin.H, len(models))
 	for i, m := range models {
-		data[i] = gin.H{
+		item := gin.H{
 			"id":       m.Name,
 			"object":   "model",
 			"owned_by": m.Owner,
 			"type":     m.Type,
 		}
+		if m.Type == model.ModelTypeImage {
+			if strings.TrimSpace(string(m.ParamSpec)) == "" {
+				item["param_spec"] = nil
+			} else {
+				item["param_spec"] = json.RawMessage([]byte(m.ParamSpec))
+			}
+		}
+		data[i] = item
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   data,
+		"object":             "list",
+		"param_spec_version": 1,
+		"data":               data,
 	})
 }

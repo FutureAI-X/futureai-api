@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/FutureAI-X/futureai-api/common"
+	"github.com/FutureAI-X/futureai-api/imageparam"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/gin-gonic/gin"
 )
@@ -18,27 +20,32 @@ func AdminGetModels(c *gin.Context) {
 	}
 
 	type modelResponse struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		Owner       string `json:"owner"`
-		Description string `json:"description"`
-		Tags        string `json:"tags"`
-		Status      int    `json:"status"`
-		Type        string `json:"type"`
-		CreatedAt   string `json:"created_at"`
+		ID             int            `json:"id"`
+		Name           string         `json:"name"`
+		Owner          string         `json:"owner"`
+		Description    string         `json:"description"`
+		Tags           string         `json:"tags"`
+		Status         int            `json:"status"`
+		Type           string         `json:"type"`
+		ParamSpec      model.JSONText `json:"param_spec"`
+		ParamSpecValid bool           `json:"param_spec_valid"`
+		CreatedAt      string         `json:"created_at"`
 	}
 
 	items := make([]modelResponse, len(models))
 	for i, m := range models {
+		_, specErr := imageparam.ParseSpec(string(m.ParamSpec))
 		items[i] = modelResponse{
-			ID:          m.ID,
-			Name:        m.Name,
-			Owner:       m.Owner,
-			Description: m.Description,
-			Tags:        m.Tags,
-			Status:      m.Status,
-			Type:        string(m.Type),
-			CreatedAt:   common.FormatDisplayTime(m.CreatedAt),
+			ID:             m.ID,
+			Name:           m.Name,
+			Owner:          m.Owner,
+			Description:    m.Description,
+			Tags:           m.Tags,
+			Status:         m.Status,
+			Type:           string(m.Type),
+			ParamSpec:      m.ParamSpec,
+			ParamSpecValid: specErr == nil,
+			CreatedAt:      common.FormatDisplayTime(m.CreatedAt),
 		}
 	}
 
@@ -146,6 +153,60 @@ func AdminUpdateModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "模型更新成功"})
+}
+
+// AdminUpdateModelParamSpec 更新图像模型的参数规格。
+func AdminUpdateModelParamSpec(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的模型ID"})
+		return
+	}
+
+	m, err := model.GetModelByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "模型不存在"})
+		return
+	}
+	if m.Type != model.ModelTypeImage {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "仅图像模型支持参数配置"})
+		return
+	}
+
+	var req struct {
+		ParamSpec json.RawMessage `json:"param_spec"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "请求参数无效"})
+		return
+	}
+	if req.ParamSpec == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "缺少 param_spec"})
+		return
+	}
+
+	raw := string(req.ParamSpec)
+	if raw == "null" {
+		if err := model.UpdateModelParamSpec(m.ID, nil); err != nil {
+			common.SysErrorf("[AdminUpdateModelParamSpec] 清除规格失败: modelID=%d, err=%v", m.ID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "参数配置已清除"})
+		return
+	}
+
+	if _, err := imageparam.ParseSpec(raw); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	if err := model.UpdateModelParamSpec(m.ID, &raw); err != nil {
+		common.SysErrorf("[AdminUpdateModelParamSpec] 保存规格失败: modelID=%d, err=%v", m.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "参数配置已保存"})
 }
 
 // AdminUpdateModelStatus 更新模型状态
