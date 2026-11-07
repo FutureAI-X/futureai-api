@@ -25,6 +25,8 @@ export interface TaskLog {
   status: string
   credits: number
   credits_refunded: boolean
+  error_code?: string
+  error_message?: string
   request_body?: string
   query_response?: string
   created_at: string

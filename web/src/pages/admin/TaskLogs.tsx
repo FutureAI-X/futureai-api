@@ -9,7 +9,9 @@ import { cn } from '../../lib/utils'
 import { getAdminTaskLogs, getAdminTaskLogDetail, type AdminTaskLog } from '../../api/admin'
 import { UserSelect } from '../../components/admin/UserSelect'
 import { CopyButton } from '../../components/CopyButton'
+import { TaskDetailDialog } from '../../components/TaskDetailDialog'
 import { formatCredits } from '../../lib/credits'
+import { formatTime } from '../../lib/time'
 import { Pagination } from '../../components/Pagination'
 
 const STATUS_CONFIG: Record<string, { label: string; className: string; icon: typeof Loader2 }> = {
@@ -24,24 +26,6 @@ const STATUS_OPTIONS = [
   { value: 'completed', label: '已完成' },
   { value: 'failed', label: '失败' },
 ]
-
-// 格式化时间
-function formatTime(timeStr?: string): string {
-  if (!timeStr) return '-'
-  try {
-    const date = new Date(timeStr)
-    if (isNaN(date.getTime())) return timeStr
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    const hours = String(date.getHours()).padStart(2, '0')
-    const minutes = String(date.getMinutes()).padStart(2, '0')
-    const seconds = String(date.getSeconds()).padStart(2, '0')
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-  } catch {
-    return timeStr
-  }
-}
 
 export function AdminTaskLogs() {
   const [tasks, setTasks] = useState<AdminTaskLog[]>([])
@@ -75,6 +59,7 @@ export function AdminTaskLogs() {
   useEffect(() => { loadTasks() }, [loadTasks])
 
   const handleViewDetail = async (task: AdminTaskLog) => {
+    setDetailTask(null)
     setDetailLoading(true)
     setDetailOpen(true)
     try {
@@ -182,91 +167,14 @@ export function AdminTaskLogs() {
       </div>
 
       {/* 详情弹框 */}
-      {detailOpen && (
-        <div className='fixed inset-0 z-[100] flex items-center justify-center p-4'>
-          <div className='bg-background/80 fixed inset-0 backdrop-blur-sm' onClick={() => setDetailOpen(false)} />
-          <div className='bg-background border-border/60 relative z-10 w-full max-w-2xl rounded-xl border shadow-lg'>
-            <div className='flex items-center justify-between border-b border-border/40 px-6 py-4'>
-              <h2 className='text-lg font-semibold'>任务详情</h2>
-              <button onClick={() => setDetailOpen(false)} className='hover:bg-muted rounded-lg p-1.5 transition-colors'>
-                <span className='text-muted-foreground text-lg'>×</span>
-              </button>
-            </div>
-            <div className='max-h-[70vh] overflow-auto p-6'>
-              {detailLoading ? (
-                <div className='flex items-center justify-center py-12'>
-                  <Loader2 className='text-muted-foreground size-6 animate-spin' />
-                </div>
-              ) : detailTask ? (
-                <div className='space-y-4'>
-                  <div className='grid grid-cols-2 gap-4'>
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>用户</label>
-                      <p className='mt-1 text-sm'>{detailTask.username || '-'}</p>
-                    </div>
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>任务ID</label>
-                      <p className='mt-1 font-mono text-sm'>{detailTask.task_id}</p>
-                    </div>
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>状态</label>
-                      <div className='mt-1'>
-                        {(() => {
-                          const statusConf = STATUS_CONFIG[detailTask.status] || STATUS_CONFIG.processing
-                          const StatusIcon = statusConf.icon
-                          return (
-                            <span className={cn('inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium', statusConf.className)}>
-                              <StatusIcon className='size-3' />
-                              {statusConf.label}
-                            </span>
-                          )
-                        })()}
-                      </div>
-                    </div>
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>积分消耗</label>
-                      <p className='mt-1 text-sm'>
-                        {formatCredits(detailTask.credits)}
-                        {detailTask.credits_refunded && (
-                          <span className='text-emerald-600 dark:text-emerald-400 ml-2 text-xs'>已退还</span>
-                        )}
-                      </p>
-                    </div>
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>创建时间</label>
-                      <p className='mt-1 text-sm'>{formatTime(detailTask.created_at)}</p>
-                    </div>
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>更新时间</label>
-                      <p className='mt-1 text-sm'>{formatTime(detailTask.updated_at)}</p>
-                    </div>
-                  </div>
-
-                  {detailTask.request_body && (
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>请求体</label>
-                      <pre className='bg-muted/50 mt-1 max-h-40 overflow-auto rounded-lg p-3 text-xs break-all whitespace-pre-wrap'>
-                        {detailTask.request_body}
-                      </pre>
-                    </div>
-                  )}
-
-                  {detailTask.query_response && (
-                    <div>
-                      <label className='text-muted-foreground text-xs font-medium'>查询响应</label>
-                      <pre className='bg-muted/50 mt-1 max-h-40 overflow-auto rounded-lg p-3 text-xs'>
-                        {detailTask.query_response}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className='text-muted-foreground text-center text-sm'>加载失败</p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <TaskDetailDialog
+        open={detailOpen}
+        loading={detailLoading}
+        task={detailTask}
+        onClose={() => setDetailOpen(false)}
+        showUsername
+        showRawQueryResponse
+      />
     </div>
   )
 }

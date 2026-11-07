@@ -1,15 +1,20 @@
 import { useState } from 'react'
-import { Copy, Check } from 'lucide-react'
+import { Copy, Check, type LucideIcon } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 interface CopyButtonProps {
   text: string
   className?: string
+  // 用不同图标区分复制对象，默认是通用复制图标
+  icon?: LucideIcon
+  // 无文字按钮通过 tooltip 说明复制对象
+  title?: string
 }
 
 // 复制按钮（点击复制，短暂显示对勾）
-export function CopyButton({ text, className }: CopyButtonProps) {
+export function CopyButton({ text, className, icon, title = '复制' }: CopyButtonProps) {
   const [copied, setCopied] = useState(false)
+  const Icon = icon ?? Copy
 
   const copy = async () => {
     try {
@@ -31,10 +36,10 @@ export function CopyButton({ text, className }: CopyButtonProps) {
     <button
       type='button'
       onClick={copy}
-      title='复制'
-      className={cn('hover:bg-muted shrink-0 rounded p-1 transition-colors', className)}
+      title={title}
+      className={cn('hover:bg-muted inline-flex shrink-0 items-center rounded p-1 transition-colors', className)}
     >
-      {copied ? <Check className='text-emerald-500 size-3.5' /> : <Copy className='text-muted-foreground size-3.5' />}
+      {copied ? <Check className='text-emerald-500 size-3.5' /> : <Icon className='text-muted-foreground size-3.5' />}
     </button>
   )
 }
