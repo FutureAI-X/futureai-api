@@ -8,7 +8,7 @@
 |---|---|---|
 | GET | `/api/user/info` | [当前用户信息](info.md) |
 | PUT | `/api/user/profile` | [修改资料](profile.md) |
-| PUT | `/api/user/password` | [修改密码](password.md) |
+| PUT | `/api/user/password` | [重置密码](password.md) |
 | GET | `/api/user/tokens` | [API Key 列表](tokens-list.md) |
 | POST | `/api/user/tokens` | [新建 API Key](tokens-create.md) |
 | PUT | `/api/user/tokens/:id` | [修改 API Key](tokens-update.md) |

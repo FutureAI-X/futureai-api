@@ -1,78 +1,16 @@
 import { useState, useEffect } from 'react'
 import { X, Loader2 } from 'lucide-react'
-import type { AdminUser } from '../../api/admin'
+import { decryptWithKey } from '../../lib/crypto'
+import { generateUserPassword, type AdminUser } from '../../api/admin'
+import { validatePasswordStrength } from '../../lib/password'
 
-// ── 新建用户的默认凭据 ──
+// ── 新建用户的默认用户名 ──
 //
 // 用户名的格式是 U_{yyyyMMddhhmmss}，方便按创建时间辨认账号。
 function generateUsername(): string {
   const now = new Date()
   const pad = (value: number) => String(value).padStart(2, '0')
   return `U_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-}
-
-const PASSWORD_GROUPS = [
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-  'abcdefghijklmnopqrstuvwxyz',
-  '0123456789',
-  '!@#$%^&*',
-]
-
-// 每类字符各取 4 个，共 16 位。
-const PASSWORD_LENGTH_PER_GROUP = 4
-
-interface PasswordChar {
-  char: string
-  type: number
-}
-
-// 用 crypto 而不是 Math.random：生成的是真实账号密码，不该是可预测序列。
-function randomInt(max: number): number {
-  const buf = new Uint32Array(1)
-  crypto.getRandomValues(buf)
-  return buf[0] % max
-}
-
-function shuffled<T>(items: readonly T[]): T[] {
-  const result = items.slice()
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = randomInt(i + 1)
-    ;[result[i], result[j]] = [result[j], result[i]]
-  }
-  return result
-}
-
-// 生成 16 位密码：大写/小写/数字/特殊符号各 4 位，顺序打乱，
-// 且相邻两位不能属于同一类型。
-function generatePassword(): string {
-  const build = (): PasswordChar[] =>
-    shuffled(
-      PASSWORD_GROUPS.flatMap((group, type) =>
-        shuffled(group.split(''))
-          .slice(0, PASSWORD_LENGTH_PER_GROUP)
-          .map((char) => ({ char, type })),
-      ),
-    )
-
-  const hasNoAdjacentSameType = (chars: PasswordChar[]) =>
-    chars.every((item, i) => i === 0 || item.type !== chars[i - 1].type)
-
-  // 随机打乱后重试。16 位、4 类各 4 个时，单次随机排列满足条件的概率
-  // 约 3.6%，1000 次尝试全部失败的概率可以忽略；兜底分支只是理论上存在。
-  for (let attempt = 0; attempt < 1000; attempt++) {
-    const chars = build()
-    if (hasNoAdjacentSameType(chars)) {
-      return chars.map((item) => item.char).join('')
-    }
-  }
-
-  // 兜底：四类按随机顺序轮转输出（A B C D A B C D …），天然不相邻。
-  const groups = PASSWORD_GROUPS.map((group) =>
-    shuffled(group.split('')).slice(0, PASSWORD_LENGTH_PER_GROUP),
-  )
-  return shuffled([0, 1, 2, 3])
-    .flatMap((type) => groups[type])
-    .join('')
 }
 
 // 复制文本。优先用异步 Clipboard API；非 HTTPS 环境下它不可用或会拒绝，
@@ -118,23 +56,56 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
   const [displayName, setDisplayName] = useState('')
   const [role, setRole] = useState(1)
   const [saving, setSaving] = useState(false)
+  const [generatingPassword, setGeneratingPassword] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (open) {
-      if (isEdit && currentRow) {
-        setUsername(currentRow.username)
-        setPassword('')
-        setDisplayName(currentRow.display_name)
-        setRole(currentRow.role)
-      } else {
-        // 新建时直接生成一套可用凭据；两个输入框仍可手动修改。
-        setUsername(generateUsername())
-        setPassword(generatePassword())
-        setDisplayName('')
-        setRole(1)
-      }
-      setError('')
+    if (!open) return
+
+    setError('')
+
+    if (isEdit && currentRow) {
+      setUsername(currentRow.username)
+      setPassword('')
+      setDisplayName(currentRow.display_name)
+      setRole(currentRow.role)
+      setGeneratingPassword(false)
+      return
+    }
+
+    // 新建用户的用户名在前端生成；密码统一由后端生成，
+    // 保证与「重置密码」共用同一套规则，不再维护两份实现。
+    setUsername(generateUsername())
+    setPassword('')
+    setDisplayName('')
+    setRole(1)
+
+    let cancelled = false
+    setGeneratingPassword(true)
+    const dataKey = localStorage.getItem('data_key') || ''
+
+    generateUserPassword(dataKey)
+      .then(async (res) => {
+        if (!res.success || !res.data?.encrypted_password) {
+          throw new Error(res.message || '生成密码失败')
+        }
+        return decryptWithKey(res.data.encrypted_password, dataKey)
+      })
+      .then((generated) => {
+        if (cancelled) return
+        // 生成期间管理员可能已经手动输入了密码，不要覆盖。
+        setPassword((current) => current || generated)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : '生成密码失败，请手动输入')
+      })
+      .finally(() => {
+        if (!cancelled) setGeneratingPassword(false)
+      })
+
+    return () => {
+      cancelled = true
     }
   }, [open, isEdit, currentRow])
 
@@ -158,8 +129,11 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
   const validate = (): boolean => {
     setError('')
     if (!username.trim()) { setError('用户名不能为空'); return false }
-    if (!isEdit && !password.trim()) { setError('密码不能为空'); return false }
-    if (!isEdit && password.length < 6) { setError('密码长度不能少于6位'); return false }
+    if (!isEdit) {
+      if (!password.trim()) { setError('密码不能为空'); return false }
+      const passwordError = validatePasswordStrength(password)
+      if (passwordError) { setError(passwordError); return false }
+    }
     return true
   }
 
@@ -265,8 +239,11 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
                 autoComplete='new-password'
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder='请输入密码（至少6位）'
-                className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                disabled={generatingPassword}
+                placeholder={
+                  generatingPassword ? '正在生成随机密码…' : '至少8位，且包含至少3类字符'
+                }
+                className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60'
               />
             </div>
           )}
@@ -310,11 +287,11 @@ export function UserDrawer({ open, onOpenChange, currentRow, onSubmit }: UserDra
           </button>
           <button
             onClick={isEdit ? handleSaveClick : handleCopyAndSave}
-            disabled={saving}
+            disabled={saving || generatingPassword}
             className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors disabled:opacity-50'
           >
-            {saving && <Loader2 className='size-4 animate-spin' />}
-            {saving ? '保存中...' : isEdit ? '保存' : '复制并保存'}
+            {(saving || generatingPassword) && <Loader2 className='size-4 animate-spin' />}
+            {generatingPassword ? '生成密码中...' : saving ? '保存中...' : isEdit ? '保存' : '复制并保存'}
           </button>
         </div>
       </div>

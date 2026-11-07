@@ -101,6 +101,7 @@ func SetRouter(server *gin.Engine) {
 	{
 		adminRouter.GET("/users", controller.AdminGetUsers)
 		adminRouter.POST("/users", controller.AdminCreateUser)
+		adminRouter.POST("/generate-password", controller.AdminGeneratePassword)
 		adminRouter.PUT("/users/:id", controller.AdminUpdateUser)
 		adminRouter.DELETE("/users/:id", controller.AdminDeleteUser)
 		adminRouter.PUT("/users/:id/status", controller.AdminUpdateUserStatus)

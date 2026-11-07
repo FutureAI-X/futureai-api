@@ -30,7 +30,7 @@ export function Profile() {
   const [formEmail, setFormEmail] = useState('')
   const [formError, setFormError] = useState('')
 
-  // 密码重置状态
+  // 重置密码状态
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [resetResultOpen, setResetResultOpen] = useState(false)
   const [resetPassword, setResetPassword] = useState('')
@@ -150,7 +150,7 @@ export function Profile() {
     return () => document.removeEventListener('keydown', handleEsc)
   }, [dialogOpen, resetConfirmOpen, resetResultOpen])
 
-  // ── 密码重置 ──
+  // ── 重置密码 ──
   const handleResetConfirm = async () => {
     const token = localStorage.getItem('token')
     if (!token) return
@@ -402,7 +402,7 @@ export function Profile() {
           <div className='bg-background border-border/60 relative z-10 w-full max-w-md rounded-xl border p-6 shadow-lg'>
             <h2 className='text-lg font-semibold'>重置密码</h2>
             <p className='text-muted-foreground mt-2 text-sm'>
-              确定要重置密码吗？系统将自动生成一个随机密码。
+              确定要重置密码吗？系统将自动生成 16 位包含大小写字母、数字和符号的随机密码。
             </p>
             <div className='mt-6 flex justify-end gap-3'>
               <button

@@ -196,7 +196,7 @@ export function AdminUsers() {
     }
   }
 
-  // ── 密码重置 ──
+  // ── 重置密码 ──
   const handleResetClick = (user: AdminUser) => {
     setResetRow(user)
     setResetDialogOpen(true)
@@ -376,14 +376,14 @@ export function AdminUsers() {
                             积分
                           </button>
 
-                          {/* 密码重置 */}
+                          {/* 重置密码 */}
                           <button
                             onClick={() => handleResetClick(user)}
                             disabled={isRoot || isDeleted}
                             className='hover:bg-muted inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50'
                           >
                             <KeyRound className='size-3.5' />
-                            密码重置
+                            重置密码
                           </button>
 
                           {/* 编辑 */}
@@ -476,14 +476,14 @@ export function AdminUsers() {
         onConfirm={handleCreditConfirm}
       />
 
-      {/* 密码重置确认弹窗 */}
+      {/* 重置密码确认弹窗 */}
       <ConfirmDialog
         open={resetDialogOpen}
         onOpenChange={setResetDialogOpen}
         title='重置密码'
         description={
           <>
-            确定要重置用户 <span className='text-foreground font-semibold'>{resetRow?.username}</span> 的密码吗？系统将自动生成随机密码。
+            确定要重置用户 <span className='text-foreground font-semibold'>{resetRow?.username}</span> 的密码吗？系统将自动生成 16 位包含大小写字母、数字和符号的随机密码。
           </>
         }
         confirmText='重置密码'
@@ -492,7 +492,7 @@ export function AdminUsers() {
         onConfirm={handleResetConfirm}
       />
 
-      {/* 密码重置结果弹窗 */}
+      {/* 重置密码结果弹窗 */}
       {resetResultOpen && (
         <div className='fixed inset-0 z-[100] flex items-center justify-center'>
           <div className='bg-background/80 fixed inset-0 backdrop-blur-sm' onClick={() => setResetResultOpen(false)} />

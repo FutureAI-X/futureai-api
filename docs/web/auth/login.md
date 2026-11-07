@@ -13,7 +13,7 @@
 - 设置了 `INITIAL_ROOT_PASSWORD` 环境变量时，使用该值；
 - 否则随机生成并写入 `./root_initial_password.txt`，权限为 `0600`。
 
-该密码不会写入日志。登录后应立即通过 [修改密码](../user/password.md) 修改，并删除密码文件。容器部署建议直接使用环境变量，理由见 [ENV.md](../../dev/ENV.md#initial_root_password)。
+该密码不会写入日志。登录后应立即通过 [重置密码](../user/password.md) 重置，并删除密码文件。容器部署建议直接使用环境变量，理由见 [ENV.md](../../dev/ENV.md#initial_root_password)。
 
 响应：
 

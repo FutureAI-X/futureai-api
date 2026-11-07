@@ -508,7 +508,11 @@ func CreateRootUserIfNeed() error {
 	initialPassword := os.Getenv("INITIAL_ROOT_PASSWORD")
 	generated := false
 	if initialPassword == "" {
-		initialPassword = common.GenerateRandomPassword(16)
+		pw, err := common.GenerateStrongPassword()
+		if err != nil {
+			return err
+		}
+		initialPassword = pw
 		generated = true
 	}
 

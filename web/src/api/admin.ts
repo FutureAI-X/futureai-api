@@ -91,6 +91,14 @@ export function adjustUserCredits(id: number, mode: string, value: number) {
   })
 }
 
+// ── 预生成随机密码（新增用户） ──
+export function generateUserPassword(dataKey: string) {
+  return request<{ success: boolean; message: string; data?: { encrypted_password: string } }>(`${BASE}/generate-password`, {
+    method: 'POST',
+    body: JSON.stringify({ data_key: dataKey }),
+  })
+}
+
 // ── 重置密码 ──
 export function resetUserPassword(id: number, dataKey: string) {
   return request<{ success: boolean; message: string; data?: { encrypted_password: string } }>(`${BASE}/users/${id}/password`, {

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"log"
-	"math/big"
 	"sync"
 
 	"golang.org/x/crypto/bcrypt"
@@ -92,17 +91,6 @@ func CompareDummyPassword(password string) {
 		return
 	}
 	_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
-}
-
-// GenerateRandomPassword 生成指定长度的随机密码
-func GenerateRandomPassword(length int) string {
-	const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$"
-	result := make([]byte, length)
-	for i := range result {
-		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		result[i] = chars[n.Int64()]
-	}
-	return string(result)
 }
 
 // GenerateDataKey 生成 32 字节随机数据密钥，返回 base64 编码字符串

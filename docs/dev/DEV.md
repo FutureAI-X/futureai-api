@@ -150,7 +150,7 @@ FutureAI API started on port 3001
 
 若日志停留于 `database migration` 或进程直接退出，通常为 1.2 节中密码配置有误。
 
-服务就绪后，于浏览器访问 http://localhost:3001，以用户名 `root` 及 1.2.2 节设置的 `INITIAL_ROOT_PASSWORD` 登录（未设置时可查阅 `root_initial_password.txt`）。登录后应立即修改密码。
+服务就绪后，于浏览器访问 http://localhost:3001，以用户名 `root` 及 1.2.2 节设置的 `INITIAL_ROOT_PASSWORD` 登录（未设置时可查阅 `root_initial_password.txt`）。登录后应立即重置密码。
 
 ---
 

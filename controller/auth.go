@@ -275,7 +275,12 @@ func ResetMyPassword(c *gin.Context) {
 		return
 	}
 
-	newPassword := common.GenerateRandomPassword(12)
+	newPassword, err := common.GenerateStrongPassword()
+	if err != nil {
+		common.SysErrorf("[ResetMyPassword] 生成随机密码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "重置密码失败"})
+		return
+	}
 
 	hashed, err := common.Password2Hash(newPassword)
 	if err != nil {

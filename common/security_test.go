@@ -151,20 +151,3 @@ func TestMaskSecretNeverLeaksFullValue(t *testing.T) {
 		t.Errorf("脱敏结果泄露了完整密钥: %q", masked)
 	}
 }
-
-// TestGenerateRandomPassword 校验随机密码的字符集与长度
-func TestGenerateRandomPassword(t *testing.T) {
-	const n = 100
-	pw := GenerateRandomPassword(n)
-	if len(pw) != n {
-		t.Errorf("长度错误: got %d want %d", len(pw), n)
-	}
-
-	seen := map[byte]bool{}
-	for i := 0; i < n; i++ {
-		seen[pw[i]] = true
-	}
-	if len(seen) < 10 {
-		t.Errorf("随机性不足，%d 个字符中只有 %d 种", n, len(seen))
-	}
-}

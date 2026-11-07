@@ -98,6 +98,15 @@ func AdminCreateUser(c *gin.Context) {
 		return
 	}
 
+	// 只在「设置新密码」时校验强度，不影响已有用户登录。
+	if err := common.ValidatePasswordStrength(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
 	// 默认角色为普通用户
 	if req.Role == 0 {
 		req.Role = model.RoleCommonUser
@@ -187,6 +196,11 @@ func AdminUpdateUser(c *gin.Context) {
 
 	var hashedPassword string
 	if req.Password != "" {
+		// 与新增用户、随机重置共用同一套强度规则；登录路径不经过这里。
+		if err := common.ValidatePasswordStrength(req.Password); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
 		hashed, err := common.Password2Hash(req.Password)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "密码加密失败"})
@@ -445,8 +459,13 @@ func AdminResetPassword(c *gin.Context) {
 		return
 	}
 
-	// 随机生成密码
-	newPassword := common.GenerateRandomPassword(12)
+	// 随机生成密码（与新增用户共用同一套规则）
+	newPassword, err := common.GenerateStrongPassword()
+	if err != nil {
+		common.SysErrorf("[AdminResetPassword] 生成随机密码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "重置密码失败"})
+		return
+	}
 
 	// 存储 bcrypt 哈希
 	hashed, err := common.Password2Hash(newPassword)
@@ -473,6 +492,43 @@ func AdminResetPassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "密码重置成功",
+		"data": gin.H{
+			"encrypted_password": encrypted,
+		},
+	})
+}
+
+// AdminGeneratePasswordRequest 预生成密码请求
+type AdminGeneratePasswordRequest struct {
+	DataKey string `json:"data_key" binding:"required"`
+}
+
+// AdminGeneratePassword 预生成一个符合统一规则的随机密码，供新增用户表单使用。
+//
+// 生成规则只在 GenerateStrongPassword 里维护一份，前端不再自行实现；
+// 密码用客户端 data_key 加密后返回，与重置密码的传输方式保持一致。
+func AdminGeneratePassword(c *gin.Context) {
+	var req AdminGeneratePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "请提供 data_key"})
+		return
+	}
+
+	password, err := common.GenerateStrongPassword()
+	if err != nil {
+		common.SysErrorf("[AdminGeneratePassword] 生成随机密码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "生成密码失败"})
+		return
+	}
+
+	encrypted, err := common.EncryptWithKey(password, req.DataKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "密码加密传输失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
 		"data": gin.H{
 			"encrypted_password": encrypted,
 		},
