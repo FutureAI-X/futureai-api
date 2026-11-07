@@ -319,6 +319,11 @@ func migrateDB() error {
 		return err
 	}
 
+	// 旧 pixel_size 规格里的 preset label 不再支持，清理后再进入严格解析。
+	if err := migrateParamSpecPresetLabels(); err != nil {
+		return err
+	}
+
 	// 添加表和字段注释
 	return addTableComments()
 }

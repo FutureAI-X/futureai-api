@@ -60,6 +60,6 @@ interface FormEval {
 `ratio_size` 与 `pixel_size` 是两个独立组件：
 
 - `ratio_size` 渲染比例按钮，提交比例；mixed 模型也只渲染比例按钮；
-- `pixel_size` 渲染预设卡片与宽、高两个数字输入，提交像素；预设由管理端配置，修改后标记「自定义」。
+- `pixel_size` 复用 `ratio_size` 的比例按钮样式，并附宽、高两个数字输入，提交像素；比例与推荐像素由管理端配置，修改像素后标记「自定义」。
 
 组件细节见 [ratio-size.md](components/ratio-size.md) 与 [pixel-size.md](components/pixel-size.md)。

@@ -2,7 +2,7 @@
 
 ## 1 用途
 
-像素尺寸控件。前端是独立组件：预设卡片 + 宽、高两个数字输入，不复用比例按钮。适用于只接受像素尺寸的模型。
+像素尺寸控件。前端复用 `ratio_size` 的比例按钮组件与样式，并附宽、高两个数字输入。适用于只接受像素尺寸的模型。
 
 ## 2 JSON 设计
 
@@ -21,9 +21,9 @@
     "max_pixels": 2097152
   },
   "presets": [
-    { "label": "正方形", "ratio": "1:1", "pixels": "1440x1440" },
-    { "label": "横图", "ratio": "16:9", "pixels": "1792x1008" },
-    { "label": "竖图", "ratio": "9:16", "pixels": "1008x1792" }
+    { "ratio": "1:1", "pixels": "1440x1440" },
+    { "ratio": "16:9", "pixels": "1792x1008" },
+    { "ratio": "9:16", "pixels": "1008x1792" }
   ],
   "allow_custom": true
 }
@@ -40,7 +40,7 @@
 | `pixel.min_pixels` | integer | 是 | 宽乘高的下限，`0` 表示不限 |
 | `pixel.max_pixels` | integer | 是 | 宽乘高的上限，`0` 表示不限 |
 | `pixel.aspect` | object | 否 | 宽高比范围，省略表示不限 |
-| `presets` | object[] | 否 | 快捷尺寸；每项为 `{label, pixels}`，`ratio` 可选且仅用于展示 |
+| `presets` | object[] | 否 | 比例快捷尺寸；每项为 `{ratio, pixels}`，`ratio` 用于比例按钮，`pixels` 是该比例的默认像素值 |
 | `allow_custom` | boolean | 否 | 是否允许手动修改像素值，默认 `true` |
 | `default` | string | 否 | 默认像素值，必须满足 `pixel` 规则 |
 | 其余通用字段 | — | — | 见 [../schema.md](../schema.md) |
@@ -55,21 +55,21 @@
 - `min_side <= 宽/高 <= max_side`；
 - `min_pixels <= 宽×高 <= max_pixels`；
 - 宽高比用交叉相乘比较，边界为闭区间；
-- 每个预设的 `pixels` 必须满足以上规则，且与 `ratio`（如有）精确匹配；
-- 预设的 `pixels` 必须唯一；
+- 每个预设的 `ratio` 必填且格式合法，`pixels` 必须满足以上规则，并与 `ratio` 精确匹配；
+- 预设的 `pixels` 与 `ratio` 都必须唯一；
 - `allow_custom` 为 `false` 时，值必须命中某个预设；
 - `required` 为 `true` 且没有 `default` 时，前端用第一个预设作为初始值。
 
 ## 5 前端组件
 
-独立组件，不复用比例按钮：
+比例选择复用 `ratio_size` 组件与样式；像素输入仍是独立部分：
 
-- 预设卡片/按钮，显示 `label` 与像素值；
-- 宽、高两个数字输入；
-- 选择预设后填入宽高；修改任一边后标记为「自定义」；
+- 比例按钮来自 `presets[].ratio`，使用 `.size-groups` / `.size-btn` 等现有样式；
+- 选中比例后填入该预设的 `pixels`；
+- 宽、高两个数字输入保留，用户可以继续修改；修改后比例按钮不再高亮，视为自定义值；
 - 实时按 `pixel` 规则校验，越界或不是 `step` 倍数时提示；
 - `allow_custom` 为 `false` 时隐藏或禁用自定义输入；
-- 可选提供「锁定宽高比」，修改一边时按预设比例计算另一边，并按 `step` 取整后再次校验。
+- 可选提供「锁定宽高比」，修改一边时按当前比例计算另一边，并按 `step` 取整后再次校验。
 
 ## 6 服务端行为
 

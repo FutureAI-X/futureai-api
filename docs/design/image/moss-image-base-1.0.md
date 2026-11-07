@@ -72,16 +72,16 @@ MOSS 是同步接口：一次 `POST` 直接返回图片 URL，没有 `task_id`�
         "max_pixels": 2097152
       },
       "presets": [
-        { "label": "正方形", "ratio": "1:1", "pixels": "1440x1440" },
-        { "label": "横图", "ratio": "16:9", "pixels": "1792x1008" },
-        { "label": "竖图", "ratio": "9:16", "pixels": "1008x1792" },
-        { "label": "4:3", "ratio": "4:3", "pixels": "1664x1248" },
-        { "label": "3:4", "ratio": "3:4", "pixels": "1248x1664" },
-        { "label": "3:2", "ratio": "3:2", "pixels": "1728x1152" },
-        { "label": "2:3", "ratio": "2:3", "pixels": "1152x1728" },
-        { "label": "5:4", "ratio": "5:4", "pixels": "1600x1280" },
-        { "label": "4:5", "ratio": "4:5", "pixels": "1280x1600" },
-        { "label": "21:9", "ratio": "21:9", "pixels": "2016x864" }
+        { "ratio": "1:1", "pixels": "1440x1440" },
+        { "ratio": "16:9", "pixels": "1792x1008" },
+        { "ratio": "9:16", "pixels": "1008x1792" },
+        { "ratio": "4:3", "pixels": "1664x1248" },
+        { "ratio": "3:4", "pixels": "1248x1664" },
+        { "ratio": "3:2", "pixels": "1728x1152" },
+        { "ratio": "2:3", "pixels": "1152x1728" },
+        { "ratio": "5:4", "pixels": "1600x1280" },
+        { "ratio": "4:5", "pixels": "1280x1600" },
+        { "ratio": "21:9", "pixels": "2016x864" }
       ],
       "allow_custom": true
     }
@@ -91,7 +91,7 @@ MOSS 是同步接口：一次 `POST` 直接返回图片 URL，没有 `task_id`�
 
 说明：
 
-- `size` 使用 `pixel_size` 组件：预设卡片 + 宽高输入，提交像素；`presets` 由管理端配置。
+- `size` 使用 `pixel_size` 组件：比例按钮复用 `ratio_size` 样式，附宽高输入，提交像素；`presets` 由管理端配置。
 - 规格中没有 `resolution`。MOSS 不支持该参数，组件也不展示。
 - 规格中没有 `ref_images`。服务端按“不支持参考图”静默忽略参考图字段。
 - `required=true` 且没有 `default` 时，前端使用第一个预设作为初始值。

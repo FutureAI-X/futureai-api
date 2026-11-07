@@ -135,10 +135,10 @@ type AspectRule struct {
 	Max string `json:"max,omitempty"`
 }
 
-// Preset 是 pixel_size 的快捷尺寸。
+// Preset 是 pixel_size 的比例快捷尺寸。
+// ratio 用于比例按钮，pixels 是该比例对应的默认像素值。
 type Preset struct {
-	Label  string `json:"label,omitempty"`
-	Ratio  string `json:"ratio,omitempty"`
+	Ratio  string `json:"ratio"`
 	Pixels string `json:"pixels"`
 }
 
@@ -458,26 +458,32 @@ func validatePixelSize(p *Param, def string, hasDefault bool) error {
 		return err
 	}
 
-	seen := make(map[string]bool, len(p.Presets))
+	seenPixels := make(map[string]bool, len(p.Presets))
+	seenRatios := make(map[string]bool, len(p.Presets))
 	for _, preset := range p.Presets {
+		if preset.Ratio == "" {
+			return fmt.Errorf("预设 %q 缺少 ratio", preset.Pixels)
+		}
+		if !ratioPattern.MatchString(preset.Ratio) {
+			return fmt.Errorf("预设比例 %q 格式不合法", preset.Ratio)
+		}
 		if _, _, err := parsePixel(preset.Pixels); err != nil {
 			return fmt.Errorf("预设 %q: %w", preset.Pixels, err)
 		}
 		if err := validatePixelValue(p.Pixel, preset.Pixels); err != nil {
 			return fmt.Errorf("预设 %q: %w", preset.Pixels, err)
 		}
-		if preset.Ratio != "" {
-			if !ratioPattern.MatchString(preset.Ratio) {
-				return fmt.Errorf("预设比例 %q 格式不合法", preset.Ratio)
-			}
-			if !ratioMatchesPixels(preset.Ratio, preset.Pixels) {
-				return fmt.Errorf("预设 %q 与比例 %s 不匹配", preset.Pixels, preset.Ratio)
-			}
+		if !ratioMatchesPixels(preset.Ratio, preset.Pixels) {
+			return fmt.Errorf("预设 %q 与比例 %s 不匹配", preset.Pixels, preset.Ratio)
 		}
-		if seen[preset.Pixels] {
+		if seenPixels[preset.Pixels] {
 			return fmt.Errorf("预设 %q 重复", preset.Pixels)
 		}
-		seen[preset.Pixels] = true
+		if seenRatios[preset.Ratio] {
+			return fmt.Errorf("预设比例 %q 重复", preset.Ratio)
+		}
+		seenPixels[preset.Pixels] = true
+		seenRatios[preset.Ratio] = true
 	}
 	if p.AllowCustom == nil {
 		v := true
@@ -487,7 +493,7 @@ func validatePixelSize(p *Param, def string, hasDefault bool) error {
 		if len(p.Presets) == 0 {
 			return errors.New("allow_custom=false 时至少需要一个预设")
 		}
-		if hasDefault && !seen[def] {
+		if hasDefault && !seenPixels[def] {
 			return fmt.Errorf("allow_custom=false 时 default %q 必须在预设中", def)
 		}
 	}

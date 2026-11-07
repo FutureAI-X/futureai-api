@@ -16,7 +16,7 @@
 8. `visible_when`、`enabled_when` 的 `field` 必须引用已存在的 `key`；条件深度不超过 8，节点数不超过 64。
 9. `conflicts_with` 必须引用已存在的 `key`。
 10. 动态值的 `by` 必须引用已存在的 `key`；动态值不得嵌套；引用图不得有环。
-11. `ratio_size` 的 `ratios` 非空，比例格式合法，`default`（如有）必须出现在 `ratios` 中；`modes` 默认 `["ratio"]`，只能是 `ratio`/`pixel` 子集且必须包含 `ratio`；`modes` 含 `pixel` 时 `pixel` 必填，不含时不得配置。`pixel_size` 的 `pixel` 必填，`modes` 只能是 `["pixel"]` 或省略，不得配置 `ratios`；`presets` 可省略，每项 `pixels` 满足像素规则且唯一，`ratio`（如有）与像素宽高比精确匹配；`allow_custom` 为 `false` 时至少一个预设，且默认值必须在预设内。
+11. `ratio_size` 的 `ratios` 非空，比例格式合法，`default`（如有）必须出现在 `ratios` 中；`modes` 默认 `["ratio"]`，只能是 `ratio`/`pixel` 子集且必须包含 `ratio`；`modes` 含 `pixel` 时 `pixel` 必填，不含时不得配置。`pixel_size` 的 `pixel` 必填，`modes` 只能是 `["pixel"]` 或省略，不得配置 `ratios`；`presets` 可省略，每项 `ratio` 必填且唯一、`pixels` 满足像素规则且唯一，`ratio` 与像素宽高比精确匹配；`allow_custom` 为 `false` 时至少一个预设，且默认值必须在预设内。
 12. `ref_images` 的 `max_count >= 0`；`max_count > 0` 时 `max_file_bytes > 0`、`max_total_bytes >= max_file_bytes`、`allowed_mime_types` 非空；`max_count` 的每个分支都不得大于计费侧的参考图封顶值 100。
 13. `ref_images` 与 `file` 的 `max_file_bytes` 不得大于上传接口的全局单文件上限 30MB，否则该限制永远无法触达。
 14. `file` 控件的 `max_file_bytes > 0`，`allowed_mime_types` 非空。
