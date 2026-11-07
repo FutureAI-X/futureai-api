@@ -30,13 +30,16 @@ APIMart 未实现 `ImageCapabilityProvider`，使用平台默认能力。
 
 ## 4 入参校验
 
-APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束：
+APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些约束是**模型规格**，不是供应商规格：同一个 APIMart 账号下不同模型的画幅、分辨率与参考图上限可能不同，因此按平台模型名登记在 `supplier/apimart.go` 的 `apimartImageModels`，由 `req.Model` 查表。
 
+- 模型必须在 `apimartImageModels` 中登记，未登记直接拒绝（fail-closed），避免漏配后以错误的限制放行；
 - `prompt` 去除首尾空格后不能为空；
-- `size` 只接受 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`；上游支持的 `auto` 刻意不开放，避免输出尺寸由上游内容决定、调用方无法预期；
-- `resolution` 只接受 `1K`、`2K`、`4K`，平台标准值为大写；小写输入会被归一化；
-- `image_ids` 优先，非空时去重后最多 16 张；
-- `image_urls` 在 `image_ids` 为空时去重后最多 16 张。
+- `size` 只接受该模型规格中的比例。本模型为 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`；上游支持的 `auto` 刻意不开放，避免输出尺寸由上游内容决定、调用方无法预期；
+- `resolution` 只接受该模型规格中的档位，本模型为 `1K`、`2K`、`4K`；平台标准值为大写，小写输入会被归一化；
+- `image_ids` 优先，非空时去重后不超过该模型的参考图上限，本模型为 16 张；
+- `image_urls` 在 `image_ids` 为空时去重后不超过该模型上限，本模型为 16 张。
+
+参考图数量不再由控制器统一封顶——控制器只校验 `file_id` 的形态，数量上限随模型规格走，避免某个模型的上限误伤其他模型。
 
 校验失败直接返回 400，不扣费、不建任务。参考图字段的优先级与平台通用规则见 [客户端图像生成文档](../../api/image/README.md#4-参考图)。
 
@@ -49,27 +52,23 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束：
 | `model` | `gpt-image-2.5-ext` |
 | `prompt` | 调用方提示词 |
 | `size` | 调用方画幅比例，已由控制器补齐默认值 |
-| `resolution` | 调用方分辨率档位，转成大写 `1K` / `2K` / `4K` |
+| `resolution` | 调用方分辨率档位，按模型规格转成 `1K` / `2K` / `4K`（gpt-image-2.5-ext 用大写） |
 | `n` | 固定 `1` |
 | `image_urls` | 非空时写入 |
-| `version` | 按平台模型名补全 |
+| `version` | 取自平台模型规格（`gpt-image-2.5-flare-ext` → `flare`） |
 
-两个平台模型共用同一个供应商模型 ID，调用方请求体里的 `model` 已不足以区分风格版本。`applyImageVersion` 回看调用方原始模型名，把 `gpt-image-2.5-flare-ext` 映射为 `version=flare`。映射表在 `supplier/apimart.go` 的 `apimartImageVersions` 中维护。新增映射到该供应商模型的平台模型时，必须同步登记映射，否则会落到上游默认值并记录错误日志。
+两个平台模型共用同一个供应商模型 ID，调用方请求体里的 `model` 已不足以区分风格版本。`applyImageVersion` 按调用方原始模型名查 `apimartImageModels`，取到规格里的 `version` 写入请求体（`gpt-image-2.5-flare-ext` → `version=flare`）。规格表同时承载 size 集合、分辨率档位、参考图上限与 resolution 大小写；新增映射到 APIMart 的平台模型时，必须在该表中登记完整规格，未登记的模型会在扣费前被拒绝。
+
+`buildRequest` 通过 `spec.formatResolution` 转换大小写：gpt-image-2.5-ext 使用大写 `1K` / `2K` / `4K`，gpt-image-2 / gpt-image-2-ext 使用小写 `1k` / `2k` / `4k`。校验阶段按大小写不敏感匹配，调用方传入任意大小写都能命中。
 
 ## 6 提交方式与超时
 
-`ImageGenerate` 使用 `common.OutboundHTTPClient`，提交超时为包级 `SubmitTimeout`（30 秒）。请求头包含以下与新版接口相关的字段：
+`ImageGenerate` 使用 `common.OutboundHTTPClient`，提交超时为包级 `SubmitTimeout`（30 秒）。
 
-| 请求头 | 值 |
-|---|---|
-| `X-APIMart-Response-Version` | `2026-07-27` |
-| `Idempotency-Key` | 平台任务 ID，仅在上游需要幂等键时透传 |
-
-上游可能返回两种成功结构，解析层都兼容：
+请求刻意只携带 `Content-Type` 与 `Authorization`，**不传** `Idempotency-Key` 和 `X-APIMart-Response-Version`。平台自身已按 `Idempotency-Key` 做任务级去重，不需要上游再提供一层；不带响应版本头时，上游固定返回 HTTP 200 + `data[].task_id`。
 
 | 成功结构 | 任务 ID 位置 |
 |---|---|
-| HTTP 202，`code=202` | `data.id` |
 | HTTP 200，`code=200` | `data[].task_id` |
 
 失败性质如下。
@@ -78,8 +77,9 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束：
 |---|---|---|
 | 本地序列化失败、构建请求失败、4xx | `FailureRejected` | 退款 |
 | 5xx、超时、连接中断、响应读取失败 | `FailureUnknown` | 不退款，转 `unknown` |
-| 业务 `code` 不是 200 或 202 | `FailureRejected` | 退款 |
+| 业务 `code` 不是 200 | `FailureRejected` | 退款 |
 | 响应中缺少任务 ID | `FailureUnknown` | 不退款，转 `unknown` |
+| 非预期的 HTTP 202 | `FailureUnknown` | 不退款，转 `unknown` |
 
 `FailureUnknown` 的语义是「上游可能已经建单」。控制器不会立即退款，而是在超龄兜底后转 `call_fail` 并退款。
 
@@ -130,6 +130,6 @@ APIMart 不声明 `RequireResultFetch`，因此转存失败只记录日志，任
 |---|---|
 | 供应商实现 | `supplier/apimart.go` |
 | 供应商单元测试 | `supplier/apimart_test.go` |
-| 版本映射 | `supplier/apimart.go` 的 `apimartImageVersions` |
+| 模型规格（size / resolution / 参考图上限 / version） | `supplier/apimart.go` 的 `apimartImageModels` |
 | 控制器计费与参考图 | `controller/image.go` |
 | 任务状态与对账 | `model/task.go`、`controller/image.go` |

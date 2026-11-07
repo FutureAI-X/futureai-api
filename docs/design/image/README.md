@@ -106,6 +106,7 @@
 |---|---|
 | `moss-image-base-1.0` | [moss-image-base-1.0.md](moss-image-base-1.0.md) |
 | `moss-image-sft-1.0` | [moss-image-sft-1.0.md](moss-image-sft-1.0.md) |
+| `gpt-image-2-ext` / `gpt-image-2` | [gpt-image-2-ext.md](gpt-image-2-ext.md) |
 | `gpt-image-2.5-flare-ext` | [gpt-image-2.5-flare-ext.md](gpt-image-2.5-flare-ext.md) |
 | `gpt-image-2.5-sunburst-ext` | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
 
@@ -114,9 +115,10 @@
 新增一个图像模型时，按以下清单补齐：
 
 1. 在 `supplier` 包实现 `Supplier` 接口。同步接口还需要实现 `ImageCapabilityProvider` 和 `ImageRequestValidator`。
-2. 在 `NewSupplier` 与 `NewTaskQuerier` 注册供应商名称。
-3. 同步接口使用 `common.LongOutboundHTTPClient`，避免通用客户端的响应头超时。
-4. 在控制器侧确认参考图、计费与状态映射符合预期。
-5. 补充供应商单元测试，覆盖成功、4xx、5xx、超时、结果缺失和 TaskQuery。
-6. 在 `docs/api/image/` 增加客户端文档，在 `docs/design/image/` 增加设计文档。
-7. 在管理端配置供应商、供应商模型、模型类型、端点绑定与基础积分。
+2. APIMart 模型要在 `supplier/apimart.go` 的 `apimartImageModels` 登记模型规格（size 集合、分辨率档位及大小写、参考图上限、version），未登记会在扣费前被拒绝。
+3. 在 `NewSupplier` 与 `NewTaskQuerier` 注册供应商名称。
+4. 同步接口使用 `common.LongOutboundHTTPClient`，避免通用客户端的响应头超时。
+5. 在控制器侧确认参考图、计费与状态映射符合预期。
+6. 补充供应商单元测试，覆盖成功、4xx、5xx、超时、结果缺失和 TaskQuery。
+7. 在 `docs/api/image/` 增加客户端文档，在 `docs/design/image/` 增加设计文档。
+8. 在管理端配置供应商、供应商模型、模型类型、端点绑定与基础积分。

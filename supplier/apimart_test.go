@@ -127,7 +127,13 @@ func TestIsCreditParamNameRejectsNonStandardFields(t *testing.T) {
 	}
 }
 
-// ── applyImageVersion：按调用方模型名补全 APIMart 的 version 字段 ──
+// ── applyImageVersion：按平台模型规格补全 APIMart 的 version 字段 ──
+
+// 测试用的平台模型名与供应商模型 ID。
+const (
+	testAPIMartModel         = "gpt-image-2.5-flare-ext"
+	testAPIMartVendorModelID = "gpt-image-2.5-ext"
+)
 
 func TestApplyImageVersionSetsVersionByRequestedModel(t *testing.T) {
 	cases := []struct {
@@ -145,7 +151,7 @@ func TestApplyImageVersionSetsVersionByRequestedModel(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body := map[string]interface{}{
-				"model":  apimartVersionedImageModel,
+				"model":  testAPIMartVendorModelID,
 				"prompt": "a cat",
 			}
 
@@ -162,18 +168,18 @@ func TestApplyImageVersionSetsVersionByRequestedModel(t *testing.T) {
 	}
 }
 
-// 其他图像模型不带 version 参数，必须原样透传，不能被塞进一个多余的字段。
-func TestApplyImageVersionLeavesOtherModelsUntouched(t *testing.T) {
+// 未登记的模型不会命中任何规格，不能往请求体里塞多余的 version 字段。
+func TestApplyImageVersionLeavesUnregisteredModelsUntouched(t *testing.T) {
 	body := map[string]interface{}{
-		"model":   "gpt-image-1",
+		"model":   testAPIMartVendorModelID,
 		"prompt":  "a cat",
 		"version": "caller-supplied",
 	}
 
-	applyImageVersion(body, "gpt-image-2.5-sunburst-ext")
+	applyImageVersion(body, "gpt-image-2.5-unknown-ext")
 
 	if got := body["version"]; got != "caller-supplied" {
-		t.Errorf("非目标模型的 version 被改写为 %v, want 原样透传", got)
+		t.Errorf("未登记模型的 version 被改写为 %v, want 原样透传", got)
 	}
 	if len(body) != 3 {
 		t.Errorf("请求体被改动了: %v", body)
@@ -190,11 +196,11 @@ func TestBuildRequestMapsStandardFields(t *testing.T) {
 		Size:          "16:9",
 		Resolution:    "2k",
 		ImageURLs:     []string{"https://a.png", "https://b.png"},
-		VendorModelID: apimartVersionedImageModel,
+		VendorModelID: testAPIMartVendorModelID,
 	})
 
 	wants := map[string]interface{}{
-		"model":      apimartVersionedImageModel,
+		"model":      testAPIMartVendorModelID,
 		"prompt":     "a cat",
 		"size":       "16:9",
 		"resolution": "2K",
@@ -221,7 +227,7 @@ func TestBuildRequestMapsStandardFields(t *testing.T) {
 func TestBuildRequestAlwaysWritesSizeAndResolution(t *testing.T) {
 	var req ImageGenerateRequest
 	req.ApplyDefaults()
-	req.Model = "gpt-image-1"
+	req.Model = "gpt-image-1" // 未登记模型：没有 version，但 size/resolution/n 仍要写入
 	req.Prompt = "a cat"
 	req.VendorModelID = "gpt-image-1"
 
@@ -271,7 +277,7 @@ func TestImageGenerateSendsStandardFields(t *testing.T) {
 	req.Model = "gpt-image-2.5-sunburst-ext"
 	req.Prompt = "a cat"
 	req.ImageURLs = []string{"https://a.png"}
-	req.VendorModelID = apimartVersionedImageModel
+	req.VendorModelID = testAPIMartVendorModelID
 	req.ApplyDefaults()
 
 	resp := a.ImageGenerate(context.Background(), req)
@@ -285,8 +291,8 @@ func TestImageGenerateSendsStandardFields(t *testing.T) {
 	if got := received["version"]; got != "sunburst" {
 		t.Errorf("上游收到的 version = %v, want sunburst（请求体=%v）", got, received)
 	}
-	if got := received["model"]; got != apimartVersionedImageModel {
-		t.Errorf("上游收到的 model = %v, want %s", got, apimartVersionedImageModel)
+	if got := received["model"]; got != testAPIMartVendorModelID {
+		t.Errorf("上游收到的 model = %v, want %s", got, testAPIMartVendorModelID)
 	}
 }
 
@@ -307,7 +313,7 @@ func newTestAPIMart(t *testing.T, handler http.HandlerFunc) (*apimart, func()) {
 }
 
 func testImageReq() ImageGenerateRequest {
-	req := ImageGenerateRequest{Model: "m", Prompt: "a cat", VendorModelID: "vendor-m"}
+	req := ImageGenerateRequest{Model: testAPIMartModel, Prompt: "a cat", VendorModelID: testAPIMartVendorModelID}
 	req.ApplyDefaults()
 	return req
 }
@@ -461,14 +467,16 @@ func TestTaskQueryAcceptsWellFormedTaskID(t *testing.T) {
 	}
 }
 
-// 新版 APIMart 返回 202 + data.id，必须与旧版 200 + data[].task_id 一样被受理。
-func TestImageGenerateAccepts202ObjectResponse(t *testing.T) {
+// 上游成功固定是 HTTP 200 + data[].task_id。
+// 同时锁住「不向上游传 Idempotency-Key / X-APIMart-Response-Version」：
+// 带上响应版本头会让上游改用 202 + data.id 的新格式。
+func TestImageGenerateSendsNoVersionOrIdempotencyHeaders(t *testing.T) {
 	var gotVersion, gotIdempotency string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotVersion = r.Header.Get("X-APIMart-Response-Version")
 		gotIdempotency = r.Header.Get("Idempotency-Key")
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprint(w, `{"code":202,"request_id":"req_example","data":{"id":"task_202","object":"generation.task","type":"image","status":"pending","progress":0,"poll_url":"/v1/tasks/task_202"}}`)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":200,"data":[{"status":"submitted","task_id":"task_200"}]}`)
 	}))
 	defer srv.Close()
 
@@ -477,53 +485,95 @@ func TestImageGenerateAccepts202ObjectResponse(t *testing.T) {
 
 	a := &apimart{cfg: Config{BaseURL: srv.URL, APIKey: "test-key"}}
 	resp := a.ImageGenerate(context.Background(), ImageGenerateRequest{
-		Model:          "gpt-image-2.5-flare-ext",
-		Prompt:         "a cat",
-		Size:           "1:1",
-		Resolution:     "1k",
-		VendorModelID:  apimartVersionedImageModel,
-		IdempotencyKey: "task_platform_1",
+		Model:         "gpt-image-2.5-flare-ext",
+		Prompt:        "a cat",
+		Size:          "1:1",
+		Resolution:    "1k",
+		VendorModelID: testAPIMartVendorModelID,
 	})
 
 	if resp.Code != "success" {
 		t.Fatalf("Code = %q, want success (kind %q)", resp.Code, resp.FailureKind)
 	}
-	if resp.Data["taskId"] != "task_202" {
-		t.Errorf("taskId = %v, want task_202", resp.Data["taskId"])
+	if resp.Data["taskId"] != "task_200" {
+		t.Errorf("taskId = %v, want task_200", resp.Data["taskId"])
 	}
-	if gotVersion != apimartResponseVersion {
-		t.Errorf("X-APIMart-Response-Version = %q, want %q", gotVersion, apimartResponseVersion)
+	if gotVersion != "" {
+		t.Errorf("X-APIMart-Response-Version = %q, want 不传", gotVersion)
 	}
-	if gotIdempotency != "task_platform_1" {
-		t.Errorf("Idempotency-Key = %q, want task_platform_1", gotIdempotency)
+	if gotIdempotency != "" {
+		t.Errorf("Idempotency-Key = %q, want 不传", gotIdempotency)
+	}
+}
+
+// 意外出现的 202 不是协议内的成功：上游可能已经建单，只能算结果不确定，
+// 绝不能当成明确拒绝去退款。
+func TestImageGenerateUnexpected202IsUnknown(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"code":202,"data":{"id":"task_202"}}`)
+	})
+	defer cleanup()
+
+	resp := a.ImageGenerate(context.Background(), testImageReq())
+
+	if resp.FailureKind != FailureUnknown {
+		t.Errorf("HTTP 202 必须归类为 %q（不得退款），实际 %q", FailureUnknown, resp.FailureKind)
 	}
 }
 
 func TestAPIMartValidateImageRequest(t *testing.T) {
-	ids16 := make([]string, 16)
-	urls16 := make([]string, 16)
-	for i := 0; i < 16; i++ {
-		ids16[i] = fmt.Sprintf("file_%d", i)
-		urls16[i] = fmt.Sprintf("https://example.com/%d.png", i)
+	fileIDs := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("file_%d", i)
+		}
+		return out
 	}
-	ids17 := append(append([]string(nil), ids16...), "file_17")
-	urls17 := append(append([]string(nil), urls16...), "https://example.com/17.png")
+	urls := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("https://example.com/%d.png", i)
+		}
+		return out
+	}
+
+	ids16, urls16 := fileIDs(16), urls(16)
+	ids17, urls17 := fileIDs(17), urls(17)
+	ids15, urls15 := fileIDs(15), urls(15)
 
 	tests := []struct {
 		name    string
 		req     ImageGenerateRequest
 		wantErr bool
 	}{
-		{"合法比例", ImageGenerateRequest{Prompt: "cat", Size: "16:9", Resolution: "2k"}, false},
-		{"auto 比例被拒绝", ImageGenerateRequest{Prompt: "cat", Size: "auto", Resolution: "4k"}, true},
-		{"16 张 image_ids", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16}, false},
-		{"16 张 image_urls", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls16}, false},
-		{"image_ids 优先于 image_urls", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16, ImageURLs: urls17}, false},
-		{"空 prompt", ImageGenerateRequest{Size: "1:1", Resolution: "1k"}, true},
-		{"非法 size", ImageGenerateRequest{Prompt: "cat", Size: "7:3", Resolution: "1k"}, true},
-		{"非法 resolution", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "8k"}, true},
-		{"17 张 image_ids", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids17}, true},
-		{"17 张 image_urls", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls17}, true},
+		// gpt-image-2.5-ext：10 种比例、16 张参考图、resolution 大写
+		{"2.5 合法比例", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "16:9", Resolution: "2k"}, false},
+		{"2.5 sunburst 变体同样可用", ImageGenerateRequest{Model: "gpt-image-2.5-sunburst-ext", Prompt: "cat", Size: "16:9", Resolution: "2k"}, false},
+		{"2.5 上限 16 张 image_ids", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16}, false},
+		{"2.5 上限 16 张 image_urls", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls16}, false},
+		{"2.5 image_ids 优先于 image_urls", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16, ImageURLs: urls17}, false},
+		{"2.5 不支持 auto", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "auto", Resolution: "4k"}, true},
+		{"2.5 不支持 3:1", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "3:1", Resolution: "4k"}, true},
+		{"2.5 不支持 9:21", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "9:21", Resolution: "1k"}, true},
+		{"2.5 超限 17 张 image_ids", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids17}, true},
+		{"2.5 超限 17 张 image_urls", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls17}, true},
+
+		// gpt-image-2 / gpt-image-2-ext：15 种比例、15 张参考图、resolution 小写
+		{"gpt-image-2 合法比例", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "16:9", Resolution: "2K"}, false},
+		{"gpt-image-2-ext 别名同样可用", ImageGenerateRequest{Model: "gpt-image-2-ext", Prompt: "cat", Size: "3:1", Resolution: "4k"}, false},
+		{"gpt-image-2 支持 9:21", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "9:21", Resolution: "1k"}, false},
+		{"gpt-image-2 上限 15 张 image_ids", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids15}, false},
+		{"gpt-image-2 上限 15 张 image_urls", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls15}, false},
+		{"gpt-image-2 不支持 auto", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "auto", Resolution: "4k"}, true},
+		{"gpt-image-2 超限 16 张 image_ids", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16}, true},
+		{"gpt-image-2 超限 16 张 image_urls", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls16}, true},
+
+		// 通用
+		{"空 prompt", ImageGenerateRequest{Model: testAPIMartModel, Size: "1:1", Resolution: "1k"}, true},
+		{"未登记模型被拒绝", ImageGenerateRequest{Model: "gpt-image-2.5-unknown-ext", Prompt: "cat", Size: "1:1", Resolution: "1k"}, true},
+		{"非法 size", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "7:3", Resolution: "1k"}, true},
+		{"非法 resolution", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1:1", Resolution: "8k"}, true},
 	}
 
 	a := &apimart{}
@@ -534,5 +584,84 @@ func TestAPIMartValidateImageRequest(t *testing.T) {
 				t.Fatalf("ValidateImageRequest() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// gpt-image-2 / gpt-image-2-ext 没有风格版本，请求体不能被塞入 version。
+func TestBuildRequestOmitsVersionForGPTImage2(t *testing.T) {
+	for _, model := range []string{"gpt-image-2", "gpt-image-2-ext"} {
+		body := buildRequest(ImageGenerateRequest{
+			Model:         model,
+			Prompt:        "a cat",
+			Size:          "1:1",
+			Resolution:    "1K",
+			VendorModelID: model,
+		})
+		if _, ok := body["version"]; ok {
+			t.Errorf("%s 的请求体不应包含 version: %v", model, body)
+		}
+	}
+}
+
+// resolution 的大小写按模型转换：gpt-image-2 小写，gpt-image-2.5-ext 大写。
+func TestBuildRequestFormatsResolutionPerModel(t *testing.T) {
+	cases := []struct {
+		model      string
+		resolution string
+		want       string
+	}{
+		{"gpt-image-2", "2K", "2k"},
+		{"gpt-image-2", "4k", "4k"},
+		{"gpt-image-2-ext", "1K", "1k"},
+		{testAPIMartModel, "2k", "2K"},
+		{"gpt-image-2.5-sunburst-ext", "4K", "4K"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.model+"/"+tc.resolution, func(t *testing.T) {
+			body := buildRequest(ImageGenerateRequest{
+				Model:         tc.model,
+				Prompt:        "a cat",
+				Size:          "1:1",
+				Resolution:    tc.resolution,
+				VendorModelID: "vendor-model",
+			})
+			if body["resolution"] != tc.want {
+				t.Errorf("resolution = %v, want %s", body["resolution"], tc.want)
+			}
+		})
+	}
+}
+
+// 模型规格是独立登记的：临时给测试模型换一份更小的 size/参考图集合，
+// 不应影响其他模型的校验结果。
+func TestAPIMartSpecsArePerModel(t *testing.T) {
+	const custom = "test-apimart-custom-model"
+	apimartImageModels[custom] = apimartImageModelSpec{
+		sizes:              []string{"1:1"},
+		resolutions:        []string{"1K"},
+		maxReferenceImages: 1,
+	}
+	defer delete(apimartImageModels, custom)
+
+	a := &apimart{}
+
+	err := a.ValidateImageRequest(ImageGenerateRequest{Model: custom, Prompt: "cat", Size: "1:1", Resolution: "1K"})
+	if err != nil {
+		t.Fatalf("自定义模型合法请求被拒绝: %v", err)
+	}
+
+	// 自定义模型不开放 16:9；同一请求对 gpt-image-2.5 模型仍然合法。
+	if err := a.ValidateImageRequest(ImageGenerateRequest{Model: custom, Prompt: "cat", Size: "16:9", Resolution: "1K"}); err == nil {
+		t.Error("自定义模型的 size 限制未生效")
+	}
+	if err := a.ValidateImageRequest(ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "16:9", Resolution: "1K"}); err != nil {
+		t.Errorf("另一个模型不应受自定义规格影响: %v", err)
+	}
+
+	// 参考图上限同样按模型生效。
+	two := []string{"file_a", "file_b"}
+	if err := a.ValidateImageRequest(ImageGenerateRequest{Model: custom, Prompt: "cat", Size: "1:1", Resolution: "1K", ImageIDs: two}); err == nil {
+		t.Error("自定义模型的参考图上限未生效")
 	}
 }

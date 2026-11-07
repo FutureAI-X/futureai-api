@@ -284,8 +284,6 @@ func ImageGenerate(c *gin.Context) {
 	// 供应商需要同时知道「调用方请求的是哪个模型」（多个模型可能映射到同一个
 	// vendor_model_id，要靠它区分变体）和「该往上游发哪个模型 ID」。
 	req.VendorModelID = vendorModel.VendorModelID
-	// 上游幂等键取平台任务 ID：同一任务的重试使用同一个键，不同任务不会互相覆盖。
-	req.IdempotencyKey = task.TaskID
 
 	submitTimeout := supplier.SubmitTimeout
 	if caps.SubmitTimeout > 0 {
@@ -500,13 +498,6 @@ func marshalRequestBodyFor(tag string, v interface{}) string {
 // （并让调用方必然 402）。超出部分不再计费，仅记日志告警。
 const maxRefImagesPerRequest = 100
 
-// maxRefImageIDs image_ids 单次请求允许的最大参考图张数（去重后）。
-// 与旧 image_urls 路径不同，这里显式拒绝而不是静默封顶：
-// 调用方传了 17 张却只按 16 张计费、17 张全部出图，等于少收钱；
-// 直接 400 让调用方改请求，计费与实际执行永远一致。
-// 与 APIMart 上游单次最多 16 张参考图的限制保持一致。
-const maxRefImageIDs = 16
-
 const (
 	// imageReferenceSignTTL 给上游的参考图预签名有效期。
 	// 文件本身只有 6 小时 TTL，实际有效期还会被剩余时长截断。
@@ -527,12 +518,14 @@ func (e *imageReferenceError) Error() string { return e.message }
 // 规则：image_ids 非空才生效；空数组或缺省时回退 image_urls。
 func useImageFileIDs(ids []string) bool { return len(ids) > 0 }
 
-// validateImageFileIDs 校验 image_ids 的形态与数量。
+// validateImageFileIDs 校验 image_ids 的形态。
 //
 // 必须在计费、幂等查询和任何数据库访问之前调用：参数错误不应产生任务行，
 // 也不应让调用方为一次注定失败的请求付钱。
+//
+// 参考图数量上限属于模型属性，不在这里统一封顶：由供应商侧按 req.Model 的
+// 规格（ImageRequestValidator）在扣费前校验，避免某个模型的上限误伤其他模型。
 func validateImageFileIDs(ids []string) error {
-	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -547,11 +540,6 @@ func validateImageFileIDs(ids []string) error {
 		if len(id) > model.MaxFileIDLen {
 			return errors.New("image_ids 中的 file_id 过长")
 		}
-		seen[id] = struct{}{}
-	}
-	// 上限按去重后计数：同一张图重复出现不该把合法请求顶成 400。
-	if len(seen) > maxRefImageIDs {
-		return fmt.Errorf("image_ids 去重后最多 %d 张", maxRefImageIDs)
 	}
 	return nil
 }

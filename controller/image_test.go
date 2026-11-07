@@ -149,20 +149,15 @@ func TestValidateImageFileIDs(t *testing.T) {
 		return out
 	}
 
-	exact := ids(maxRefImageIDs)
-	tooMany := ids(maxRefImageIDs + 1)
-	// 原始长度超限但去重后恰好等于上限：不应拒绝。
-	dupWithinLimit := append(append([]string(nil), exact...), exact[0], exact[1])
-
 	cases := []struct {
 		name    string
 		ids     []string
 		wantErr bool
 	}{
 		{"nil 合法", nil, false},
-		{"恰好上限", exact, false},
-		{"重复项去重后不超限", dupWithinLimit, false},
-		{"去重后超限", tooMany, true},
+		// 数量上限属于模型属性，由供应商在扣费前按 req.Model 校验，
+		// 这里只做形态校验，不能把某个模型的上限写死成全员上限。
+		{"多张通过形态校验", ids(50), false},
 		{"空元素", []string{"file_a", "   "}, true},
 		{"URL 形式", []string{"https://example.com/a.png"}, true},
 		{"前缀不符", []string{"abc"}, true},

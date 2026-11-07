@@ -36,12 +36,6 @@ type ImageGenerateRequest struct {
 	// 它不是对外标准字段：json:"-" 既让它进不了快照，
 	// 也保证调用方无法通过请求体把它顶掉。
 	VendorModelID string `json:"-"`
-
-	// IdempotencyKey 是平台任务 ID，仅用于向上游透传 Idempotency-Key。
-	// 它与对外请求头里的 Idempotency-Key 不是同一个概念：这里取平台任务 ID，
-	// 保证同一任务的重试使用同一个上游幂等键。json:"-" 保证它不进入快照，
-	// 也不允许调用方通过请求体把它顶掉。
-	IdempotencyKey string `json:"-"`
 }
 
 // 标准字段的默认值：调用方省略时补齐。

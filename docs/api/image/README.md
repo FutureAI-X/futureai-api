@@ -41,7 +41,12 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | 比例 | `16:9`、`1:1` | `resolution` | APIMart 模型 |
 | 像素尺寸 | `1024x1024` | 无 | MOSS 模型 |
 
-APIMart 模型支持 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`，不支持 `auto`。MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省略 `size` 时平台补齐的 `16:9` 不是合法像素尺寸，请求会在扣费前返回 400。`resolution` 只对使用比例尺寸的模型生效，MOSS 模型忽略该字段。
+APIMart 模型的可用比例随模型不同，均不支持 `auto`：
+
+- `gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext`：`1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`；
+- `gpt-image-2` / `gpt-image-2-ext`：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`5:4`、`4:5`、`16:9`、`9:16`、`2:1`、`1:2`、`3:1`、`1:3`、`21:9`、`9:21`。
+
+MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省略 `size` 时平台补齐的 `16:9` 不是合法像素尺寸，请求会在扣费前返回 400。`resolution` 只对使用比例尺寸的模型生效，MOSS 模型忽略该字段。
 
 ## 4 参考图
 
@@ -64,13 +69,13 @@ APIMart 模型支持 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`
 
 | 状态码 | 场景 |
 |---|---|
-| 400 | file_id 形态错误、去重后超过 16 张、不是图片、HEIC/HEIF |
+| 400 | file_id 形态错误、去重后超过模型上限、不是图片、HEIC/HEIF |
 | 404 | 文件不存在、不属于当前用户、用途不符 |
 | 409 | 文件尚未完成处理 |
 | 410 | 文件已过期或剩余有效期不足 30 分钟 |
 | 503 | 文件存储暂不可用 |
 
-APIMart 模型单次最多 16 张参考图；`image_urls` 超过 16 张会在扣费前返回 400。
+参考图上限随模型不同：`gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext` 最多 16 张，`gpt-image-2` / `gpt-image-2-ext` 最多 15 张。超过上限会在扣费前返回 400。
 
 服务端把 `file_id` 解析成短期签名 URL 后交给上游，调用方不需要也不会看到签名地址。HEIC/HEIF 参考图暂不支持，请先转换为 JPG/PNG/WEBP。
 
@@ -193,7 +198,8 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 |---|---|---|---|
 | `moss-image-base-1.0` | 不支持 | 像素尺寸，必填 | [moss-image-base-1.0.md](moss-image-base-1.0.md) |
 | `moss-image-sft-1.0` | 不支持 | 像素尺寸，必填 | [moss-image-sft-1.0.md](moss-image-sft-1.0.md) |
-| `gpt-image-2.5-flare-ext` | 支持 | 比例 + resolution | [gpt-image-2.5-flare-ext.md](gpt-image-2.5-flare-ext.md) |
-| `gpt-image-2.5-sunburst-ext` | 支持 | 比例 + resolution | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
+| `gpt-image-2` / `gpt-image-2-ext` | 支持，最多 15 张 | 比例 + resolution | [gpt-image-2-ext.md](gpt-image-2-ext.md) |
+| `gpt-image-2.5-flare-ext` | 支持，最多 16 张 | 比例 + resolution | [gpt-image-2.5-flare-ext.md](gpt-image-2.5-flare-ext.md) |
+| `gpt-image-2.5-sunburst-ext` | 支持，最多 16 张 | 比例 + resolution | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
 
 模型以管理端实际配置为准。

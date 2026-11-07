@@ -40,85 +40,163 @@ type apimartTaskItem struct {
 	TaskID string `json:"task_id"`
 }
 
-// apimartVersionedImageModel 在 APIMart 侧靠 version 字段区分外观风格的图像模型。
-// 调用方侧的多个模型都映射到这一个 vendor_model_id，因此请求体里的 model
-// 不足以判断调用方要哪个变体，必须回看调用方原始模型名（req.Model）。
-const apimartVersionedImageModel = "gpt-image-2.5-ext"
-
-// apimartImageVersions 调用方模型名 → APIMart version 取值。
-// version 不是 OpenAI 兼容接口的参数，调用方不会传，只能由服务端按模型名补全。
-// 新增映射到 apimartVersionedImageModel 的模型时，必须在这里登记，
-// 漏配会落到 APIMart 的默认值（flare）并打错误日志。
-var apimartImageVersions = map[string]string{
-	"gpt-image-2.5-flare-ext":    "flare",
-	"gpt-image-2.5-sunburst-ext": "sunburst",
+// apimartImageModelSpec 单个平台模型在 APIMart 侧的规格。
+//
+// size 集合、分辨率档位、参考图上限和 version 都是「模型」的属性，而不是
+// 「供应商」的属性：同一个 APIMart 账号下不同模型的上游限制并不相同。
+// 因此这些约束按平台模型名登记在 apimartImageModels，供应商适配层只负责
+// 把查到的规格翻译成上游请求。
+type apimartImageModelSpec struct {
+	// version 上游外观风格版本；空串表示请求体不写该字段。
+	version string
+	// sizes 平台开放给该模型的画幅比例（有序，用于错误提示）。
+	sizes []string
+	// resolutions 平台开放给该模型的分辨率档位（平台统一大写）。
+	resolutions []string
+	// lowercaseResolution 为 true 时，发给上游的 resolution 转成小写。
+	// gpt-image-2 文档要求 1k / 2k / 4k，gpt-image-2.5-ext 要求 1K / 2K / 4K。
+	lowercaseResolution bool
+	// maxReferenceImages 上游单次请求支持的最大参考图张数。
+	maxReferenceImages int
 }
 
-// applyImageVersion 按调用方请求的模型名补齐请求体里的 version 字段。
-// 只有映射到 apimartVersionedImageModel 的模型才需要补；其余模型原样透传。
-func applyImageVersion(body map[string]interface{}, requestedModel string) {
-	if body["model"] != apimartVersionedImageModel {
-		return
-	}
-
-	version, ok := apimartImageVersions[requestedModel]
-	if !ok {
-		common.SysErrorf("[APIMart] 模型 %s 未配置 version 映射，将使用 APIMart 默认值: model=%s",
-			requestedModel, apimartVersionedImageModel)
-		return
-	}
-
-	body["version"] = version
-
-	common.SysLogf("[APIMart] 根据模型 %s 补全 version=%s", requestedModel, version)
-}
-
-const (
-	// apimartResponseVersion 新版响应格式的版本头。
-	// 带上它之后上游会返回 202 + data.id 的结构；不带时仍可能返回旧的
-	// 200 + data[].task_id。两种格式在解析层都兼容。
-	apimartResponseVersion = "2026-07-27"
-
-	// apimartMaxReferenceImages 上游单次请求支持的最大参考图张数。
-	apimartMaxReferenceImages = 16
-)
-
-// apimartSupportedSizes 上游支持且平台开放的画幅比例。
+// apimartImageSizes15 gpt-image-2 / gpt-image-2-ext 支持的画幅比例。
 //
 // 刻意不开放上游的 auto：比例由上游根据画面内容决定，调用方拿不到确定的
 // 输出尺寸，后续按尺寸做的排版、裁切和计费也会变得不可预测。
-var apimartSupportedSizes = map[string]bool{
-	"1:1":  true,
-	"16:9": true,
-	"9:16": true,
-	"4:3":  true,
-	"3:4":  true,
-	"3:2":  true,
-	"2:3":  true,
-	"5:4":  true,
-	"4:5":  true,
-	"21:9": true,
+var apimartImageSizes15 = []string{
+	"1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5",
+	"16:9", "9:16", "2:1", "1:2", "3:1", "1:3", "21:9", "9:21",
 }
 
-// ValidateImageRequest 在扣费前校验 APIMart 的请求约束。
+// apimartImageSizes10 gpt-image-2.5-ext 支持的画幅比例。
+var apimartImageSizes10 = []string{
+	"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9",
+}
+
+// apimartImageResolutions 平台对外统一的分辨率档位。
+// 发往上游时由模型的 lowercaseResolution 决定是否转小写。
+var apimartImageResolutions = []string{"1K", "2K", "4K"}
+
+// apimartImageModels 平台模型名 → APIMart 侧规格。
+//
+// 新增映射到 APIMart 的平台模型时必须在这里登记：未登记的模型会在
+// ValidateImageRequest 阶段被拒绝（fail-closed），避免漏配后用错误的限制放行，
+// 或把请求发到上游才失败。
+//
+// gpt-image-2 与 gpt-image-2-ext 是上游同一个模型的两个名字，平台侧两种
+// 配置都允许，因此都登记。两者的参数完全一致：15 种比例、15 张参考图、
+// resolution 小写。
+var apimartImageModels = map[string]apimartImageModelSpec{
+	"gpt-image-2": {
+		sizes:               apimartImageSizes15,
+		resolutions:         apimartImageResolutions,
+		lowercaseResolution: true,
+		maxReferenceImages:  15,
+	},
+	"gpt-image-2-ext": {
+		sizes:               apimartImageSizes15,
+		resolutions:         apimartImageResolutions,
+		lowercaseResolution: true,
+		maxReferenceImages:  15,
+	},
+	"gpt-image-2.5-flare-ext": {
+		version:            "flare",
+		sizes:              apimartImageSizes10,
+		resolutions:        apimartImageResolutions,
+		maxReferenceImages: 16,
+	},
+	"gpt-image-2.5-sunburst-ext": {
+		version:            "sunburst",
+		sizes:              apimartImageSizes10,
+		resolutions:        apimartImageResolutions,
+		maxReferenceImages: 16,
+	},
+}
+
+// apimartImageSpecFor 查找平台模型的 APIMart 规格。
+func apimartImageSpecFor(modelName string) (apimartImageModelSpec, bool) {
+	spec, ok := apimartImageModels[strings.TrimSpace(modelName)]
+	return spec, ok
+}
+
+// supportsSize 判断模型规格是否开放该画幅比例。
+func (s apimartImageModelSpec) supportsSize(size string) bool {
+	size = strings.TrimSpace(size)
+	for _, allowed := range s.sizes {
+		if size == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// supportsResolution 判断模型规格是否开放该分辨率档位。
+// 平台标准值为大写，但上游不同模型要求的大小写不同，这里按大小写不敏感匹配。
+func (s apimartImageModelSpec) supportsResolution(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	for _, allowed := range s.resolutions {
+		if strings.EqualFold(raw, allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+// formatResolution 把平台统一的档位转换成上游要求的大小写。
+// gpt-image-2 要 1k / 2k / 4k，gpt-image-2.5-ext 要 1K / 2K / 4K。
+func (s apimartImageModelSpec) formatResolution(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw
+	}
+	if s.lowercaseResolution {
+		return strings.ToLower(raw)
+	}
+	return strings.ToUpper(raw)
+}
+
+// applyImageVersion 按平台模型的规格补齐请求体里的 version 字段。
+// 未登记的模型不写 version（校验阶段会拒绝该请求）。
+func applyImageVersion(body map[string]interface{}, requestedModel string) {
+	spec, ok := apimartImageSpecFor(requestedModel)
+	if !ok {
+		common.SysErrorf("[APIMart] 模型 %s 未配置规格，无法补全 version", requestedModel)
+		return
+	}
+	if spec.version == "" {
+		return
+	}
+
+	body["version"] = spec.version
+
+	common.SysLogf("[APIMart] 根据模型 %s 补全 version=%s", requestedModel, spec.version)
+}
+
+// ValidateImageRequest 在扣费前校验平台模型在 APIMart 侧的请求约束。
 func (a *apimart) ValidateImageRequest(req ImageGenerateRequest) error {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return fmt.Errorf("prompt 不能为空")
 	}
-	if !apimartSupportedSizes[strings.TrimSpace(req.Size)] {
-		return fmt.Errorf("size 只支持 1:1、16:9、9:16、4:3、3:4、3:2、2:3、5:4、4:5、21:9")
+
+	spec, ok := apimartImageSpecFor(req.Model)
+	if !ok {
+		return fmt.Errorf("模型 %s 未配置 APIMart 规格，暂不可用", strings.TrimSpace(req.Model))
 	}
-	switch strings.ToLower(strings.TrimSpace(req.Resolution)) {
-	case "1k", "2k", "4k":
-	default:
-		return fmt.Errorf("resolution 只支持 1K、2K、4K")
+
+	if !spec.supportsSize(req.Size) {
+		return fmt.Errorf("size 只支持 %s", strings.Join(spec.sizes, "、"))
 	}
-	return validateAPIMartReferenceCount(req)
+	if !spec.supportsResolution(req.Resolution) {
+		return fmt.Errorf("resolution 只支持 %s", strings.Join(spec.resolutions, "、"))
+	}
+
+	return validateAPIMartReferenceCount(req, spec.maxReferenceImages)
 }
 
-// validateAPIMartReferenceCount 校验实际生效的参考图数组不超过上游上限。
+// validateAPIMartReferenceCount 校验实际生效的参考图数组不超过该模型的上限。
 // 与控制器一致：image_ids 非空时只认它，否则看 image_urls。
-func validateAPIMartReferenceCount(req ImageGenerateRequest) error {
+func validateAPIMartReferenceCount(req ImageGenerateRequest, max int) error {
 	if len(req.ImageIDs) > 0 {
 		seen := make(map[string]struct{}, len(req.ImageIDs))
 		for _, id := range req.ImageIDs {
@@ -126,8 +204,8 @@ func validateAPIMartReferenceCount(req ImageGenerateRequest) error {
 				seen[id] = struct{}{}
 			}
 		}
-		if len(seen) > apimartMaxReferenceImages {
-			return fmt.Errorf("image_ids 去重后最多 %d 张", apimartMaxReferenceImages)
+		if len(seen) > max {
+			return fmt.Errorf("image_ids 去重后最多 %d 张", max)
 		}
 		return nil
 	}
@@ -138,36 +216,27 @@ func validateAPIMartReferenceCount(req ImageGenerateRequest) error {
 			seen[u] = struct{}{}
 		}
 	}
-	if len(seen) > apimartMaxReferenceImages {
-		return fmt.Errorf("image_urls 去重后最多 %d 张", apimartMaxReferenceImages)
+	if len(seen) > max {
+		return fmt.Errorf("image_urls 去重后最多 %d 张", max)
 	}
 	return nil
-}
-
-// normalizeAPIMartResolution 把平台统一的档位再兜底规范化一次。
-//
-// 对外接口统一使用大写（1K / 2K / 4K）。APIMart 上游也使用大写，因此这里是
-// 幂等转换；其它供应商若有不同的大小写要求，应在各自的适配层完成转换。
-func normalizeAPIMartResolution(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return raw
-	}
-	return strings.ToUpper(raw)
 }
 
 // buildRequest 把平台标准字段翻译成 APIMart 的线上请求体。
 //
 // size / resolution 直接写入：默认值已在计费前由 ApplyDefaults 补齐，
-// 传空串上游会当作未指定，反而绕开了默认值。resolution 统一转成上游文档中的
-// 大写档位（1K / 2K / 4K）。image_urls 为空时不写入。平台一次任务只生成一张图，
-// 因此 n 固定为 1。
+// 传空串上游会当作未指定，反而绕开了默认值。resolution 的大小写由模型规格
+// 决定（gpt-image-2 小写、gpt-image-2.5-ext 大写），未登记模型按平台默认大写
+// 兜底（这类请求在 ValidateImageRequest 阶段已被拒绝）。
+// image_urls 为空时不写入。平台一次任务只生成一张图，因此 n 固定为 1。
 func buildRequest(req ImageGenerateRequest) map[string]interface{} {
+	spec, _ := apimartImageSpecFor(req.Model)
+
 	body := map[string]interface{}{
 		"model":      req.VendorModelID,
 		"prompt":     req.Prompt,
 		"size":       strings.TrimSpace(req.Size),
-		"resolution": normalizeAPIMartResolution(req.Resolution),
+		"resolution": spec.formatResolution(req.Resolution),
 		"n":          1,
 	}
 	if len(req.ImageURLs) > 0 {
@@ -205,10 +274,9 @@ func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) I
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", a.cfg.APIKey))
-	httpReq.Header.Set("X-APIMart-Response-Version", apimartResponseVersion)
-	if req.IdempotencyKey != "" {
-		httpReq.Header.Set("Idempotency-Key", req.IdempotencyKey)
-	}
+	// 刻意不传 Idempotency-Key 与 X-APIMart-Response-Version：
+	// 不带响应版本头时上游固定返回 200 + data[].task_id；
+	// 平台自身已按 Idempotency-Key 做任务级去重，不需要上游再提供一层。
 
 	// 发送请求
 	resp, err := common.OutboundHTTPClient().Do(httpReq)
@@ -229,10 +297,10 @@ func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) I
 		return failUnknown
 	}
 
-	// HTTP 200 与 202 都表示已受理：旧格式返回 200，新格式返回 202。
-	// 4xx 是上游明确拒绝，可以退款；5xx 可能来自上游前面的网关，
-	// 请求或许已经落到上游并建了任务，只能算不确定。
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+	// 不传响应版本头时，成功固定返回 HTTP 200。
+	// 4xx 是上游明确拒绝，可以退款；其余（5xx、意外的 202 等）可能来自上游
+	// 前面的网关或协议变动，请求或许已经落到上游并建了任务，只能算不确定。
+	if resp.StatusCode != http.StatusOK {
 		common.SysErrorf("[APIMart] HTTP状态码异常: %d, 响应: %s", resp.StatusCode, truncate(string(respBody), 500))
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return failRejected
@@ -249,13 +317,12 @@ func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) I
 		return failUnknown
 	}
 
-	// code 非 200 / 202：拿到了结构完整的业务响应且上游自述失败，可以退款。
-	if apiResp.Code != http.StatusOK && apiResp.Code != http.StatusAccepted {
+	// code 非 200：拿到了结构完整的业务响应且上游自述失败，可以退款。
+	if apiResp.Code != http.StatusOK {
 		common.SysErrorf("[APIMart] 业务code异常: %d, 响应: %s", apiResp.Code, truncate(string(respBody), 500))
 		return failRejected
 	}
 
-	// 新版响应 data 是对象（含 id），旧版是数组（含 task_id）。
 	// 走到这里上游已经返回成功，只是任务 ID 取不到——任务很可能已经建了，
 	// 不能退款，否则就是「平台付钱、用户免费」。
 	taskID, err := apimartTaskID(apiResp.Data)
@@ -275,30 +342,17 @@ func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) I
 }
 
 // apimartTaskID 从响应 data 中提取任务 ID。
-// 新版响应 data 是对象（id），旧版是数组（task_id）；两种格式都兼容。
+// 不传响应版本头时 data 固定是数组，元素含 task_id。
 func apimartTaskID(data json.RawMessage) (string, error) {
 	var tasks []apimartTaskItem
-	if err := json.Unmarshal(data, &tasks); err == nil {
-		for _, task := range tasks {
-			if id := strings.TrimSpace(task.TaskID); id != "" {
-				return id, nil
-			}
-		}
+	if err := json.Unmarshal(data, &tasks); err != nil {
+		return "", fmt.Errorf("data 不是任务数组: %w", err)
 	}
-
-	var obj struct {
-		ID     string `json:"id"`
-		TaskID string `json:"task_id"`
-	}
-	if err := json.Unmarshal(data, &obj); err == nil {
-		if id := strings.TrimSpace(obj.ID); id != "" {
-			return id, nil
-		}
-		if id := strings.TrimSpace(obj.TaskID); id != "" {
+	for _, task := range tasks {
+		if id := strings.TrimSpace(task.TaskID); id != "" {
 			return id, nil
 		}
 	}
-
 	return "", fmt.Errorf("data 中缺少任务 ID")
 }
 

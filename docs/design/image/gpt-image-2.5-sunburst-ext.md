@@ -23,31 +23,30 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 ## 4 入参校验
 
-与 flare 版本相同。APIMart 通过 `ImageRequestValidator` 校验提示词、画幅、分辨率和参考图数量：
+与 flare 版本相同。APIMart 通过 `ImageRequestValidator`，按 `apimartImageModels[req.Model]` 的模型规格校验提示词、画幅、分辨率和参考图数量：
 
+- 模型必须已在 `apimartImageModels` 中登记，未登记直接拒绝；
 - `prompt` 非空；
 - `size` 为 10 种比例之一；上游支持的 `auto` 刻意不开放，避免输出尺寸不确定；
-- `resolution` 为 `1K`、`2K`、`4K`；
-- 参考图去重后最多 16 张。
+- `resolution` 为 `1K`、`2K`、`4K`（按模型规格转成大写后发给上游）；
+- 参考图去重后最多 16 张（上限随模型规格走，不是供应商统一常量）。
 
 校验失败在扣费前返回 400。
 
 ## 5 请求体转换
 
-`buildRequest` 写入 `model`、`prompt`、`size`、`resolution`、`n=1`，参考图非空时写入 `image_urls`。`resolution` 统一转成大写，平台模型名映射为 `version=sunburst`。
+`buildRequest` 写入 `model`、`prompt`、`size`、`resolution`、`n=1`，参考图非空时写入 `image_urls`。`resolution` 按模型规格转成大写（`1K` / `2K` / `4K`），平台模型名映射为 `version=sunburst`。
 
-两个 APIMart 模型共用供应商模型 `gpt-image-2.5-ext`。`applyImageVersion` 根据调用方原始模型名补全 `version`，映射表在 `supplier/apimart.go` 的 `apimartImageVersions` 中维护。
+两个 APIMart 模型共用供应商模型 `gpt-image-2.5-ext`。`applyImageVersion` 根据调用方原始模型名查 `apimartImageModels`，取规格里的 `version` 补全请求体（本模型 → `version=sunburst`）。该表同时维护每个模型的 size 集合、分辨率档位与大小写、参考图上限。
 
 ## 6 提交方式与超时
 
-与 flare 版本相同：使用 `common.OutboundHTTPClient`，提交超时 30 秒。请求头包含 `X-APIMart-Response-Version: 2026-07-27`，并在有平台任务 ID 时携带 `Idempotency-Key`。
-
-上游可能返回 HTTP 202 + `data.id`，也可能返回 HTTP 200 + `data[].task_id`，解析层都兼容。
+与 flare 版本相同：使用 `common.OutboundHTTPClient`，提交超时 30 秒。请求刻意不传 `Idempotency-Key` 和 `X-APIMart-Response-Version`，上游成功时固定返回 HTTP 200 + `data[].task_id`。
 
 | 场景 | 失败性质 | 处理 |
 |---|---|---|
-| 4xx、业务 `code` 不是 200/202、请求未发出 | `FailureRejected` | 退款 |
-| 5xx、超时、连接中断、响应读取失败 | `FailureUnknown` | 不退款，转 `unknown` |
+| 4xx、业务 `code` 不是 200、请求未发出 | `FailureRejected` | 退款 |
+| 5xx、超时、连接中断、响应读取失败、非预期的 202 | `FailureUnknown` | 不退款，转 `unknown` |
 | 缺少任务 ID | `FailureUnknown` | 不退款，转 `unknown` |
 
 ## 7 任务状态与对账
@@ -84,6 +83,6 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 |---|---|
 | 供应商实现 | `supplier/apimart.go` |
 | 供应商单元测试 | `supplier/apimart_test.go` |
-| 版本映射 | `supplier/apimart.go` 的 `apimartImageVersions` |
+| 模型规格（size / resolution / 参考图上限 / version） | `supplier/apimart.go` 的 `apimartImageModels` |
 | 控制器计费与参考图 | `controller/image.go` |
 | 任务状态与对账 | `model/task.go`、`controller/image.go` |
