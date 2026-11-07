@@ -569,6 +569,19 @@ func TestAPIMartValidateImageRequest(t *testing.T) {
 		{"gpt-image-2 超限 16 张 image_ids", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16}, true},
 		{"gpt-image-2 超限 16 张 image_urls", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls16}, true},
 
+		// gpt-image-2 / gpt-image-2-ext：同时接受像素尺寸
+		{"gpt-image-2 合法像素 1:1", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1024x1024", Resolution: "2K"}, false},
+		{"gpt-image-2-ext 合法像素 16:9", ImageGenerateRequest{Model: "gpt-image-2-ext", Prompt: "cat", Size: "2560x1440", Resolution: "2K"}, false},
+		{"gpt-image-2 像素面积上限", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "3840x2160", Resolution: "4K"}, false},
+		{"gpt-image-2 正方形面积上限", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "2880x2880", Resolution: "4K"}, false},
+		{"gpt-image-2 像素比例下限", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "512x1536", Resolution: "1K"}, false},
+		{"gpt-image-2 像素非 16 倍数", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1000x1000", Resolution: "1K"}, true},
+		{"gpt-image-2 像素超过最大边长", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "4096x1024", Resolution: "1K"}, true},
+		{"gpt-image-2 像素超过总面积", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "2896x2896", Resolution: "1K"}, true},
+		{"gpt-image-2 像素比例过窄", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "512x1552", Resolution: "1K"}, true},
+		{"gpt-image-2 像素比例过宽", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1552x512", Resolution: "1K"}, true},
+		{"gpt-image-2.5 拒绝像素", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1024x1024", Resolution: "1K"}, true},
+
 		// 通用
 		{"空 prompt", ImageGenerateRequest{Model: testAPIMartModel, Size: "1:1", Resolution: "1k"}, true},
 		{"未登记模型被拒绝", ImageGenerateRequest{Model: "gpt-image-2.5-unknown-ext", Prompt: "cat", Size: "1:1", Resolution: "1k"}, true},
@@ -638,7 +651,7 @@ func TestBuildRequestFormatsResolutionPerModel(t *testing.T) {
 func TestAPIMartSpecsArePerModel(t *testing.T) {
 	const custom = "test-apimart-custom-model"
 	apimartImageModels[custom] = apimartImageModelSpec{
-		sizes:              []string{"1:1"},
+		sizeRule:           SizeRule{AllowRatio: true, Ratios: []string{"1:1"}},
 		resolutions:        []string{"1K"},
 		maxReferenceImages: 1,
 	}

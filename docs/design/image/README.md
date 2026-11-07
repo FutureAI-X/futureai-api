@@ -44,10 +44,12 @@
 |---|---|---|
 | `BackgroundSubmit` | `false` | 为 `true` 时控制器不在 handler 内等待上游 |
 | `SupportsReferenceImages` | `true` | 为 `false` 时忽略参考图，且不计参考图费用 |
-| `RequiresPixelSize` | `false` | 为 `true` 时 `size` 必须是像素尺寸 |
+| `RequiresPixelSize` | `false` | 供应商级声明，控制器不据此校验；模型级 `size` 约束见 `SizeRule` |
 | `SubmitTimeout` | `0` | 为 `0` 时使用包级 `SubmitTimeout`，否则使用声明值 |
 
 请求预校验通过可选接口 `ImageRequestValidator` 实现。控制器在扣费、建任务和调用上游之前调用它，返回错误时直接 400。
+
+图像模型的 `size` 校验按模型规格 `SizeRule`（`supplier/size.go`）执行：调用方根据模型能力自行选择比例或像素写法，平台只校验格式与取值，不做比例与像素之间的换算。
 
 ## 5 计费
 

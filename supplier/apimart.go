@@ -42,15 +42,15 @@ type apimartTaskItem struct {
 
 // apimartImageModelSpec 单个平台模型在 APIMart 侧的规格。
 //
-// size 集合、分辨率档位、参考图上限和 version 都是「模型」的属性，而不是
+// size 规则、分辨率档位、参考图上限和 version 都是「模型」的属性，而不是
 // 「供应商」的属性：同一个 APIMart 账号下不同模型的上游限制并不相同。
 // 因此这些约束按平台模型名登记在 apimartImageModels，供应商适配层只负责
 // 把查到的规格翻译成上游请求。
 type apimartImageModelSpec struct {
 	// version 上游外观风格版本；空串表示请求体不写该字段。
 	version string
-	// sizes 平台开放给该模型的画幅比例（有序，用于错误提示）。
-	sizes []string
+	// sizeRule 平台开放给该模型的 size 格式与取值约束。
+	sizeRule SizeRule
 	// resolutions 平台开放给该模型的分辨率档位（平台统一大写）。
 	resolutions []string
 	// lowercaseResolution 为 true 时，发给上游的 resolution 转成小写。
@@ -78,6 +78,21 @@ var apimartImageSizes10 = []string{
 // 发往上游时由模型的 lowercaseResolution 决定是否转小写。
 var apimartImageResolutions = []string{"1K", "2K", "4K"}
 
+// apimartPixelRule 接受像素尺寸的 APIMart 模型的约束。
+//
+// 上游要求：宽高都是 16 的倍数；宽高比在 1:3 到 3:1 之间；
+// 任意一边不超过 3840；总像素不超过 3840×2160。
+// 超过 2560×1440 属于上游的实验性支持，平台不拒绝，只在文档中标注。
+var apimartPixelRule = PixelRule{
+	Step:            16,
+	MaxSide:         3840,
+	MaxPixels:       3840 * 2160,
+	MinAspectWidth:  1,
+	MinAspectHeight: 3,
+	MaxAspectWidth:  3,
+	MaxAspectHeight: 1,
+}
+
 // apimartImageModels 平台模型名 → APIMart 侧规格。
 //
 // 新增映射到 APIMart 的平台模型时必须在这里登记：未登记的模型会在
@@ -85,30 +100,46 @@ var apimartImageResolutions = []string{"1K", "2K", "4K"}
 // 或把请求发到上游才失败。
 //
 // gpt-image-2 与 gpt-image-2-ext 是上游同一个模型的两个名字，平台侧两种
-// 配置都允许，因此都登记。两者的参数完全一致：15 种比例、15 张参考图、
-// resolution 小写。
+// 配置都允许，因此都登记。两者参数完全一致：15 种比例或像素尺寸、
+// 15 张参考图、resolution 小写。gpt-image-2.5 系列只接受比例。
 var apimartImageModels = map[string]apimartImageModelSpec{
 	"gpt-image-2": {
-		sizes:               apimartImageSizes15,
+		sizeRule: SizeRule{
+			AllowRatio:  true,
+			AllowPixels: true,
+			Ratios:      apimartImageSizes15,
+			Pixels:      &apimartPixelRule,
+		},
 		resolutions:         apimartImageResolutions,
 		lowercaseResolution: true,
 		maxReferenceImages:  15,
 	},
 	"gpt-image-2-ext": {
-		sizes:               apimartImageSizes15,
+		sizeRule: SizeRule{
+			AllowRatio:  true,
+			AllowPixels: true,
+			Ratios:      apimartImageSizes15,
+			Pixels:      &apimartPixelRule,
+		},
 		resolutions:         apimartImageResolutions,
 		lowercaseResolution: true,
 		maxReferenceImages:  15,
 	},
 	"gpt-image-2.5-flare-ext": {
-		version:            "flare",
-		sizes:              apimartImageSizes10,
+		version: "flare",
+		sizeRule: SizeRule{
+			AllowRatio: true,
+			Ratios:     apimartImageSizes10,
+		},
 		resolutions:        apimartImageResolutions,
 		maxReferenceImages: 16,
 	},
 	"gpt-image-2.5-sunburst-ext": {
-		version:            "sunburst",
-		sizes:              apimartImageSizes10,
+		version: "sunburst",
+		sizeRule: SizeRule{
+			AllowRatio: true,
+			Ratios:     apimartImageSizes10,
+		},
 		resolutions:        apimartImageResolutions,
 		maxReferenceImages: 16,
 	},
@@ -118,17 +149,6 @@ var apimartImageModels = map[string]apimartImageModelSpec{
 func apimartImageSpecFor(modelName string) (apimartImageModelSpec, bool) {
 	spec, ok := apimartImageModels[strings.TrimSpace(modelName)]
 	return spec, ok
-}
-
-// supportsSize 判断模型规格是否开放该画幅比例。
-func (s apimartImageModelSpec) supportsSize(size string) bool {
-	size = strings.TrimSpace(size)
-	for _, allowed := range s.sizes {
-		if size == allowed {
-			return true
-		}
-	}
-	return false
 }
 
 // supportsResolution 判断模型规格是否开放该分辨率档位。
@@ -184,8 +204,8 @@ func (a *apimart) ValidateImageRequest(req ImageGenerateRequest) error {
 		return fmt.Errorf("模型 %s 未配置 APIMart 规格，暂不可用", strings.TrimSpace(req.Model))
 	}
 
-	if !spec.supportsSize(req.Size) {
-		return fmt.Errorf("size 只支持 %s", strings.Join(spec.sizes, "、"))
+	if err := spec.sizeRule.Validate(req.Size); err != nil {
+		return err
 	}
 	if !spec.supportsResolution(req.Resolution) {
 		return fmt.Errorf("resolution 只支持 %s", strings.Join(spec.resolutions, "、"))

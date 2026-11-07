@@ -34,19 +34,30 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 ## 3 size 的两种格式
 
-`size` 支持两种写法，使用哪一种由模型决定。
+`size` 支持两种写法，具体由模型决定：调用方按模型能力选择一种传入，平台只做校验，不做比例与像素之间的换算。
 
 | 写法 | 示例 | 配合字段 | 当前模型 |
 |---|---|---|---|
-| 比例 | `16:9`、`1:1` | `resolution` | APIMart 模型 |
-| 像素尺寸 | `1024x1024` | 无 | MOSS 模型 |
+| 比例 | `16:9`、`1:1` | `resolution` | `gpt-image-2.5-*`、`gpt-image-2` / `gpt-image-2-ext` |
+| 像素尺寸 | `1024x1024` | 无 | MOSS 模型、`gpt-image-2` / `gpt-image-2-ext` |
+
+- `gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext`：只接受比例；
+- `gpt-image-2` / `gpt-image-2-ext`：比例或像素均可；
+- MOSS 模型：只接受像素。
 
 APIMart 模型的可用比例随模型不同，均不支持 `auto`：
 
 - `gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext`：`1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`；
 - `gpt-image-2` / `gpt-image-2-ext`：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`5:4`、`4:5`、`16:9`、`9:16`、`2:1`、`1:2`、`3:1`、`1:3`、`21:9`、`9:21`。
 
-MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省略 `size` 时平台补齐的 `16:9` 不是合法像素尺寸，请求会在扣费前返回 400。`resolution` 只对使用比例尺寸的模型生效，MOSS 模型忽略该字段。
+`gpt-image-2` / `gpt-image-2-ext` 接受像素尺寸时，需同时满足：
+
+- 宽高都是 `16` 的倍数；
+- 宽高比在 `1:3` 到 `3:1` 之间；
+- 任意一边不超过 `3840`；
+- 总像素不超过 `3840×2160`。超过 `2560×1440` 属于上游实验性支持，平台仍会接受。
+
+MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省略 `size` 时平台补齐的 `16:9` 不是合法像素尺寸，MOSS 请求会在扣费前返回 400。`resolution` 只对使用比例尺寸的模型生效，MOSS 模型忽略该字段。
 
 ## 4 参考图
 
@@ -198,7 +209,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 |---|---|---|---|
 | `moss-image-base-1.0` | 不支持 | 像素尺寸，必填 | [moss-image-base-1.0.md](moss-image-base-1.0.md) |
 | `moss-image-sft-1.0` | 不支持 | 像素尺寸，必填 | [moss-image-sft-1.0.md](moss-image-sft-1.0.md) |
-| `gpt-image-2` / `gpt-image-2-ext` | 支持，最多 15 张 | 比例 + resolution | [gpt-image-2-ext.md](gpt-image-2-ext.md) |
+| `gpt-image-2` / `gpt-image-2-ext` | 支持，最多 15 张 | 比例或像素 + resolution | [gpt-image-2-ext.md](gpt-image-2-ext.md) |
 | `gpt-image-2.5-flare-ext` | 支持，最多 16 张 | 比例 + resolution | [gpt-image-2.5-flare-ext.md](gpt-image-2.5-flare-ext.md) |
 | `gpt-image-2.5-sunburst-ext` | 支持，最多 16 张 | 比例 + resolution | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
 
