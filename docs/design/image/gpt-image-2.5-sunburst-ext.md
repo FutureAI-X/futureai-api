@@ -23,23 +23,32 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 ## 4 入参校验
 
-与 flare 版本相同。平台标准字段校验与参考图校验由控制器统一完成，APIMart 没有供应商特有的请求预校验。
+与 flare 版本相同。APIMart 通过 `ImageRequestValidator` 校验提示词、画幅、分辨率和参考图数量：
+
+- `prompt` 非空；
+- `size` 为 10 种比例之一；上游支持的 `auto` 刻意不开放，避免输出尺寸不确定；
+- `resolution` 为 `1K`、`2K`、`4K`；
+- 参考图去重后最多 16 张。
+
+校验失败在扣费前返回 400。
 
 ## 5 请求体转换
 
-`buildRequest` 写入 `model`、`prompt`、`size`、`resolution`，参考图非空时写入 `image_urls`。平台模型名映射为 `version=sunburst`。
+`buildRequest` 写入 `model`、`prompt`、`size`、`resolution`、`n=1`，参考图非空时写入 `image_urls`。`resolution` 统一转成大写，平台模型名映射为 `version=sunburst`。
 
 两个 APIMart 模型共用供应商模型 `gpt-image-2.5-ext`。`applyImageVersion` 根据调用方原始模型名补全 `version`，映射表在 `supplier/apimart.go` 的 `apimartImageVersions` 中维护。
 
 ## 6 提交方式与超时
 
-与 flare 版本相同：使用 `common.OutboundHTTPClient`，提交超时 30 秒。
+与 flare 版本相同：使用 `common.OutboundHTTPClient`，提交超时 30 秒。请求头包含 `X-APIMart-Response-Version: 2026-07-27`，并在有平台任务 ID 时携带 `Idempotency-Key`。
+
+上游可能返回 HTTP 202 + `data.id`，也可能返回 HTTP 200 + `data[].task_id`，解析层都兼容。
 
 | 场景 | 失败性质 | 处理 |
 |---|---|---|
-| 4xx、业务 `code != 200`、请求未发出 | `FailureRejected` | 退款 |
+| 4xx、业务 `code` 不是 200/202、请求未发出 | `FailureRejected` | 退款 |
 | 5xx、超时、连接中断、响应读取失败 | `FailureUnknown` | 不退款，转 `unknown` |
-| 缺少 `task_id` | `FailureUnknown` | 不退款，转 `unknown` |
+| 缺少任务 ID | `FailureUnknown` | 不退款，转 `unknown` |
 
 ## 7 任务状态与对账
 

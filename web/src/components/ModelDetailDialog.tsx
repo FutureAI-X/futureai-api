@@ -19,7 +19,7 @@ interface ModelDetailDialogProps {
   onClose: () => void
 }
 
-// 条件组合的可读形式，如 "resolution=1k & quality=high"
+// 条件组合的可读形式，如 "resolution=1K & quality=high"
 function formatConditions(conditions?: { param_path: string; param_value: string }[]): string {
   const parts = (conditions || []).map((c) => `${c.param_path}=${c.param_value}`)
   return parts.length > 0 ? parts.join(' & ') : '无'

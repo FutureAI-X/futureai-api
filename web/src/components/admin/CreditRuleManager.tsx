@@ -413,7 +413,7 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                                 type='text'
                                 value={cond.param_value}
                                 onChange={(e) => updateCondition(index, condIndex, 'param_value', e.target.value)}
-                                placeholder='如: 1k'
+                                placeholder='如: 1K'
                                 className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
                               />
                               <div className='flex justify-center'>

@@ -36,25 +36,37 @@ type ImageGenerateRequest struct {
 	// 它不是对外标准字段：json:"-" 既让它进不了快照，
 	// 也保证调用方无法通过请求体把它顶掉。
 	VendorModelID string `json:"-"`
+
+	// IdempotencyKey 是平台任务 ID，仅用于向上游透传 Idempotency-Key。
+	// 它与对外请求头里的 Idempotency-Key 不是同一个概念：这里取平台任务 ID，
+	// 保证同一任务的重试使用同一个上游幂等键。json:"-" 保证它不进入快照，
+	// 也不允许调用方通过请求体把它顶掉。
+	IdempotencyKey string `json:"-"`
 }
 
 // 标准字段的默认值：调用方省略时补齐。
 const (
-	DefaultResolution = "1k"
+	DefaultResolution = "1K"
 	DefaultSize       = "16:9"
 )
 
-// ApplyDefaults 补齐调用方省略的标准字段。
+// ApplyDefaults 补齐调用方省略的标准字段，并把分辨率统一成大写。
 //
 // 必须在计费之前调用。计费条件匹配的是补齐后的值，若拖到供应商侧再补，
-// 省略 resolution 的请求会按基础积分收费、实际却按 1k 出图——价格与生成结果不符。
+// 省略 resolution 的请求会按基础积分收费、实际却按 1K 出图——价格与生成结果不符。
 // 供应商实现因此可以直接认为 size / resolution 已经就绪。
+//
+// 对外统一使用 1K / 2K / 4K；小写输入会被归一化为大写，供应商适配层再按
+// 各自上游的要求转换。
 func (r *ImageGenerateRequest) ApplyDefaults() {
-	if r.Resolution == "" {
-		r.Resolution = DefaultResolution
-	}
+	r.Size = strings.TrimSpace(r.Size)
 	if r.Size == "" {
 		r.Size = DefaultSize
+	}
+
+	r.Resolution = strings.ToUpper(strings.TrimSpace(r.Resolution))
+	if r.Resolution == "" {
+		r.Resolution = DefaultResolution
 	}
 }
 
@@ -83,12 +95,15 @@ func IsCreditParamName(name string) bool {
 // 只列字符串字段：image_urls 是数组，按约定永远命中不了参数组合条件
 // （与文档中「条件仅支持顶层字符串参数」一致），因此不参与匹配。
 // 键必须与 creditParamNames 一致。
+//
+// size / resolution 按平台规范做去空白归一化。分辨率统一为大写（1K / 2K / 4K），
+// 与对外接口保持一致；size 统一为小写，避免 1024X1024 与 1024x1024 被当成两个值。
 func (r ImageGenerateRequest) CreditParams() map[string]string {
 	return map[string]string{
 		"model":      r.Model,
 		"prompt":     r.Prompt,
-		"size":       r.Size,
-		"resolution": r.Resolution,
+		"size":       strings.ToLower(strings.TrimSpace(r.Size)),
+		"resolution": strings.ToUpper(strings.TrimSpace(r.Resolution)),
 	}
 }
 

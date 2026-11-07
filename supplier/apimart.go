@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"regexp"
+	"strings"
 
 	"github.com/FutureAI-X/futureai-api/common"
 )
@@ -72,16 +73,102 @@ func applyImageVersion(body map[string]interface{}, requestedModel string) {
 	common.SysLogf("[APIMart] 根据模型 %s 补全 version=%s", requestedModel, version)
 }
 
+const (
+	// apimartResponseVersion 新版响应格式的版本头。
+	// 带上它之后上游会返回 202 + data.id 的结构；不带时仍可能返回旧的
+	// 200 + data[].task_id。两种格式在解析层都兼容。
+	apimartResponseVersion = "2026-07-27"
+
+	// apimartMaxReferenceImages 上游单次请求支持的最大参考图张数。
+	apimartMaxReferenceImages = 16
+)
+
+// apimartSupportedSizes 上游支持且平台开放的画幅比例。
+//
+// 刻意不开放上游的 auto：比例由上游根据画面内容决定，调用方拿不到确定的
+// 输出尺寸，后续按尺寸做的排版、裁切和计费也会变得不可预测。
+var apimartSupportedSizes = map[string]bool{
+	"1:1":  true,
+	"16:9": true,
+	"9:16": true,
+	"4:3":  true,
+	"3:4":  true,
+	"3:2":  true,
+	"2:3":  true,
+	"5:4":  true,
+	"4:5":  true,
+	"21:9": true,
+}
+
+// ValidateImageRequest 在扣费前校验 APIMart 的请求约束。
+func (a *apimart) ValidateImageRequest(req ImageGenerateRequest) error {
+	if strings.TrimSpace(req.Prompt) == "" {
+		return fmt.Errorf("prompt 不能为空")
+	}
+	if !apimartSupportedSizes[strings.TrimSpace(req.Size)] {
+		return fmt.Errorf("size 只支持 1:1、16:9、9:16、4:3、3:4、3:2、2:3、5:4、4:5、21:9")
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Resolution)) {
+	case "1k", "2k", "4k":
+	default:
+		return fmt.Errorf("resolution 只支持 1K、2K、4K")
+	}
+	return validateAPIMartReferenceCount(req)
+}
+
+// validateAPIMartReferenceCount 校验实际生效的参考图数组不超过上游上限。
+// 与控制器一致：image_ids 非空时只认它，否则看 image_urls。
+func validateAPIMartReferenceCount(req ImageGenerateRequest) error {
+	if len(req.ImageIDs) > 0 {
+		seen := make(map[string]struct{}, len(req.ImageIDs))
+		for _, id := range req.ImageIDs {
+			if id = strings.TrimSpace(id); id != "" {
+				seen[id] = struct{}{}
+			}
+		}
+		if len(seen) > apimartMaxReferenceImages {
+			return fmt.Errorf("image_ids 去重后最多 %d 张", apimartMaxReferenceImages)
+		}
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(req.ImageURLs))
+	for _, u := range req.ImageURLs {
+		if u = strings.TrimSpace(u); u != "" {
+			seen[u] = struct{}{}
+		}
+	}
+	if len(seen) > apimartMaxReferenceImages {
+		return fmt.Errorf("image_urls 去重后最多 %d 张", apimartMaxReferenceImages)
+	}
+	return nil
+}
+
+// normalizeAPIMartResolution 把平台统一的档位再兜底规范化一次。
+//
+// 对外接口统一使用大写（1K / 2K / 4K）。APIMart 上游也使用大写，因此这里是
+// 幂等转换；其它供应商若有不同的大小写要求，应在各自的适配层完成转换。
+func normalizeAPIMartResolution(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw
+	}
+	return strings.ToUpper(raw)
+}
+
 // buildRequest 把平台标准字段翻译成 APIMart 的线上请求体。
 //
 // size / resolution 直接写入：默认值已在计费前由 ApplyDefaults 补齐，
-// 传空串上游会当作未指定，反而绕开了默认值。image_urls 为空时不写入。
+// 传空串上游会当作未指定，反而绕开了默认值。resolution 统一转成上游文档中的
+// 大写档位（1K / 2K / 4K）。image_urls 为空时不写入。平台一次任务只生成一张图，
+// 因此 n 固定为 1。
 func buildRequest(req ImageGenerateRequest) map[string]interface{} {
 	body := map[string]interface{}{
 		"model":      req.VendorModelID,
 		"prompt":     req.Prompt,
-		"size":       req.Size,
-		"resolution": req.Resolution,
+		"size":       strings.TrimSpace(req.Size),
+		"resolution": normalizeAPIMartResolution(req.Resolution),
+		"n":          1,
 	}
 	if len(req.ImageURLs) > 0 {
 		body["image_urls"] = req.ImageURLs
@@ -118,6 +205,10 @@ func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) I
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", a.cfg.APIKey))
+	httpReq.Header.Set("X-APIMart-Response-Version", apimartResponseVersion)
+	if req.IdempotencyKey != "" {
+		httpReq.Header.Set("Idempotency-Key", req.IdempotencyKey)
+	}
 
 	// 发送请求
 	resp, err := common.OutboundHTTPClient().Do(httpReq)
@@ -138,10 +229,10 @@ func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) I
 		return failUnknown
 	}
 
-	// HTTP 状态码非 200。
+	// HTTP 200 与 202 都表示已受理：旧格式返回 200，新格式返回 202。
 	// 4xx 是上游明确拒绝，可以退款；5xx 可能来自上游前面的网关，
 	// 请求或许已经落到上游并建了任务，只能算不确定。
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		common.SysErrorf("[APIMart] HTTP状态码异常: %d, 响应: %s", resp.StatusCode, truncate(string(respBody), 500))
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return failRejected
@@ -158,33 +249,57 @@ func (a *apimart) ImageGenerate(ctx context.Context, req ImageGenerateRequest) I
 		return failUnknown
 	}
 
-	// code 非 200：拿到了结构完整的业务响应且上游自述失败，可以退款
-	if apiResp.Code != 200 {
+	// code 非 200 / 202：拿到了结构完整的业务响应且上游自述失败，可以退款。
+	if apiResp.Code != http.StatusOK && apiResp.Code != http.StatusAccepted {
 		common.SysErrorf("[APIMart] 业务code异常: %d, 响应: %s", apiResp.Code, truncate(string(respBody), 500))
 		return failRejected
 	}
 
-	// 解析 data 数组，提取第一个元素的 task_id。
-	// 走到这里上游已经返回成功，只是 task_id 取不到——任务很可能已经建了，
+	// 新版响应 data 是对象（含 id），旧版是数组（含 task_id）。
+	// 走到这里上游已经返回成功，只是任务 ID 取不到——任务很可能已经建了，
 	// 不能退款，否则就是「平台付钱、用户免费」。
-	var tasks []apimartTaskItem
-	if err := json.Unmarshal(apiResp.Data, &tasks); err != nil {
-		common.SysErrorf("[APIMart] data字段解析失败(结果不确定，不得退款): %v, data: %s", err, truncate(string(apiResp.Data), 500))
-		return failUnknown
-	}
-	if len(tasks) == 0 || tasks[0].TaskID == "" {
-		common.SysErrorf("[APIMart] data数组为空或缺少 task_id(结果不确定，不得退款): %s", truncate(string(apiResp.Data), 500))
+	taskID, err := apimartTaskID(apiResp.Data)
+	if err != nil {
+		common.SysErrorf("[APIMart] 响应中缺少任务ID(结果不确定，不得退款): %v, data: %s", err, truncate(string(apiResp.Data), 500))
 		return failUnknown
 	}
 
-	common.SysLogf("[APIMart] 图像生成成功, taskId: %s", tasks[0].TaskID)
+	common.SysLogf("[APIMart] 图像生成成功, taskId: %s", taskID)
 
 	return ImageGenerateResponse{
 		Code: "success",
 		Data: map[string]interface{}{
-			"taskId": tasks[0].TaskID,
+			"taskId": taskID,
 		},
 	}
+}
+
+// apimartTaskID 从响应 data 中提取任务 ID。
+// 新版响应 data 是对象（id），旧版是数组（task_id）；两种格式都兼容。
+func apimartTaskID(data json.RawMessage) (string, error) {
+	var tasks []apimartTaskItem
+	if err := json.Unmarshal(data, &tasks); err == nil {
+		for _, task := range tasks {
+			if id := strings.TrimSpace(task.TaskID); id != "" {
+				return id, nil
+			}
+		}
+	}
+
+	var obj struct {
+		ID     string `json:"id"`
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(data, &obj); err == nil {
+		if id := strings.TrimSpace(obj.ID); id != "" {
+			return id, nil
+		}
+		if id := strings.TrimSpace(obj.TaskID); id != "" {
+			return id, nil
+		}
+	}
+
+	return "", fmt.Errorf("data 中缺少任务 ID")
 }
 
 // apimartTaskQueryResponse APIMart 任务查询响应结构

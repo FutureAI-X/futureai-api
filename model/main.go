@@ -554,7 +554,7 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_rule_conditions.id IS '条件唯一标识，自增主键'`,
 		`COMMENT ON COLUMN credit_rule_conditions.item_id IS '所属映射项ID，关联 credit_rule_items 表'`,
 		`COMMENT ON COLUMN credit_rule_conditions.param_path IS '标准请求字段（model, prompt, size, resolution）'`,
-		`COMMENT ON COLUMN credit_rule_conditions.param_value IS '参数值（如 2k, 1024x1024）'`,
+		`COMMENT ON COLUMN credit_rule_conditions.param_value IS '参数值（如 2K, 1024x1024）'`,
 		`COMMENT ON COLUMN credit_rule_conditions.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN credit_rule_conditions.updated_at IS '记录最后更新时间'`,
 

@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/FutureAI-X/futureai-api/common"
 )
@@ -20,21 +20,32 @@ func TestApplyDefaultsFillsOmittedFields(t *testing.T) {
 	var req ImageGenerateRequest
 	req.ApplyDefaults()
 
-	if req.Resolution != "1k" {
-		t.Errorf("resolution 默认值 = %q, want 1k", req.Resolution)
+	if req.Resolution != "1K" {
+		t.Errorf("resolution 默认值 = %q, want 1K", req.Resolution)
 	}
 	if req.Size != "16:9" {
 		t.Errorf("size 默认值 = %q, want 16:9", req.Size)
 	}
 }
 
-// 调用方显式传的值必须原样保留，默认值只补空缺。
+// 调用方显式传的值必须原样保留（大小写归一化除外），默认值只补空缺。
 func TestApplyDefaultsKeepsExplicitValues(t *testing.T) {
-	req := ImageGenerateRequest{Resolution: "4k", Size: "1:1"}
+	req := ImageGenerateRequest{Resolution: "4K", Size: "1:1"}
 	req.ApplyDefaults()
 
-	if req.Resolution != "4k" || req.Size != "1:1" {
+	if req.Resolution != "4K" || req.Size != "1:1" {
 		t.Errorf("显式取值被覆盖: resolution=%q, size=%q", req.Resolution, req.Size)
+	}
+}
+
+// 对外分辨率统一为大写；历史客户端继续传小写时在入口归一化，而不是让
+// 每个供应商各自处理大小写。
+func TestApplyDefaultsNormalizesResolutionToUpper(t *testing.T) {
+	req := ImageGenerateRequest{Resolution: "2k"}
+	req.ApplyDefaults()
+
+	if req.Resolution != "2K" {
+		t.Errorf("resolution = %q, want 2K", req.Resolution)
 	}
 }
 
@@ -53,16 +64,16 @@ func TestApplyDefaultsIsIdempotent(t *testing.T) {
 }
 
 // 默认值必须在计费之前补齐，否则省略 resolution 的请求计的是基础价、
-// 实际却按 1k 出图。这里锁住「补齐后计费条件能命中默认值」这一行为。
+// 实际却按 1K 出图。这里锁住「补齐后计费条件能命中默认值」这一行为。
 func TestApplyDefaultsFeedsCreditParams(t *testing.T) {
 	var req ImageGenerateRequest
 	req.ApplyDefaults()
 
 	params := req.CreditParams()
 
-	// 未补齐时 params["resolution"] 是空串，永远匹配不上 resolution=1k 的条件
-	if params["resolution"] != "1k" {
-		t.Errorf("计费字段 resolution = %q, want 1k（默认值须在计费前补齐）", params["resolution"])
+	// 未补齐时 params["resolution"] 是空串，永远匹配不上 resolution=1K 的条件
+	if params["resolution"] != "1K" {
+		t.Errorf("计费字段 resolution = %q, want 1K（默认值须在计费前补齐）", params["resolution"])
 	}
 	if params["size"] != "16:9" {
 		t.Errorf("计费字段 size = %q, want 16:9", params["size"])
@@ -186,7 +197,8 @@ func TestBuildRequestMapsStandardFields(t *testing.T) {
 		"model":      apimartVersionedImageModel,
 		"prompt":     "a cat",
 		"size":       "16:9",
-		"resolution": "2k",
+		"resolution": "2K",
+		"n":          1,
 		"version":    "sunburst",
 	}
 	for k, want := range wants {
@@ -218,8 +230,11 @@ func TestBuildRequestAlwaysWritesSizeAndResolution(t *testing.T) {
 	if body["size"] != DefaultSize {
 		t.Errorf("size = %v, want %s", body["size"], DefaultSize)
 	}
-	if body["resolution"] != DefaultResolution {
-		t.Errorf("resolution = %v, want %s", body["resolution"], DefaultResolution)
+	if body["resolution"] != "1K" {
+		t.Errorf("resolution = %v, want 1K", body["resolution"])
+	}
+	if body["n"] != 1 {
+		t.Errorf("n = %v, want 1", body["n"])
 	}
 	if _, ok := body["image_urls"]; ok {
 		t.Error("image_urls 为空时不该写入请求体")
@@ -443,5 +458,81 @@ func TestTaskQueryAcceptsWellFormedTaskID(t *testing.T) {
 	}
 	if resp.Data["url"] != "https://img/1.png" {
 		t.Errorf("url = %v, want https://img/1.png", resp.Data["url"])
+	}
+}
+
+// 新版 APIMart 返回 202 + data.id，必须与旧版 200 + data[].task_id 一样被受理。
+func TestImageGenerateAccepts202ObjectResponse(t *testing.T) {
+	var gotVersion, gotIdempotency string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotVersion = r.Header.Get("X-APIMart-Response-Version")
+		gotIdempotency = r.Header.Get("Idempotency-Key")
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"code":202,"request_id":"req_example","data":{"id":"task_202","object":"generation.task","type":"image","status":"pending","progress":0,"poll_url":"/v1/tasks/task_202"}}`)
+	}))
+	defer srv.Close()
+
+	common.SetOutboundClientForTest(srv.Client())
+	defer common.SetOutboundClientForTest(nil)
+
+	a := &apimart{cfg: Config{BaseURL: srv.URL, APIKey: "test-key"}}
+	resp := a.ImageGenerate(context.Background(), ImageGenerateRequest{
+		Model:          "gpt-image-2.5-flare-ext",
+		Prompt:         "a cat",
+		Size:           "1:1",
+		Resolution:     "1k",
+		VendorModelID:  apimartVersionedImageModel,
+		IdempotencyKey: "task_platform_1",
+	})
+
+	if resp.Code != "success" {
+		t.Fatalf("Code = %q, want success (kind %q)", resp.Code, resp.FailureKind)
+	}
+	if resp.Data["taskId"] != "task_202" {
+		t.Errorf("taskId = %v, want task_202", resp.Data["taskId"])
+	}
+	if gotVersion != apimartResponseVersion {
+		t.Errorf("X-APIMart-Response-Version = %q, want %q", gotVersion, apimartResponseVersion)
+	}
+	if gotIdempotency != "task_platform_1" {
+		t.Errorf("Idempotency-Key = %q, want task_platform_1", gotIdempotency)
+	}
+}
+
+func TestAPIMartValidateImageRequest(t *testing.T) {
+	ids16 := make([]string, 16)
+	urls16 := make([]string, 16)
+	for i := 0; i < 16; i++ {
+		ids16[i] = fmt.Sprintf("file_%d", i)
+		urls16[i] = fmt.Sprintf("https://example.com/%d.png", i)
+	}
+	ids17 := append(append([]string(nil), ids16...), "file_17")
+	urls17 := append(append([]string(nil), urls16...), "https://example.com/17.png")
+
+	tests := []struct {
+		name    string
+		req     ImageGenerateRequest
+		wantErr bool
+	}{
+		{"合法比例", ImageGenerateRequest{Prompt: "cat", Size: "16:9", Resolution: "2k"}, false},
+		{"auto 比例被拒绝", ImageGenerateRequest{Prompt: "cat", Size: "auto", Resolution: "4k"}, true},
+		{"16 张 image_ids", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16}, false},
+		{"16 张 image_urls", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls16}, false},
+		{"image_ids 优先于 image_urls", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids16, ImageURLs: urls17}, false},
+		{"空 prompt", ImageGenerateRequest{Size: "1:1", Resolution: "1k"}, true},
+		{"非法 size", ImageGenerateRequest{Prompt: "cat", Size: "7:3", Resolution: "1k"}, true},
+		{"非法 resolution", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "8k"}, true},
+		{"17 张 image_ids", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageIDs: ids17}, true},
+		{"17 张 image_urls", ImageGenerateRequest{Prompt: "cat", Size: "1:1", Resolution: "1k", ImageURLs: urls17}, true},
+	}
+
+	a := &apimart{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := a.ValidateImageRequest(tt.req)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateImageRequest() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }

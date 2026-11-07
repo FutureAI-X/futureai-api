@@ -514,3 +514,29 @@ func TestPublicTaskStatusMapsSubmittingToPending(t *testing.T) {
 		}
 	}
 }
+
+// size / resolution 的大小写不敏感，避免历史小写规则在统一为大写后静默失效。
+func TestCreditParamValuesEqual(t *testing.T) {
+	cases := []struct {
+		name     string
+		actual   string
+		expected string
+		want     bool
+	}{
+		{"resolution", "2K", "2k", true},
+		{"resolution", "2K", "2K", true},
+		{"resolution", "2K", "4K", false},
+		{"size", "1024x1024", "1024X1024", true},
+		{"model", "gpt-image-2.5-ext", "GPT-IMAGE-2.5-EXT", false},
+		{"prompt", "Cat", "cat", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := creditParamValuesEqual(tc.name, tc.actual, tc.expected); got != tc.want {
+				t.Errorf("creditParamValuesEqual(%q, %q, %q) = %v, want %v",
+					tc.name, tc.actual, tc.expected, got, tc.want)
+			}
+		})
+	}
+}

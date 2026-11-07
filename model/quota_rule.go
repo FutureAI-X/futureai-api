@@ -97,7 +97,7 @@ type CreditRuleCondition struct {
 	// 其余名字永远匹配不上：计费只认标准字段，调用方的非标准字段根本进不了计费流程。
 	ParamPath string `json:"param_path" gorm:"size:255;not null"`
 
-	// 参数值（如 "2k", "1024x1024"）
+	// 参数值（如 "2K", "1024x1024"）
 	ParamValue string `json:"param_value" gorm:"size:255;not null"`
 
 	// 记录创建时间
@@ -120,7 +120,7 @@ func (CreditRuleCondition) TableName() string {
 //
 // 用 id 升序而非创建时间：ReplaceCreditRuleItems 每次保存都是先删后建，
 // 因此 id 顺序就等于管理端表单里的顺序。条件的顺序同理，它决定
-// 「resolution=1k & quality=high」里各段的先后。
+// 「resolution=1K & quality=high」里各段的先后。
 //
 // 三个查询点共用本函数，避免只改一处导致顺序在不同接口间不一致。
 func PreloadRuleItems(db *gorm.DB) *gorm.DB {

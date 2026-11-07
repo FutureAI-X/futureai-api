@@ -30,14 +30,15 @@ APIMart 未实现 `ImageCapabilityProvider`，使用平台默认能力。
 
 ## 4 入参校验
 
-APIMart 没有供应商特有的请求预校验。平台标准字段校验与参考图校验由控制器统一完成：
+APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束：
 
-- `size` 使用比例，如 `16:9`、`1:1`；
-- `resolution` 使用 `1k` / `2k`；
-- `image_ids` 去重后最多 15 张；
-- `image_urls` 去重后单次最多 100 张计入计费。
+- `prompt` 去除首尾空格后不能为空；
+- `size` 只接受 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`；上游支持的 `auto` 刻意不开放，避免输出尺寸由上游内容决定、调用方无法预期；
+- `resolution` 只接受 `1K`、`2K`、`4K`，平台标准值为大写；小写输入会被归一化；
+- `image_ids` 优先，非空时去重后最多 16 张；
+- `image_urls` 在 `image_ids` 为空时去重后最多 16 张。
 
-参考图字段的优先级与校验规则见 [客户端图像生成文档](../../api/image/README.md#4-参考图)。
+校验失败直接返回 400，不扣费、不建任务。参考图字段的优先级与平台通用规则见 [客户端图像生成文档](../../api/image/README.md#4-参考图)。
 
 ## 5 请求体转换
 
@@ -48,7 +49,8 @@ APIMart 没有供应商特有的请求预校验。平台标准字段校验与参
 | `model` | `gpt-image-2.5-ext` |
 | `prompt` | 调用方提示词 |
 | `size` | 调用方画幅比例，已由控制器补齐默认值 |
-| `resolution` | 调用方分辨率档位，已补齐默认值 |
+| `resolution` | 调用方分辨率档位，转成大写 `1K` / `2K` / `4K` |
+| `n` | 固定 `1` |
 | `image_urls` | 非空时写入 |
 | `version` | 按平台模型名补全 |
 
@@ -56,7 +58,19 @@ APIMart 没有供应商特有的请求预校验。平台标准字段校验与参
 
 ## 6 提交方式与超时
 
-`ImageGenerate` 使用 `common.OutboundHTTPClient`，提交超时为包级 `SubmitTimeout`（30 秒）。上游正常在秒级返回 `task_id`。
+`ImageGenerate` 使用 `common.OutboundHTTPClient`，提交超时为包级 `SubmitTimeout`（30 秒）。请求头包含以下与新版接口相关的字段：
+
+| 请求头 | 值 |
+|---|---|
+| `X-APIMart-Response-Version` | `2026-07-27` |
+| `Idempotency-Key` | 平台任务 ID，仅在上游需要幂等键时透传 |
+
+上游可能返回两种成功结构，解析层都兼容：
+
+| 成功结构 | 任务 ID 位置 |
+|---|---|
+| HTTP 202，`code=202` | `data.id` |
+| HTTP 200，`code=200` | `data[].task_id` |
 
 失败性质如下。
 
@@ -64,8 +78,8 @@ APIMart 没有供应商特有的请求预校验。平台标准字段校验与参
 |---|---|---|
 | 本地序列化失败、构建请求失败、4xx | `FailureRejected` | 退款 |
 | 5xx、超时、连接中断、响应读取失败 | `FailureUnknown` | 不退款，转 `unknown` |
-| 业务 `code != 200` | `FailureRejected` | 退款 |
-| 响应中缺少 `task_id` | `FailureUnknown` | 不退款，转 `unknown` |
+| 业务 `code` 不是 200 或 202 | `FailureRejected` | 退款 |
+| 响应中缺少任务 ID | `FailureUnknown` | 不退款，转 `unknown` |
 
 `FailureUnknown` 的语义是「上游可能已经建单」。控制器不会立即退款，而是在超龄兜底后转 `call_fail` 并退款。
 

@@ -50,7 +50,7 @@ func ImageGenerate(c *gin.Context) {
 	}
 
 	// 补齐标准默认值，且必须在计费之前：计费条件匹配的是补齐后的值，
-	// 否则省略 resolution 的请求会计基础价、实际按 1k 出图，价格与生成结果不符。
+	// 否则省略 resolution 的请求会计基础价、实际按 1K 出图，价格与生成结果不符。
 	req.ApplyDefaults()
 
 	// 快照保存调用方原始请求（原始 image_urls + image_ids），必须在把 file_id
@@ -284,6 +284,8 @@ func ImageGenerate(c *gin.Context) {
 	// 供应商需要同时知道「调用方请求的是哪个模型」（多个模型可能映射到同一个
 	// vendor_model_id，要靠它区分变体）和「该往上游发哪个模型 ID」。
 	req.VendorModelID = vendorModel.VendorModelID
+	// 上游幂等键取平台任务 ID：同一任务的重试使用同一个键，不同任务不会互相覆盖。
+	req.IdempotencyKey = task.TaskID
 
 	submitTimeout := supplier.SubmitTimeout
 	if caps.SubmitTimeout > 0 {
@@ -500,9 +502,10 @@ const maxRefImagesPerRequest = 100
 
 // maxRefImageIDs image_ids 单次请求允许的最大参考图张数（去重后）。
 // 与旧 image_urls 路径不同，这里显式拒绝而不是静默封顶：
-// 调用方传了 16 张却只按 15 张计费、16 张全部出图，等于少收钱；
+// 调用方传了 17 张却只按 16 张计费、17 张全部出图，等于少收钱；
 // 直接 400 让调用方改请求，计费与实际执行永远一致。
-const maxRefImageIDs = 15
+// 与 APIMart 上游单次最多 16 张参考图的限制保持一致。
+const maxRefImageIDs = 16
 
 const (
 	// imageReferenceSignTTL 给上游的参考图预签名有效期。
@@ -719,6 +722,19 @@ func formatCredits(v float64) string {
 // 参考图部分是叠加而非取代，且需要同时满足两个条件：模型类型是图像生成、
 // 且 endpointPath 命中图片端点白名单。
 //
+// creditParamValuesEqual 比较计费条件值。
+//
+// size / resolution 大小写不敏感：平台对外统一使用大写分辨率（1K / 2K / 4K），
+// 但历史规则可能配置成小写。若按原样比较，升级后这些规则会静默失效、退回基础积分。
+func creditParamValuesEqual(name, actual, expected string) bool {
+	switch name {
+	case "size", "resolution":
+		return strings.EqualFold(actual, expected)
+	default:
+		return actual == expected
+	}
+}
+
 // 计费口径只认标准字段：调用方发的非标准字段进不了 req，因此既不会命中条件，
 // 也不会被算成参考图——价格永远对得上实际发往上游的请求。
 func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGenerateRequest, endpointPath string, refImagesSupported bool) (creditResolution, error) {
@@ -735,7 +751,7 @@ func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGe
 	for _, item := range creditRule.Items {
 		matched := len(item.Conditions) > 0
 		for _, cond := range item.Conditions {
-			if params[cond.ParamPath] != cond.ParamValue {
+			if !creditParamValuesEqual(cond.ParamPath, params[cond.ParamPath], cond.ParamValue) {
 				matched = false
 				break
 			}

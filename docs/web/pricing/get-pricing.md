@@ -27,7 +27,7 @@
             {
               "credits": 0.1,
               "conditions": [
-                { "param_path": "resolution", "param_value": "2k" }
+                { "param_path": "resolution", "param_value": "2K" }
               ]
             }
           ]

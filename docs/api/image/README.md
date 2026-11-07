@@ -26,11 +26,11 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | `model` | string | 必填，平台模型名 |
 | `prompt` | string | 提示词 |
 | `size` | string | 画幅。支持比例或像素尺寸，见第 3 章 |
-| `resolution` | string | 分辨率档位，如 `1k` / `2k`，默认 `1k`。部分模型忽略 |
+| `resolution` | string | 分辨率档位，如 `1K` / `2K` / `4K`，默认 `1K`。具体支持见模型文档，部分模型忽略 |
 | `image_urls` | string[] | 参考图 URL 数组 |
 | `image_ids` | string[] | 参考图 file_id 数组，由 `/v1/files/upload/complete` 返回 |
 
-`size` 与 `resolution` 省略时，平台按 `size=16:9`、`resolution=1k` 补齐。使用 MOSS 模型时必须显式传 `size`，原因见第 3 章。
+`size` 与 `resolution` 省略时，平台按 `size=16:9`、`resolution=1K` 补齐。使用 MOSS 模型时必须显式传 `size`，原因见第 3 章。
 
 ## 3 size 的两种格式
 
@@ -41,7 +41,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | 比例 | `16:9`、`1:1` | `resolution` | APIMart 模型 |
 | 像素尺寸 | `1024x1024` | 无 | MOSS 模型 |
 
-MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省略 `size` 时平台补齐的 `16:9` 不是合法像素尺寸，请求会在扣费前返回 400。`resolution` 只对使用比例尺寸的模型生效，MOSS 模型忽略该字段。
+APIMart 模型支持 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`，不支持 `auto`。MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省略 `size` 时平台补齐的 `16:9` 不是合法像素尺寸，请求会在扣费前返回 400。`resolution` 只对使用比例尺寸的模型生效，MOSS 模型忽略该字段。
 
 ## 4 参考图
 
@@ -64,11 +64,13 @@ MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省
 
 | 状态码 | 场景 |
 |---|---|
-| 400 | file_id 形态错误、去重后超过 15 张、不是图片、HEIC/HEIF |
+| 400 | file_id 形态错误、去重后超过 16 张、不是图片、HEIC/HEIF |
 | 404 | 文件不存在、不属于当前用户、用途不符 |
 | 409 | 文件尚未完成处理 |
 | 410 | 文件已过期或剩余有效期不足 30 分钟 |
 | 503 | 文件存储暂不可用 |
+
+APIMart 模型单次最多 16 张参考图；`image_urls` 超过 16 张会在扣费前返回 400。
 
 服务端把 `file_id` 解析成短期签名 URL 后交给上游，调用方不需要也不会看到签名地址。HEIC/HEIF 参考图暂不支持，请先转换为 JPG/PNG/WEBP。
 
@@ -82,7 +84,7 @@ MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省
 {
   "model": "gpt-image-2.5-flare-ext",
   "prompt": "a cat sitting on a windowsill",
-  "resolution": "2k",
+  "resolution": "2K",
   "image_ids": ["file_1a2b3c4d5e6f"]
 }
 ```
@@ -93,7 +95,7 @@ MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省
 {
   "model": "gpt-image-2.5-flare-ext",
   "prompt": "a cat sitting on a windowsill",
-  "resolution": "2k",
+  "resolution": "2K",
   "image_urls": ["https://example.com/ref.png"]
 }
 ```
@@ -181,7 +183,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 本次总积分 = 基础积分（或命中的参数组合积分）+ 参考图张数 × 每张参考图积分
 ```
 
-基础积分可以为 0，表示免费模型。参数组合条件只能引用 `model`、`prompt`、`size`、`resolution`，且值必须为字符串。参考图附加计费只在供应商支持参考图时生效。
+基础积分可以为 0，表示免费模型。参数组合条件只能引用 `model`、`prompt`、`size`、`resolution`，且值必须为字符串；匹配前平台会对 `size` 做小写归一化、对 `resolution` 做大写归一化。参考图附加计费只在供应商支持参考图时生效。
 
 ## 9 模型索引
 
