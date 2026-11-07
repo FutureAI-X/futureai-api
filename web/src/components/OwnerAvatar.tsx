@@ -27,10 +27,13 @@ export function OwnerAvatar({ owner, fallbackName }: OwnerAvatarProps) {
 
   return (
     <div className='bg-muted/40 flex size-10 shrink-0 items-center justify-center rounded-xl'>
+      {/* 宽盒而不是 size-5：MOSS 这类约 2.7:1 的宽幅标识若塞进正方形，
+          按 contain 缩放后只剩几像素高。方形图标仍受 h-5 限制保持 20×20，
+          宽标识则能用满 32px 宽度。 */}
       {logoUrl ? (
         <span
           aria-hidden
-          className='bg-muted-foreground size-5'
+          className='bg-muted-foreground h-5 w-8'
           style={{
             maskImage: `url(${logoUrl})`,
             WebkitMaskImage: `url(${logoUrl})`,

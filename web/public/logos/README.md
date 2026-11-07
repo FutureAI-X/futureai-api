@@ -7,6 +7,9 @@
 图标取自 [@lobehub/icons-static-svg](https://www.npmjs.com/package/@lobehub/icons-static-svg)，
 MIT 许可。这个图标集专做 AI 品牌，覆盖对话/图像/视频/音乐各类厂商。
 
+例外：`moss.svg` 取自 [MOSI 开放平台](https://platform.mosi.cn) 的站点图标，
+同一图形的矢量版本；该图标集没有收录 MOSS。
+
 > 补充说明：Simple Icons 应商标方要求下架了 OpenAI，Wikimedia 在部分网络下不可达，
 > 所以选了这个来源。**也不要改成运行时去外部图床取**——那会把访问者 IP 与厂商名
 > 送给第三方，而且在网络受限的环境下会直接挂掉。
