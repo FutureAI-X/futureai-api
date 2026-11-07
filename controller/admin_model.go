@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -29,6 +30,7 @@ func AdminGetModels(c *gin.Context) {
 		Type           string         `json:"type"`
 		ParamSpec      model.JSONText `json:"param_spec"`
 		ParamSpecValid bool           `json:"param_spec_valid"`
+		SortOrder      *int           `json:"sort_order"`
 		CreatedAt      string         `json:"created_at"`
 	}
 
@@ -45,11 +47,74 @@ func AdminGetModels(c *gin.Context) {
 			Type:           string(m.Type),
 			ParamSpec:      m.ParamSpec,
 			ParamSpecValid: specErr == nil,
+			SortOrder:      m.SortOrder,
 			CreatedAt:      common.FormatDisplayTime(m.CreatedAt),
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": items})
+}
+
+// AdminReorderModelsRequest 管理端拖拽排序的完整顺序。
+type AdminReorderModelsRequest struct {
+	IDs []int `json:"ids"`
+}
+
+// AdminReorderModels 保存模型展示顺序。
+//
+// 请求里是当前列表从上到下的模型 ID；服务端先清空所有 sort_order，
+// 再按顺序写入 1..N。不在请求里的模型（例如拖拽期间新建的）会保持 NULL，
+// 排在所有已排序模型之后。
+func AdminReorderModels(c *gin.Context) {
+	var req AdminReorderModelsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "请求参数无效"})
+		return
+	}
+	if msg := validateReorderIDs(req.IDs); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": msg})
+		return
+	}
+
+	if err := model.ReorderModels(req.IDs); err != nil {
+		if errors.Is(err, model.ErrModelNotFound) {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "模型列表已变化，请刷新后重试"})
+			return
+		}
+		common.SysErrorf("[AdminReorderModels] 保存排序失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存排序失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "排序已保存"})
+}
+
+// validateReorderIDs 校验拖拽排序的 ID 列表，返回空串表示合法。
+func validateReorderIDs(ids []int) string {
+	if len(ids) == 0 {
+		return "请提供完整的模型顺序"
+	}
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return "模型 ID 无效"
+		}
+		if _, ok := seen[id]; ok {
+			return "模型顺序中存在重复 ID"
+		}
+		seen[id] = struct{}{}
+	}
+	return ""
+}
+
+// AdminResetModelOrder 恢复默认排序（清空所有 sort_order）。
+func AdminResetModelOrder(c *gin.Context) {
+	if err := model.ResetModelOrder(); err != nil {
+		common.SysErrorf("[AdminResetModelOrder] 恢复默认排序失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "恢复默认排序失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "已恢复默认排序"})
 }
 
 // AdminCreateModelRequest 创建模型请求

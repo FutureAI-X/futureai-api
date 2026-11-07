@@ -32,6 +32,8 @@ export interface AdminModel {
   param_spec: Record<string, unknown> | null
   /** 规格是否已配置且通过元校验 */
   param_spec_valid: boolean
+  /** 管理端手动排序值；null/ undefined 表示未排序 */
+  sort_order?: number | null
   created_at: string
 }
 
@@ -63,6 +65,21 @@ export function updateModel(id: number, data: {
   return request<{ success: boolean; message: string }>(`${BASE}/models/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
+  })
+}
+
+/** 保存模型展示顺序：ids 为从上到下的完整列表 */
+export function reorderModels(ids: number[]) {
+  return request<{ success: boolean; message: string }>(`${BASE}/model-order`, {
+    method: 'PUT',
+    body: JSON.stringify({ ids }),
+  })
+}
+
+/** 恢复默认排序：清空所有手动排序值 */
+export function resetModelOrder() {
+  return request<{ success: boolean; message: string }>(`${BASE}/model-order`, {
+    method: 'DELETE',
   })
 }
 

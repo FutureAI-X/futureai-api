@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Search, LayoutGrid, List, ChevronRight } from 'lucide-react'
+import { Search, LayoutGrid, List, ChevronRight, SlidersHorizontal, X } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { modelTypeLabel } from '../lib/model-type'
 import { Header } from '../components/Header'
@@ -9,15 +9,16 @@ import { ModelDetailDialog } from '../components/ModelDetailDialog'
 import { OwnerAvatar } from '../components/OwnerAvatar'
 import type { PricingModel, PricingData } from '../types/pricing'
 import { formatCredits } from '../lib/credits'
+import {
+  FILTER_ALL,
+  matchesModelFilters,
+  parseTags,
+  tagKey,
+  type FilterOption,
+  type ModelFilterState,
+} from '../lib/model-filters'
+import { normalizeOwner, OWNER_UNKNOWN_LABEL } from '../lib/owner'
 
-// ── 筛选常量 ──
-const FILTER_ALL = '__all__'
-
-// ── 工具函数 ──
-function parseTags(tags?: string): string[] {
-  if (!tags) return []
-  return tags.split(',').map((t) => t.trim()).filter(Boolean)
-}
 
 // ── 模型卡片 ──
 function ModelCard({
@@ -70,7 +71,7 @@ function ModelCard({
               </h3>
               <div className='mt-0.5 flex items-center gap-1.5'>
                 <p className='text-muted-foreground truncate text-xs'>
-                  {model.owner}
+                  {model.owner?.trim() || OWNER_UNKNOWN_LABEL}
                 </p>
                 {model.type && (
                   <span className='bg-muted/70 text-muted-foreground shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium'>
@@ -150,6 +151,8 @@ export function Pricing() {
   const [search, setSearch] = useState('')
   const [tagFilter, setTagFilter] = useState(FILTER_ALL)
   const [typeFilter, setTypeFilter] = useState(FILTER_ALL)
+  const [ownerFilters, setOwnerFilters] = useState<string[]>([])
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
   const [viewMode, setViewMode] = useState<'card' | 'list'>('card')
   const [detail, setDetail] = useState<PricingModel | null>(null)
 
@@ -171,48 +174,143 @@ export function Pricing() {
       .finally(() => setLoading(false))
   }, [])
 
+  const sourceModels = useMemo(() => data?.models || [], [data?.models])
+
+  // 动态计数：计算某一组筛选条件下的模型数。
+  // 调用方通过 overrides 覆盖要统计的维度，实现「忽略本区自身选择」。
+  const matchesWith = useCallback((overrides: Partial<ModelFilterState>) => {
+    const filters: ModelFilterState = {
+      search,
+      type: typeFilter,
+      tag: tagFilter,
+      owners: ownerFilters,
+      ...overrides,
+    }
+    return sourceModels.filter((model) => matchesModelFilters(model, filters))
+  }, [sourceModels, search, typeFilter, tagFilter, ownerFilters])
+
   // 过滤模型
   const filteredModels = useMemo(() => {
-    if (!data?.models) return []
-    let models = data.models
-
-    // 类型过滤
-    if (typeFilter !== FILTER_ALL) {
-      models = models.filter((m) => m.type === typeFilter)
+    const filters: ModelFilterState = {
+      search,
+      type: typeFilter,
+      tag: tagFilter,
+      owners: ownerFilters,
     }
+    return sourceModels.filter((model) => matchesModelFilters(model, filters))
+  }, [sourceModels, search, typeFilter, tagFilter, ownerFilters])
 
-    // 标签过滤
-    if (tagFilter !== FILTER_ALL) {
-      models = models.filter((m) =>
-        parseTags(m.tags)
-          .map((t) => t.toLowerCase())
-          .includes(tagFilter.toLowerCase())
-      )
-    }
+  // 开发者分组：key 归一化，label 取出现次数最多的原始写法
+  const ownerFacets = useMemo(() => {
+    const map = new Map<string, {
+      key: string
+      firstLabel: string
+      labels: Map<string, number>
+      order: number
+    }>()
 
-    // 搜索过滤
-    if (search) {
-      const q = search.toLowerCase()
-      models = models.filter(
-        (m) =>
-          m.name.toLowerCase().includes(q) ||
-          m.owner?.toLowerCase().includes(q) ||
-          m.tags?.toLowerCase().includes(q) ||
-          m.description?.toLowerCase().includes(q)
-      )
-    }
+    sourceModels.forEach((model, order) => {
+      const key = normalizeOwner(model.owner)
+      const raw = (model.owner || '').trim()
+      let facet = map.get(key)
+      if (!facet) {
+        facet = { key, firstLabel: raw, labels: new Map<string, number>(), order }
+        map.set(key, facet)
+      }
+      if (raw) facet.labels.set(raw, (facet.labels.get(raw) || 0) + 1)
+    })
 
-    return models
-  }, [data?.models, search, tagFilter, typeFilter])
+    return Array.from(map.values())
+      .sort((a, b) => a.order - b.order)
+      .map((facet) => {
+        let label = facet.firstLabel || OWNER_UNKNOWN_LABEL
+        let best = 0
+        facet.labels.forEach((count, raw) => {
+          if (count > best) {
+            best = count
+            label = raw
+          }
+        })
+        return { key: facet.key, label }
+      })
+  }, [sourceModels])
+
+  // 各筛选项的数量都按「其它已选条件」动态统计，避免多选时出现 0 结果。
+  const ownerOptions: FilterOption[] = useMemo(() => [
+    { value: FILTER_ALL, label: '全部开发者', count: matchesWith({ owners: [] }).length },
+    ...ownerFacets.map((facet) => ({
+      value: facet.key,
+      label: facet.label,
+      count: matchesWith({ owners: [facet.key] }).length,
+    })),
+  ], [ownerFacets, matchesWith])
+
+  const typeOptions: FilterOption[] = useMemo(() => {
+    const presentTypes = Array.from(
+      new Set(sourceModels.map((m) => m.type).filter((t): t is string => !!t))
+    ).sort()
+    return [
+      { value: FILTER_ALL, label: '全部类型', count: matchesWith({ type: FILTER_ALL }).length },
+      ...presentTypes.map((type) => ({
+        value: type,
+        label: modelTypeLabel(type),
+        count: matchesWith({ type }).length,
+      })),
+    ]
+  }, [sourceModels, matchesWith])
+
+  const tagOptions: FilterOption[] = useMemo(() => {
+    const tags = Array.from(
+      new Set(sourceModels.flatMap((m) => parseTags(m.tags).map(tagKey)))
+    ).sort()
+    return [
+      { value: FILTER_ALL, label: '全部标签', count: matchesWith({ tag: FILTER_ALL }).length },
+      ...tags.map((tag) => ({
+        value: tag,
+        label: tag,
+        count: matchesWith({ tag }).length,
+      })),
+    ]
+  }, [sourceModels, matchesWith])
+
+  const toggleOwner = useCallback((key: string) => {
+    setOwnerFilters((prev) => (
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]
+    ))
+  }, [])
+
+  const clearOwners = useCallback(() => setOwnerFilters([]), [])
 
   // 清除所有筛选
   const clearFilters = useCallback(() => {
     setSearch('')
     setTagFilter(FILTER_ALL)
     setTypeFilter(FILTER_ALL)
+    setOwnerFilters([])
   }, [])
 
-  const hasActiveFilters = search !== '' || tagFilter !== FILTER_ALL || typeFilter !== FILTER_ALL
+  const hasActiveFilters = search !== ''
+    || tagFilter !== FILTER_ALL
+    || typeFilter !== FILTER_ALL
+    || ownerFilters.length > 0
+
+  const activeFilterCount = (tagFilter !== FILTER_ALL ? 1 : 0)
+    + (typeFilter !== FILTER_ALL ? 1 : 0)
+    + (ownerFilters.length > 0 ? 1 : 0)
+
+  useEffect(() => {
+    if (!mobileFilterOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileFilterOpen(false)
+    }
+    const previousOverflow = document.body.style.overflow
+    document.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [mobileFilterOpen])
 
   // 加载状态
   if (loading) {
@@ -312,11 +410,16 @@ export function Pricing() {
           <div className='grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]'>
             {/* 侧边栏（桌面端显示） */}
             <PricingSidebar
+              ownerOptions={ownerOptions}
+              ownerFilters={ownerFilters}
+              onToggleOwner={toggleOwner}
+              onClearOwners={clearOwners}
+              typeOptions={typeOptions}
               typeFilter={typeFilter}
               onTypeChange={setTypeFilter}
+              tagOptions={tagOptions}
               tagFilter={tagFilter}
               onTagChange={setTagFilter}
-              models={data?.models || []}
               hasActiveFilters={hasActiveFilters}
               onClearFilters={clearFilters}
               className='hover-scrollbar sticky top-4 hidden max-h-[calc(100dvh-2rem)] self-start overflow-y-auto xl:block'
@@ -344,6 +447,19 @@ export function Pricing() {
                 </div>
 
                 <div className='flex items-center gap-2'>
+                  <button
+                    type='button'
+                    onClick={() => setMobileFilterOpen(true)}
+                    className='border-border/60 text-foreground hover:bg-muted inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors xl:hidden'
+                  >
+                    <SlidersHorizontal className='size-3.5' />
+                    筛选
+                    {activeFilterCount > 0 && (
+                      <span className='bg-primary text-primary-foreground rounded-full px-1.5 text-[10px] leading-4'>
+                        {activeFilterCount}
+                      </span>
+                    )}
+                  </button>
                   {/* 视图切换 */}
                   <div className='bg-muted/50 flex items-center rounded-lg p-0.5'>
                     <button
@@ -435,7 +551,7 @@ export function Pricing() {
                             )}
                           </td>
                           <td className='text-muted-foreground px-4 py-3 text-sm'>
-                            {model.owner || '-'}
+                            {model.owner?.trim() || OWNER_UNKNOWN_LABEL}
                           </td>
                           <td className='text-muted-foreground px-4 py-3 text-sm max-w-xs truncate'>
                             {model.description || '-'}
@@ -489,6 +605,53 @@ export function Pricing() {
           </div>
         </div>
       </div>
+
+      {/* 移动端筛选抽屉：复用同一个 PricingSidebar，避免两套筛选逻辑 */}
+      {mobileFilterOpen && (
+        <div className='fixed inset-0 z-[100] xl:hidden'>
+          <div
+            className='absolute inset-0 bg-black/40 backdrop-blur-sm'
+            onClick={() => setMobileFilterOpen(false)}
+          />
+          <div className='bg-background border-border/60 absolute inset-x-0 bottom-0 flex max-h-[85dvh] flex-col rounded-t-2xl border-t p-4 shadow-2xl'>
+            <div className='mb-2 flex shrink-0 items-center justify-between'>
+              <h2 className='text-base font-bold'>筛选</h2>
+              <button
+                type='button'
+                onClick={() => setMobileFilterOpen(false)}
+                aria-label='关闭筛选'
+                className='hover:bg-muted rounded-lg p-1.5 transition-colors'
+              >
+                <X className='size-4' />
+              </button>
+            </div>
+            <div className='min-h-0 flex-1 overflow-y-auto'>
+              <PricingSidebar
+                ownerOptions={ownerOptions}
+                ownerFilters={ownerFilters}
+                onToggleOwner={toggleOwner}
+                onClearOwners={clearOwners}
+                typeOptions={typeOptions}
+                typeFilter={typeFilter}
+                onTypeChange={setTypeFilter}
+                tagOptions={tagOptions}
+                tagFilter={tagFilter}
+                onTagChange={setTagFilter}
+                hasActiveFilters={hasActiveFilters}
+                onClearFilters={clearFilters}
+                className='rounded-none border-0 p-0'
+              />
+            </div>
+            <button
+              type='button'
+              onClick={() => setMobileFilterOpen(false)}
+              className='bg-primary text-primary-foreground mt-3 inline-flex h-10 w-full shrink-0 items-center justify-center rounded-lg text-sm font-medium'
+            >
+              查看 {filteredModels.length} 个模型
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Footer ── */}
       <footer className='border-border/40 relative z-10 border-t px-6 py-6'>

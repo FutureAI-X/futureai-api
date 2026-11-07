@@ -1,38 +1,7 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ChevronDown, RotateCcw } from 'lucide-react'
 import { cn } from '../lib/utils'
-import { modelTypeLabel } from '../lib/model-type'
-import type { PricingModel } from '../types/pricing'
-
-// ── 工具函数 ──
-function parseTags(tags?: string): string[] {
-  if (!tags) return []
-  return tags
-    .split(',')
-    .map((t) => t.trim().toLowerCase())
-    .filter(Boolean)
-}
-
-function countBy(
-  models: PricingModel[],
-  predicate: (model: PricingModel) => boolean
-): number {
-  return models.reduce((count, model) => count + (predicate(model) ? 1 : 0), 0)
-}
-
-// ── 类型 ──
-type FilterOption = {
-  value: string
-  label: string
-  count?: number
-}
-
-type FilterSectionProps = {
-  title: string
-  value: string
-  options: FilterOption[]
-  onChange: (value: string) => void
-}
+import { FILTER_ALL, type FilterOption } from '../lib/model-filters'
 
 // ── 筛选芯片 ──
 function FilterChip(props: {
@@ -69,8 +38,11 @@ function FilterChip(props: {
   )
 }
 
-// ── 可折叠筛选区 ──
-function FilterSection(props: FilterSectionProps) {
+// ── 可折叠筛选区外壳 ──
+function FilterSectionShell(props: {
+  title: string
+  children: ReactNode
+}) {
   const [open, setOpen] = useState(true)
 
   return (
@@ -90,32 +62,76 @@ function FilterSection(props: FilterSectionProps) {
           )}
         />
       </button>
-      {open && (
-        <div className='flex flex-wrap gap-1.5'>
-          {props.options.map((option) => (
-            <FilterChip
-              key={option.value}
-              option={option}
-              active={props.value === option.value}
-              onClick={() => props.onChange(option.value)}
-            />
-          ))}
-        </div>
-      )}
+      {open && <div className='flex flex-wrap gap-1.5'>{props.children}</div>}
     </div>
   )
 }
 
-// ── 常量 ──
-const FILTER_ALL = '__all__'
+// ── 单选筛选区 ──
+function FilterSection(props: {
+  title: string
+  value: string
+  options: FilterOption[]
+  onChange: (value: string) => void
+}) {
+  return (
+    <FilterSectionShell title={props.title}>
+      {props.options.map((option) => (
+        <FilterChip
+          key={option.value}
+          option={option}
+          active={props.value === option.value}
+          onClick={() => props.onChange(option.value)}
+        />
+      ))}
+    </FilterSectionShell>
+  )
+}
+
+// ── 多选筛选区 ──
+function MultiFilterSection(props: {
+  title: string
+  options: FilterOption[]
+  selected: string[]
+  onToggle: (value: string) => void
+  onClear: () => void
+}) {
+  const all = props.options.find((option) => option.value === FILTER_ALL)
+  const items = props.options.filter((option) => option.value !== FILTER_ALL)
+
+  return (
+    <FilterSectionShell title={props.title}>
+      {all && (
+        <FilterChip
+          option={all}
+          active={props.selected.length === 0}
+          onClick={props.onClear}
+        />
+      )}
+      {items.map((option) => (
+        <FilterChip
+          key={option.value || '__unknown_owner__'}
+          option={option}
+          active={props.selected.includes(option.value)}
+          onClick={() => props.onToggle(option.value)}
+        />
+      ))}
+    </FilterSectionShell>
+  )
+}
 
 // ── Props ──
 export interface PricingSidebarProps {
+  ownerOptions: FilterOption[]
+  ownerFilters: string[]
+  onToggleOwner: (value: string) => void
+  onClearOwners: () => void
+  typeOptions: FilterOption[]
   typeFilter: string
   onTypeChange: (value: string) => void
+  tagOptions: FilterOption[]
   tagFilter: string
   onTagChange: (value: string) => void
-  models: PricingModel[]
   hasActiveFilters: boolean
   onClearFilters: () => void
   className?: string
@@ -123,51 +139,13 @@ export interface PricingSidebarProps {
 
 // ── 主组件 ──
 export function PricingSidebar(props: PricingSidebarProps) {
-  // 标签选项（从所有模型中提取）
-  const allTags = Array.from(
-    new Set(props.models.flatMap((m) => parseTags(m.tags)))
-  ).sort()
-
-  const tagOptions: FilterOption[] = [
-    {
-      value: FILTER_ALL,
-      label: '全部标签',
-      count: props.models.length,
-    },
-    ...allTags.map((tag) => ({
-      value: tag,
-      label: tag,
-      count: countBy(props.models, (model) =>
-        parseTags(model.tags).includes(tag)
-      ),
-    })),
-  ]
-
-  // 类型选项：只列出实际存在的类型，避免出现点了必定为空的筛选项
-  const presentTypes = Array.from(
-    new Set(props.models.map((m) => m.type).filter((t): t is string => !!t))
-  ).sort()
-
-  const typeOptions: FilterOption[] = [
-    {
-      value: FILTER_ALL,
-      label: '全部类型',
-      count: props.models.length,
-    },
-    ...presentTypes.map((type) => ({
-      value: type,
-      label: modelTypeLabel(type),
-      count: countBy(props.models, (model) => model.type === type),
-    })),
-  ]
-
   return (
     <aside className={cn('rounded-xl border p-3', props.className)}>
       <div className='mb-2.5 flex items-center justify-between gap-2'>
         <div>
           <h2 className='text-foreground text-sm font-bold'>筛选</h2>
           <p className='text-muted-foreground mt-1 text-xs'>
-            按类型或标签筛选模型
+            按开发者、类型或标签筛选模型
           </p>
         </div>
         <button
@@ -193,16 +171,23 @@ export function PricingSidebar(props: PricingSidebarProps) {
       )}
 
       <div className='space-y-1'>
+        <MultiFilterSection
+          title='模型开发者'
+          options={props.ownerOptions}
+          selected={props.ownerFilters}
+          onToggle={props.onToggleOwner}
+          onClear={props.onClearOwners}
+        />
         <FilterSection
           title='模型类型'
           value={props.typeFilter}
-          options={typeOptions}
+          options={props.typeOptions}
           onChange={props.onTypeChange}
         />
         <FilterSection
           title='模型标签'
           value={props.tagFilter}
-          options={tagOptions}
+          options={props.tagOptions}
           onChange={props.onTagChange}
         />
       </div>

@@ -5,6 +5,7 @@ import { modelTypeLabel } from '../lib/model-type'
 import { CopyButton } from './CopyButton'
 import { OwnerAvatar } from './OwnerAvatar'
 import { formatCredits } from '../lib/credits'
+import { OWNER_UNKNOWN_LABEL } from '../lib/owner'
 
 // 规则类型标签。目前后端只有 per_request 一个值，回落到原始字符串以免新增类型时显示空白。
 // 用常量映射而非 enum：tsconfig 开了 erasableSyntaxOnly。
@@ -107,7 +108,7 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
                 {model.name}
               </h2>
               <div className='mt-0.5 flex items-center gap-1.5'>
-                <p className='text-muted-foreground truncate text-xs'>{model.owner}</p>
+                <p className='text-muted-foreground truncate text-xs'>{model.owner?.trim() || OWNER_UNKNOWN_LABEL}</p>
                 {model.type && (
                   <span className='bg-muted/70 text-muted-foreground shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium'>
                     {modelTypeLabel(model.type)}

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -67,6 +68,10 @@ type Model struct {
 	// 空值在数据库中是 NULL，在 JSON 中是 null。
 	ParamSpec JSONText `json:"param_spec,omitempty" gorm:"type:jsonb"`
 
+	// SortOrder 管理端手动排序值，越小越靠前；NULL 表示未手动排序。
+	// 未排序的模型统一排在已排序模型之后，再按开发者、模型名回退。
+	SortOrder *int `json:"sort_order,omitempty" gorm:"type:integer"`
+
 	// 状态：1=启用, 2=禁用
 	Status int `json:"status" gorm:"default:1"`
 
@@ -77,10 +82,17 @@ type Model struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// modelDisplayOrder 三处模型列表共用的排序表达式。
+//
+// sort_order IS NULL 为 false 的行（已手动排序）排在前，true 的行（未排序）
+// 排在后；未排序时回落到「开发者 → 模型名 → id」。三处查询必须共用它，
+// 否则管理端、客户端下拉和模型广场会出现不同的模型顺序。
+const modelDisplayOrder = "sort_order IS NULL, sort_order, LOWER(TRIM(owner)), LOWER(name), id"
+
 // GetModels 获取所有可用模型
 func GetModels() ([]Model, error) {
 	var models []Model
-	err := DB.Where("status = ?", 1).Find(&models).Error
+	err := DB.Where("status = ?", 1).Order(modelDisplayOrder).Find(&models).Error
 	return models, err
 }
 
@@ -98,7 +110,7 @@ func GetModelByName(name string) (*Model, error) {
 func GetPricingModels() ([]map[string]interface{}, error) {
 	var models []Model
 	err := DB.Where("status = ?", 1).
-		Order("name ASC").
+		Order(modelDisplayOrder).
 		Find(&models).Error
 	if err != nil {
 		return nil, err
@@ -138,8 +150,43 @@ func GetPricingModels() ([]map[string]interface{}, error) {
 // AdminGetModels 管理员获取全部模型（含禁用）
 func AdminGetModels() ([]Model, error) {
 	var models []Model
-	err := DB.Order("id ASC").Find(&models).Error
+	err := DB.Order(modelDisplayOrder).Find(&models).Error
 	return models, err
+}
+
+// ErrModelNotFound 排序请求引用了不存在的模型，通常是被并发删除。
+var ErrModelNotFound = errors.New("model not found")
+
+// ReorderModels 按给定顺序写入 sort_order（1..N）。
+//
+// 调用方必须先校验 ids 非空且无重复。事务内先把所有模型置为 NULL，再给
+// 请求里的 ID 顺序编号：这样请求里没有的模型（例如拖拽期间新建的）会落到
+// 末尾，也不会和 1..N 产生重复序号。RowsAffected 为 0 时回滚，避免管理端
+// 页面停留期间模型被删除后只写进去一半的顺序。
+func ReorderModels(ids []int) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		// GORM 默认拒绝没有 WHERE 的全局更新，显式写 1=1 表示清空全部。
+		// 用 UpdateColumn 跳过 updated_at 自动更新：排序是展示元数据，
+		// 不该把每个模型的「最后修改时间」都刷一遍。
+		if err := tx.Model(&Model{}).Where("1 = 1").UpdateColumn("sort_order", gorm.Expr("NULL")).Error; err != nil {
+			return err
+		}
+		for i, id := range ids {
+			res := tx.Model(&Model{}).Where("id = ?", id).UpdateColumn("sort_order", i+1)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return ErrModelNotFound
+			}
+		}
+		return nil
+	})
+}
+
+// ResetModelOrder 清空所有模型的手动排序，回落到默认顺序。
+func ResetModelOrder() error {
+	return DB.Model(&Model{}).Where("1 = 1").UpdateColumn("sort_order", gorm.Expr("NULL")).Error
 }
 
 // GetModelByID 根据 ID 获取模型
@@ -152,9 +199,27 @@ func GetModelByID(id int) (*Model, error) {
 	return &m, nil
 }
 
-// CreateModel 创建模型
+// CreateModel 创建模型，并把新模型放到当前展示顺序的末尾。
+//
+// 如果直接让新模型的 sort_order 保持 NULL，它会落到「未排序」分组里，
+// 按开发者/模型名排序，不一定在末尾。这里先把现有模型的当前顺序固化为
+// 1..N（不触碰 updated_at），再给新模型 N+1，确保它稳定排在最后。
 func CreateModel(m *Model) error {
-	return DB.Create(m).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var existing []Model
+		if err := tx.Order(modelDisplayOrder).Find(&existing).Error; err != nil {
+			return err
+		}
+		for i := range existing {
+			if err := tx.Model(&Model{}).Where("id = ?", existing[i].ID).
+				UpdateColumn("sort_order", i+1).Error; err != nil {
+				return err
+			}
+		}
+		next := len(existing) + 1
+		m.SortOrder = &next
+		return tx.Create(m).Error
+	})
 }
 
 // UpdateModel 更新模型

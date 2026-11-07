@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Plus,
   Pencil,
@@ -10,6 +10,8 @@ import {
   Coins,
   Link2,
   Settings2,
+  GripVertical,
+  RotateCcw,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { MODEL_TYPE_OPTIONS, modelTypeLabel } from '../../lib/model-type'
@@ -20,6 +22,8 @@ import {
   updateModelStatus,
   deleteModel,
   updateModelParamSpec,
+  reorderModels,
+  resetModelOrder,
   type AdminModel,
 } from '../../api/admin-model'
 import { ConfirmDialog } from '../../components/admin/ConfirmDialog'
@@ -60,6 +64,16 @@ export function AdminModels() {
   const [endpointRow, setEndpointRow] = useState<AdminModel | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
 
+  // 排序：dragIdRef 是当前拖动的行（用 ref 避免 dragstart 后首个 dragover 读到旧 state），
+  // overId 是鼠标悬停的目标行。
+  const dragIdRef = useRef<number | null>(null)
+  // 用 ref 而不是只靠 state：连续快速拖拽/按键时，第二次操作可能发生在
+  // setOrderSaving 重渲染之前，仅看 state 会同时发出两个排序请求。
+  const orderSavingRef = useRef(false)
+  const [overId, setOverId] = useState<number | null>(null)
+  const [orderSaving, setOrderSaving] = useState(false)
+  const [orderError, setOrderError] = useState('')
+
   // 参数配置
   const [paramOpen, setParamOpen] = useState(false)
   const [paramRow, setParamRow] = useState<AdminModel | null>(null)
@@ -86,6 +100,71 @@ export function AdminModels() {
   }, [])
 
   useEffect(() => { loadModels() }, [loadModels])
+
+  const persistOrder = async (next: AdminModel[]) => {
+    if (orderSavingRef.current) return
+    orderSavingRef.current = true
+    const previous = models
+    setModels(next)
+    setOrderSaving(true)
+    setOrderError('')
+    try {
+      const res = await reorderModels(next.map((m) => m.id))
+      if (!res.success) {
+        setOrderError(res.message || '排序保存失败')
+        setModels(previous)
+        await loadModels()
+      }
+    } catch {
+      setOrderError('排序保存失败，请重试')
+      setModels(previous)
+      await loadModels()
+    } finally {
+      orderSavingRef.current = false
+      setOrderSaving(false)
+    }
+  }
+
+  const moveModelTo = (fromId: number, toId: number) => {
+    if (fromId === toId) return
+    const fromIndex = models.findIndex((m) => m.id === fromId)
+    const toIndex = models.findIndex((m) => m.id === toId)
+    if (fromIndex < 0 || toIndex < 0) return
+    const next = [...models]
+    const [moved] = next.splice(fromIndex, 1)
+    next.splice(toIndex, 0, moved)
+    persistOrder(next)
+  }
+
+  const moveModelByOffset = (id: number, offset: number) => {
+    const index = models.findIndex((m) => m.id === id)
+    const target = index + offset
+    if (index < 0 || target < 0 || target >= models.length) return
+    const next = [...models]
+    const [moved] = next.splice(index, 1)
+    next.splice(target, 0, moved)
+    persistOrder(next)
+  }
+
+  const handleResetOrder = async () => {
+    if (orderSavingRef.current) return
+    orderSavingRef.current = true
+    setOrderSaving(true)
+    setOrderError('')
+    try {
+      const res = await resetModelOrder()
+      if (!res.success) {
+        setOrderError(res.message || '恢复默认排序失败')
+        return
+      }
+      await loadModels()
+    } catch {
+      setOrderError('恢复默认排序失败，请重试')
+    } finally {
+      orderSavingRef.current = false
+      setOrderSaving(false)
+    }
+  }
 
   const openCreate = () => {
     setEditRow(null)
@@ -238,11 +317,26 @@ export function AdminModels() {
           <h2 className='text-2xl font-bold tracking-tight'>模型管理</h2>
           <p className='text-muted-foreground mt-1 text-sm'>管理系统可用的 AI 模型</p>
         </div>
-        <button onClick={openCreate}
-          className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors'>
-          <Plus className='size-4' /> 添加模型
-        </button>
+        <div className='flex items-center gap-2'>
+          <button
+            onClick={handleResetOrder}
+            disabled={orderSaving}
+            className='border-border/60 hover:bg-muted inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-medium transition-colors disabled:opacity-50'
+          >
+            <RotateCcw className='size-4' /> 恢复默认排序
+          </button>
+          <button onClick={openCreate}
+            className='bg-primary hover:bg-primary/90 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors'>
+            <Plus className='size-4' /> 添加模型
+          </button>
+        </div>
       </div>
+
+      {orderError && (
+        <div className='bg-destructive/10 text-destructive rounded-lg px-4 py-3 text-sm'>
+          {orderError}
+        </div>
+      )}
 
       <div className='border-border/60 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border'>
         <div className='min-h-0 flex-1 overflow-auto'>
@@ -250,6 +344,7 @@ export function AdminModels() {
             <thead className='bg-muted sticky top-0 z-10'>
               <tr className='bg-muted/30 border-border/40 border-b'>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>ID</th>
+                <th className='text-muted-foreground px-2 py-3 text-left text-xs font-semibold tracking-wider uppercase'>排序</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>模型开发者</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>模型ID</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>类型</th>
@@ -261,15 +356,69 @@ export function AdminModels() {
             </thead>
             <tbody className='divide-border/40 divide-y'>
               {loading ? (
-                <tr><td colSpan={8} className='px-4 py-12 text-center'><Loader2 className='text-muted-foreground mx-auto size-6 animate-spin' /></td></tr>
+                <tr><td colSpan={9} className='px-4 py-12 text-center'><Loader2 className='text-muted-foreground mx-auto size-6 animate-spin' /></td></tr>
               ) : models.length === 0 ? (
-                <tr><td colSpan={8} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无模型</p></td></tr>
+                <tr><td colSpan={9} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无模型</p></td></tr>
               ) : models.map((m) => {
                 const statusConf = STATUS_CONFIG[m.status] || STATUS_CONFIG[1]
                 const tags = m.tags ? m.tags.split(',').map(t => t.trim()).filter(Boolean) : []
                 return (
-                  <tr key={m.id} className={cn('hover:bg-muted/20 transition-colors', m.status === 2 && 'opacity-50')}>
+                  <tr
+                    key={m.id}
+                    onDragOver={(e) => {
+                      const draggingId = dragIdRef.current
+                      if (draggingId == null || draggingId === m.id) return
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      if (overId !== m.id) setOverId(m.id)
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const droppedId = Number(e.dataTransfer.getData('text/plain')) || dragIdRef.current
+                      if (droppedId) moveModelTo(droppedId, m.id)
+                      dragIdRef.current = null
+                      setOverId(null)
+                    }}
+                    className={cn(
+                      'hover:bg-muted/20 transition-colors',
+                      m.status === 2 && 'opacity-50',
+                      overId === m.id && 'bg-primary/5 ring-primary/40 ring-1 ring-inset',
+                    )}
+                  >
                     <td className='px-4 py-3'><span className='text-muted-foreground font-mono text-xs'>{m.id}</span></td>
+                    <td className='px-2 py-3'>
+                      <button
+                        type='button'
+                        draggable={!orderSaving}
+                        aria-label={`拖动调整 ${m.name} 的顺序`}
+                        title='拖动排序；聚焦后可用 ↑/↓ 移动'
+                        onDragStart={(e) => {
+                          dragIdRef.current = m.id
+                          e.dataTransfer.effectAllowed = 'move'
+                          e.dataTransfer.setData('text/plain', String(m.id))
+                          setOverId(null)
+                        }}
+                        onDragEnd={() => {
+                          dragIdRef.current = null
+                          setOverId(null)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'ArrowUp') {
+                            e.preventDefault()
+                            moveModelByOffset(m.id, -1)
+                          } else if (e.key === 'ArrowDown') {
+                            e.preventDefault()
+                            moveModelByOffset(m.id, 1)
+                          }
+                        }}
+                        className={cn(
+                          'text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex cursor-grab items-center justify-center rounded-md p-1.5 active:cursor-grabbing focus-visible:ring-2 focus-visible:outline-none',
+                          orderSaving && 'pointer-events-none opacity-40',
+                        )}
+                      >
+                        <GripVertical className='size-4' />
+                      </button>
+                    </td>
                     <td className='px-4 py-3'><span className='text-sm'>{m.owner}</span></td>
                     <td className='px-4 py-3'><span className='font-medium'>{m.name}</span></td>
                     <td className='px-4 py-3'>

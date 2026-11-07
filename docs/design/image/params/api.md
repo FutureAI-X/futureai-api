@@ -44,7 +44,7 @@
 
 ## 3 管理端接口
 
-- `GET /api/admin/models` 每项增加 `param_spec` 与 `param_spec_valid`；
+- `GET /api/admin/models` 每项增加 `param_spec`、`param_spec_valid` 与 `sort_order`；
 - 新增 `PUT /api/admin/models/:id/param-spec`，请求体为 `{"param_spec": {...}}`；传 `null` 表示清除配置；
 - 保存前执行 [validation.md](validation.md) 的元校验，失败返回 400 与字段级原因；
 - 仅管理员可调用。

@@ -13,6 +13,7 @@
 | 供应商模型 | `/api/admin/vendor-models` | [供应商模型管理](vendor-models.md) |
 | 上游端点 | `/api/admin/endpoints` | [上游端点管理](endpoints.md) |
 | 模型 | `/api/admin/models` | [模型管理](models.md) |
+| 模型展示顺序 | `/api/admin/model-order` | [模型管理](models.md#2-保存模型顺序) |
 | 模型与端点绑定 | `/api/admin/models/:id/endpoints` | [模型与端点绑定](model-endpoints.md) |
 | 计费规则 | `/api/admin/models/:id/credit-rule` | [计费规则管理](credit-rules.md) |
 | 积分流水 | `/api/admin/credit-logs` | [积分流水](credit-logs.md) |
