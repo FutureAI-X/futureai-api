@@ -181,7 +181,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 本次总积分 = 基础积分（或命中的参数组合积分）+ 参考图张数 × 每张参考图积分
 ```
 
-参数组合条件只能引用 `model`、`prompt`、`size`、`resolution`，且值必须为字符串。参考图附加计费只在供应商支持参考图时生效。
+基础积分可以为 0，表示免费模型。参数组合条件只能引用 `model`、`prompt`、`size`、`resolution`，且值必须为字符串。参考图附加计费只在供应商支持参考图时生效。
 
 ## 9 模型索引
 

@@ -107,7 +107,7 @@ MOSS 适配层把所有失败统一标记为 `FailureRejected`。失败范围包
 | 供应商模型 ID | `moss-image-base-1.0` 或 `moss-image-base-1.0-2026-10-09` |
 | 模型类型 | `image` |
 | 端点 | `/v1/images/generations` |
-| 计费规则 | 只配置基础积分，参考图单价留 0 |
+| 计费规则 | 只配置基础积分，可为 0；参考图单价留 0 |
 
 参考图单价即使配置也不会生效，`resolveCredits` 会跳过并记录配置不一致日志。
 

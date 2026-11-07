@@ -82,7 +82,7 @@ MOSS 是同步接口，一次 `POST` 返回图片 URL，没有任务查询接口
 | 供应商模型 ID | `moss-image-sft-1.0` 或 `moss-image-sft-1.0-2026-10-09` |
 | 模型类型 | `image` |
 | 端点 | `/v1/images/generations` |
-| 计费规则 | 只配置基础积分 |
+| 计费规则 | 只配置基础积分，可为 0 |
 
 ## 11 代码与测试
 

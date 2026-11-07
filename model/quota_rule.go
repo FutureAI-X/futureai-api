@@ -25,7 +25,7 @@ type CreditRule struct {
 	// 规则类型：per_request=按次计费
 	RuleType CreditRuleType `json:"rule_type" gorm:"size:32;not null;default:'per_request'"`
 
-	// 基础积分（每次请求扣除的积分数量）。
+	// 基础积分（每次请求扣除的积分数量）。0 表示免费模型。
 	// 显式指定 numeric(20,10) 而不是让 GORM 按 float64 推出无约束的 decimal：
 	// 上界可预期，且与其余积分列口径一致（业务精度见 CreditPrecision）。
 	BaseCredits float64 `json:"base_credits" gorm:"type:numeric(20,10);not null;default:0"`

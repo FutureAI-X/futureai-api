@@ -160,8 +160,9 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
   }
 
   const handleSave = async () => {
-    if (!formBaseCredits || parseFloat(formBaseCredits) <= 0) {
-      setFormError('基础积分必须大于 0')
+    const baseCredits = parseFloat(formBaseCredits)
+    if (formBaseCredits.trim() === '' || isNaN(baseCredits) || baseCredits < 0) {
+      setFormError('基础积分必须为 0 或正数')
       return
     }
 

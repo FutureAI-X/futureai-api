@@ -79,9 +79,9 @@ func AdminSaveCreditRule(c *gin.Context) {
 		return
 	}
 
-	// 验证基础积分
-	if req.BaseCredits <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "基础积分必须大于 0"})
+	// 验证基础积分。0 表示免费模型，是受支持的配置。
+	if req.BaseCredits < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "基础积分不能为负数"})
 		return
 	}
 
@@ -93,7 +93,7 @@ func AdminSaveCreditRule(c *gin.Context) {
 
 	// 验证参考图附加计费（可选字段，省略表示不修改，因此用指针判断）
 	if req.RefImageCredits != nil {
-		// 允许为 0（表示不计费），与 BaseCredits 必须大于 0 的规则不同
+		// 允许为 0，表示不计费。
 		if *req.RefImageCredits < 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "每张参考图积分不能为负数"})
 			return

@@ -28,7 +28,7 @@ export function CreditAmountInput({
   onKeyDown,
 }: CreditAmountInputProps) {
   // 只对「填了内容但格式不对」报错：空值不算格式错误，
-  // 是否必填、是否必须大于 0 由提交时的校验统一判断。
+  // 是否必填、是否允许为 0 由提交时的校验统一判断。
   const malformed = value.trim() !== '' && !validCreditInput(value)
 
   return (
