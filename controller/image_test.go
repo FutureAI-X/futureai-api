@@ -431,20 +431,19 @@ func TestParseIdempotencyKey(t *testing.T) {
 
 func strPtr(s string) *string { return &s }
 
-// 轮询的超时余量必须显著大于提交超时：正在同步提交的任务同样是
-// pending 且无 vendor_response，静默期不够长就会把在途任务当成
-// 「提交失败」退款——用户既拿图又退款。
-func TestStalePendingGraceExceedsSubmitTimeout(t *testing.T) {
-	if stalePendingGrace <= supplier.SubmitTimeout {
-		t.Fatalf("stalePendingGrace(%s) 必须大于 SubmitTimeout(%s)",
-			stalePendingGrace, supplier.SubmitTimeout)
+// 新 SLA：图片 15 分钟、视频 30 分钟；提交确认窗口必须小于结果截止时间。
+func TestTaskDeadlines(t *testing.T) {
+	if imageResultDeadline != 15*time.Minute {
+		t.Errorf("imageResultDeadline = %s, want 15m", imageResultDeadline)
 	}
-}
-
-// 兜底时限要足够长，避免正常的慢生成被误判为无法对账
-func TestTaskMaxPollAgeIsGenerous(t *testing.T) {
-	if taskMaxPollAge < time.Hour {
-		t.Errorf("taskMaxPollAge = %s，对慢速图像生成过短", taskMaxPollAge)
+	if videoResultDeadline != 30*time.Minute {
+		t.Errorf("videoResultDeadline = %s, want 30m", videoResultDeadline)
+	}
+	if asyncSubmitConfirmWindow <= 0 || asyncSubmitConfirmWindow >= imageResultDeadline {
+		t.Errorf("asyncSubmitConfirmWindow = %s，必须大于 0 且小于图片截止时间", asyncSubmitConfirmWindow)
+	}
+	if backgroundSubmitWindow < 15*time.Minute {
+		t.Errorf("backgroundSubmitWindow = %s，不能小于 MOSS 的 15 分钟上游超时", backgroundSubmitWindow)
 	}
 }
 
@@ -489,24 +488,16 @@ func TestHasDeliverableResult(t *testing.T) {
 	}
 }
 
-// submitting 只是内部状态（后台同步生成），公开状态机里没有它。
-func TestPublicTaskStatusMapsSubmittingToPending(t *testing.T) {
-	if got := publicTaskStatus(model.StatusSubmitting); got != model.StatusPending {
-		t.Errorf("publicTaskStatus(submitting) = %q, want pending", got)
+// 任务状态只剩 processing/completed/failed，终态判断只认后两者。
+func TestTaskTerminalStatuses(t *testing.T) {
+	if !model.IsTerminalStatus(model.StatusCompleted) {
+		t.Errorf("completed 应为终态")
 	}
-
-	for _, status := range []string{
-		model.StatusPending,
-		model.StatusSubmitted,
-		model.StatusCompleted,
-		model.StatusFailed,
-		model.StatusCancelled,
-		model.StatusCallFail,
-		model.StatusUnknown,
-	} {
-		if got := publicTaskStatus(status); got != status {
-			t.Errorf("publicTaskStatus(%q) = %q, want unchanged", status, got)
-		}
+	if !model.IsTerminalStatus(model.StatusFailed) {
+		t.Errorf("failed 应为终态")
+	}
+	if model.IsTerminalStatus(model.StatusProcessing) {
+		t.Errorf("processing 不应为终态")
 	}
 }
 

@@ -143,12 +143,12 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些�
 | 场景 | 失败性质 | 处理 |
 |---|---|---|
 | 本地序列化失败、构建请求失败、4xx | `FailureRejected` | 退款 |
-| 5xx、超时、连接中断、响应读取失败 | `FailureUnknown` | 不退款，转 `unknown` |
+| 5xx、超时、连接中断、响应读取失败 | `FailureUnknown` | 保持 `processing`，超过 60 秒提交确认窗口后转 `failed` 并退款 |
 | 业务 `code` 不是 200 | `FailureRejected` | 退款 |
-| 响应中缺少任务 ID | `FailureUnknown` | 不退款，转 `unknown` |
-| 非预期的 HTTP 202 | `FailureUnknown` | 不退款，转 `unknown` |
+| 响应中缺少任务 ID | `FailureUnknown` | 保持 `processing`，超过 60 秒提交确认窗口后转 `failed` 并退款 |
+| 非预期的 HTTP 202 | `FailureUnknown` | 保持 `processing`，超过 60 秒提交确认窗口后转 `failed` 并退款 |
 
-`FailureUnknown` 的语义是「上游可能已经建单」。控制器不会立即退款，而是在超龄兜底后转 `call_fail` 并退款。
+`FailureUnknown` 的语义是「上游可能已经建单」。任务保持 `processing`，由 `submit_deadline` 兜底；超过 60 秒仍没有 `vendor_response` 时转 `failed` 并退款，同时记录 `[SUBMIT_UNKNOWN]` 供事后对账。
 
 ## 7 任务状态与对账
 
@@ -157,13 +157,14 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些�
 | 上游状态 | 平台状态 |
 |---|---|
 | `completed` | `completed` |
-| `failed` | `failed` |
-| `cancelled` | `cancelled` |
-| `submitted` / `pending` / `processing` | 保持非终态 |
-| 查询失败 | `call_fail` |
-| 未识别的状态 | 保持非终态，下一轮继续查询 |
+| `failed` / `cancelled` | `failed` |
+| `submitted` / `pending` / `processing` | 保持 `processing` |
+| 查询失败 | 保持 `processing` |
+| 未识别的状态 | 保持 `processing`，下一轮继续查询 |
 
 `task_id` 来自上游响应，拼接查询 URL 前必须通过字符集校验。校验失败按查询失败处理，不拼接 URL。
+
+图片任务的结果确认截止时间为创建后 15 分钟；超过后仍未完成，转 `failed` 并写入 `error_code=query_timeout`。
 
 ## 8 结果转存
 
@@ -173,7 +174,7 @@ APIMart 不声明 `RequireResultFetch`，因此转存失败只记录日志，任
 
 ## 9 失败性质与退款
 
-可退款的终态为 `failed`、`cancelled` 和 `call_fail`。`unknown` 不是终态，不退款；任务创建满 6 小时后仍未确认时，对账循环转 `call_fail` 并退款，同时记录 `[需人工对账]` 日志。
+任务只有 `processing` / `completed` / `failed` 三种状态。`failed` 表示已退款，失败原因写入 `error_code` / `error_message`。图片任务创建后 15 分钟仍未完成时，对账循环转 `failed` 并退款，同时记录 `[需人工对账]` 日志。
 
 ## 10 配置
 

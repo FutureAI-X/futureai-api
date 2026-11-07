@@ -314,6 +314,11 @@ func migrateDB() error {
 		return err
 	}
 
+	// 任务状态收敛为 processing / completed / failed，并回填截止时间与失败原因。
+	if err := migrateTaskStatusModel(); err != nil {
+		return err
+	}
+
 	// 添加表和字段注释
 	return addTableComments()
 }

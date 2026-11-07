@@ -62,13 +62,12 @@ Metaso 的请求体使用 `content` 数组。`buildVideoRequest` 按以下顺序
 
 | 上游状态 | 平台状态 |
 |---|---|
-| `queued` / `running` | `submitted` |
+| `queued` / `running` | `processing` |
 | `succeeded` | `completed` |
-| `failed` | `failed` |
-| `cancelled` | `cancelled` |
-| 查询失败或未知状态 | `call_fail` |
+| `failed` / `cancelled` | `failed` |
+| 查询失败或未知状态 | 保持 `processing` |
 
-`call_fail` 表示查询本身失败，不是任务失败。对账循环不会据此退款，任务保持非终态等待下一轮。
+查询失败表示查询本身失败，不是任务失败。对账循环不会据此退款，任务保持 `processing` 等待下一轮；超过 30 分钟截止时间仍无法确认时，统一转 `failed` 并写入 `error_code=query_timeout`。
 
 ## 7 失败性质与结果
 
@@ -76,8 +75,8 @@ Metaso 提交接口的失败性质如下。
 
 | 场景 | 失败性质 | 处理 |
 |---|---|---|
-| 4xx、业务错误码、请求未发出 | `FailureRejected` | 转终态 |
-| 5xx、超时、连接中断、响应缺少 `task_id` | `FailureUnknown` | 转 `unknown`，不立即退款 |
+| 4xx、业务错误码、请求未发出 | `FailureRejected` | 转 `failed` 并退款 |
+| 5xx、超时、连接中断、响应缺少 `task_id` | `FailureUnknown` | 保持 `processing`，超过 60 秒提交确认窗口后转 `failed` 并退款 |
 
 视频任务按 0 积分创建，因此退款流程实际不会产生积分流水，但状态机与图像任务保持一致。
 

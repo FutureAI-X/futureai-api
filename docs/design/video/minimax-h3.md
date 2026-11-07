@@ -55,8 +55,8 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 
 提交响应优先按 `{"task_id":"..."}` 解析。2xx 但缺少 `task_id` 时，再尝试从错误体读取 `http_code`：
 
-- 错误体中的 `http_code` 为 4xx：`FailureRejected`，可退款；
-- 其余情况：`FailureUnknown`，不退款，转 `unknown`。
+- 错误体中的 `http_code` 为 4xx：`FailureRejected`，转 `failed` 并退款；
+- 其余情况：`FailureUnknown`，任务保持 `processing`，超过 60 秒提交确认窗口后转 `failed` 并退款。
 
 ## 7 任务状态与对账
 
@@ -67,12 +67,11 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 | 上游状态 | 平台状态 |
 |---|---|
 | `succeeded` | `completed` |
-| `failed` | `failed` |
-| `cancelled` | `cancelled` |
-| `queued` / `running` | `submitted` |
-| 未知状态 | `call_fail` |
+| `failed` / `cancelled` | `failed` |
+| `queued` / `running` | `processing` |
+| 未知状态 | 保持 `processing` |
 
-查询失败、HTTP 非 200、响应解析失败一律返回 `call_fail`。`call_fail` 不是任务失败，控制器不会据此退款。
+查询失败、HTTP 非 200、响应解析失败时任务保持 `processing`，控制器不会据此退款；超过 30 分钟截止时间仍无法确认时，统一转 `failed` 并写入 `error_code=query_timeout`。
 
 ## 8 结果转存
 
@@ -82,7 +81,7 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 
 ## 9 失败性质与退款
 
-视频任务按 0 积分创建，退款流程不会产生积分流水。状态机仍与图像任务一致：`failed`、`cancelled`、`call_fail` 是终态，`unknown` 不是终态。
+视频任务按 0 积分创建，退款流程不会产生积分流水。状态机与图像任务一致：只有 `processing` / `completed` / `failed` 三种状态。
 
 ## 10 配置
 

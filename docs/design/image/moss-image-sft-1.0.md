@@ -22,7 +22,7 @@ MOSS 是同步接口，一次 `POST` 返回图片 URL，没有任务查询接口
 
 | 字段 | 值 | 影响 |
 |---|---|---|
-| `BackgroundSubmit` | `true` | 任务以 `submitting` 落库，handler 立即返回 |
+| `BackgroundSubmit` | `true` | 任务以 `processing` 落库，handler 立即返回 |
 | `SupportsReferenceImages` | `false` | 忽略参考图，不计费 |
 | `RequiresPixelSize` | `true` | `size` 必须是像素尺寸 |
 | `SubmitTimeout` | 15 分钟 | 同步生成的最长等待时间 |
@@ -109,14 +109,14 @@ MOSS 是同步接口，一次 `POST` 返回图片 URL，没有任务查询接口
 
 ## 6 提交方式与超时
 
-与 base 版本相同：控制器使用 `BackgroundSubmit` 分流，goroutine 使用 `common.LongOutboundHTTPClient` 和 15 分钟 context 调用上游。成功写入 `vendor_response` 并转入 `submitted`，失败进入 `call_fail` 并退款。
+与 base 版本相同：控制器使用 `BackgroundSubmit` 分流，goroutine 使用 `common.LongOutboundHTTPClient` 和 15 分钟 context 调用上游。成功写入 `vendor_response`，任务保持 `processing`；失败进入 `failed` 并退款。
 
 ## 7 任务状态与对账
 
 与 base 版本相同：
 
 - `TaskQuery` 不访问上游，直接读取已落库的结果；
-- `submitting` 超过 20 分钟无结果时由 `FailStaleSubmittingTask` 退款；
+- `processing` 超过 `submit_deadline` 仍无结果时由 `FailStaleSubmitTask` 退款；
 - 进程重启中断同样按超龄规则退款。
 
 ## 8 结果转存

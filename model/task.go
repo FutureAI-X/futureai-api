@@ -13,37 +13,23 @@ import (
 
 // ── 任务状态机 ──
 //
-// 关键区分是「终态」与「非终态」，而不是「成功」与「失败」：
-// 只有终态才允许退款与释放，非终态一律由对账循环继续接管。
+// 对外只有三个状态：
 //
-// 这个区分是为了堵住一类资损：查询上游失败、轮询轮次耗尽、并发槽位占满，
-// 这些都是**我方不知道结果**，不是**上游没有受理**。把它们当成失败去退款，
-// 就会出现「上游照常出图并计费、用户全额退款」——平台净损失。
+//	processing  提交中、生成中、结果确认中
+//	completed   成功
+//	failed      失败且已退款；包含上游拒绝、超时、取消、内部错误
+//
+// 提交中/已提交/查询中不再拆成独立状态，用 vendor_task_id、
+// submit_deadline、deadline_at 这些字段判断；失败原因用 error_code 表达。
+// 只要任务进入 failed，就表示已经退款（credits_refunded 保证幂等）。
 const (
-	// StatusPending 已扣费、已建任务行，但尚未向上游提交成功
-	StatusPending = "pending"
-	// StatusSubmitting 已扣费，正在后台执行同步生成（当前仅 MOSS 使用）。
-	// 与 pending 的区别：pending 表示还没提交；submitting 表示已经交给后台
-	// worker，但同步接口还没有返回结果。对外查询时映射为 pending，
-	// 因为公开状态机里没有这个中间态。
-	StatusSubmitting = "submitting"
-	// StatusSubmitted 上游已受理，正在轮询
-	StatusSubmitted = "submitted"
-	// StatusCompleted 上游已出图（终态，不退款）
-	StatusCompleted = "completed"
-	// StatusFailed 上游明确返回失败（终态，退款）
-	StatusFailed = "failed"
-	// StatusCancelled 上游明确返回取消（终态，退款）
-	StatusCancelled = "cancelled"
-	// StatusCallFail 上游明确拒绝受理（终态，退款）
-	StatusCallFail = "call_fail"
-	// StatusUnknown 结果未知——轮询轮次耗尽或查询持续失败（**非终态**，不退款）。
-	// 任务会留在库里等后续对账；超过兜底时限仍无法确认时才转 call_fail 退款并告警。
-	StatusUnknown = "unknown"
+	StatusProcessing = "processing"
+	StatusCompleted  = "completed"
+	StatusFailed     = "failed"
 )
 
 // terminalStatuses 终态列表：进入这些状态后任务不再被轮询，且不会再被改动。
-var terminalStatuses = []string{StatusCompleted, StatusFailed, StatusCancelled, StatusCallFail}
+var terminalStatuses = []string{StatusCompleted, StatusFailed}
 
 // TerminalStatuses 返回终态列表的副本（供查询使用，调用方不可修改内部切片）
 func TerminalStatuses() []string {
@@ -60,11 +46,6 @@ func IsTerminalStatus(status string) bool {
 	return false
 }
 
-// refundableStatuses 需要对用户退款的终态。
-// 上游**明确**失败/取消/拒绝受理才退款——这三个状态的共同点是
-// 「上游告诉我们它没有产出」，而不是「我们没问出结果」。
-var refundableStatuses = []string{StatusFailed, StatusCancelled, StatusCallFail}
-
 // Task 任务记录
 type Task struct {
 	ID     int    `json:"id" gorm:"primaryKey"`
@@ -77,7 +58,16 @@ type Task struct {
 
 	// Status 上建索引：对账循环每隔几十秒就要按状态筛一次，
 	// 没有索引的话每次都是对最大表的顺序扫描。
-	Status string `json:"status" gorm:"index;size:32;not null;default:'submitted'"`
+	Status string `json:"status" gorm:"index;size:32;not null;default:'processing'"`
+
+	// SubmitDeadline 超过这个时间仍没有 vendor_response，判定提交未成功。
+	SubmitDeadline *time.Time `json:"submit_deadline,omitempty" gorm:"index"`
+	// DeadlineAt 任务整体截止时间；超过后仍未完成，判定失败并退款。
+	DeadlineAt *time.Time `json:"deadline_at,omitempty" gorm:"index"`
+
+	// ErrorCode / ErrorMessage 失败原因；仅 failed 状态有值。
+	ErrorCode    string `json:"error_code,omitempty" gorm:"size:64;not null;default:''"`
+	ErrorMessage string `json:"error_message,omitempty" gorm:"size:512;not null;default:''"`
 
 	Credits         float64 `json:"credits" gorm:"type:numeric(20,10);default:0"` // 消耗的积分数量
 	CreditsRefunded bool    `json:"credits_refunded" gorm:"default:false"`        // 积分是否已退还
@@ -177,10 +167,9 @@ func CreateTaskAndDeduct(task *Task, amount float64, remark string) error {
 	})
 }
 
-// SetTaskVendorResponse 记录供应商提交响应并将任务置为已提交。
-// 与 UpdateTaskStatus 的区别：这里写的是 vendor_response 字段——
-// 对账循环依赖该字段取回供应商任务 ID，
-// 若误写到 query_response，任务会被判定为「缺少供应商响应」而错误退款。
+// SetTaskVendorResponse 记录供应商提交响应。任务状态保持 processing。
+// 对账循环依赖 vendor_response 取回供应商任务 ID；若误写到 query_response，
+// 任务会被判定为「缺少供应商响应」而错误退款。
 //
 // 带终态守卫：上游 task_id 只存在于进程内存中（提交响应里），
 // 一旦被并发地把任务置成终态，这个 ID 就永久丢失了——上游照常出图，
@@ -188,10 +177,7 @@ func CreateTaskAndDeduct(task *Task, amount float64, remark string) error {
 func SetTaskVendorResponse(taskID string, vendorResponse string) error {
 	return DB.Model(&Task{}).
 		Where("task_id = ? AND status NOT IN ?", taskID, terminalStatuses).
-		Updates(map[string]interface{}{
-			"status":          StatusSubmitted,
-			"vendor_response": vendorResponse,
-		}).Error
+		Update("vendor_response", vendorResponse).Error
 }
 
 // GetTaskByTaskID 根据任务ID获取任务
@@ -204,21 +190,6 @@ func GetTaskByTaskID(taskID string) (*Task, error) {
 	return &task, nil
 }
 
-// UpdateTaskStatus 更新任务状态和查询响应。
-// 带终态守卫：已终结的任务不再改动。否则会出现「先退款、后被另一个轮询者
-// 覆盖成 completed」的组合——用户既拿图又退款，而审计上完全看不出来。
-func UpdateTaskStatus(taskID string, status string, queryResponse string) error {
-	updates := map[string]interface{}{
-		"status": status,
-	}
-	if queryResponse != "" {
-		updates["query_response"] = queryResponse
-	}
-	return DB.Model(&Task{}).
-		Where("task_id = ? AND status NOT IN ?", taskID, terminalStatuses).
-		Updates(updates).Error
-}
-
 // UpdateTaskCompleted 将任务置为 completed，并记录成图的 file_id。
 //
 // fileID 为空表示转存失败：任务仍按完成处理（尽力而为），
@@ -226,7 +197,9 @@ func UpdateTaskStatus(taskID string, status string, queryResponse string) error 
 // 与 UpdateTaskStatus 一样带终态守卫，避免并发对账重复改写。
 func UpdateTaskCompleted(taskID string, queryResponse string, fileID string) error {
 	updates := map[string]interface{}{
-		"status": StatusCompleted,
+		"status":        StatusCompleted,
+		"error_code":    "",
+		"error_message": "",
 	}
 	if queryResponse != "" {
 		updates["query_response"] = queryResponse
@@ -239,50 +212,55 @@ func UpdateTaskCompleted(taskID string, queryResponse string, fileID string) err
 		Updates(updates).Error
 }
 
-// UpdateTaskStatusWithRefund 更新任务状态，如果进入可退款终态则退还积分。
-// 使用事务 + 行级锁（SELECT ... FOR UPDATE）串行化退款决策，避免并发重复退款。
-//
-// 注意 status 必须是 refundableStatuses 之一才会退款——这保证了
-// 「不知道结果」不会被当成「失败」处理（见状态机注释）。
-func UpdateTaskStatusWithRefund(taskID string, status string, queryResponse string) error {
-	shouldRefund := false
-	for _, s := range refundableStatuses {
-		if status == s {
-			shouldRefund = true
-			break
-		}
+// failTaskTx 在事务内把任务置为 failed、记录原因并退款。
+// 调用方必须已经加锁读取 task 并完成终态/阶段检查。
+func failTaskTx(tx *gorm.DB, task *Task, errorCode, errorMessage, queryResponse string) error {
+	updates := map[string]interface{}{
+		"status":        StatusFailed,
+		"error_code":    errorCode,
+		"error_message": errorMessage,
 	}
+	if queryResponse != "" {
+		updates["query_response"] = queryResponse
+	}
+	if !task.CreditsRefunded && task.Credits > 0 {
+		if err := refundCreditsTx(tx, task.UserID, task.TaskID, task.Credits, "任务失败退还"); err != nil {
+			return err
+		}
+		updates["credits_refunded"] = true
+		updates["credits"] = 0
+	}
+	return tx.Model(&Task{}).Where("task_id = ?", task.TaskID).Updates(updates).Error
+}
 
+// FailTask 把任务置为 failed、记录失败原因并退款。
+func FailTask(taskID, errorCode, errorMessage, queryResponse string) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
-		// 加行级锁读取任务，阻塞并发的同任务退款处理
 		var task Task
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("task_id = ?", taskID).First(&task).Error; err != nil {
 			return err
 		}
-
-		// 已是终态则不再改动，避免覆盖已退款任务的状态
 		if IsTerminalStatus(task.Status) {
 			return nil
 		}
+		return failTaskTx(tx, &task, errorCode, errorMessage, queryResponse)
+	})
+}
 
-		updates := map[string]interface{}{
-			"status": status,
+// FailStaleSubmitTask 把提交阶段超时、仍没有 vendor_response 的任务置为 failed。
+// 事务内重新检查 vendor_response，避免与后台提交成功写入竞争。
+func FailStaleSubmitTask(taskID, errorCode, errorMessage string) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("task_id = ?", taskID).First(&task).Error; err != nil {
+			return err
 		}
-		if queryResponse != "" {
-			updates["query_response"] = queryResponse
+		if task.Status != StatusProcessing || strings.TrimSpace(task.VendorResponse) != "" {
+			return nil
 		}
-
-		// 如果任务失败且积分未退还，则退还积分并把消耗更新为0
-		if shouldRefund && !task.CreditsRefunded && task.Credits > 0 {
-			if err := refundCreditsTx(tx, task.UserID, taskID, task.Credits, "任务失败退还"); err != nil {
-				return err
-			}
-			updates["credits_refunded"] = true
-			updates["credits"] = 0 // 消耗更新为0
-		}
-
-		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates).Error
+		return failTaskTx(tx, &task, errorCode, errorMessage, "")
 	})
 }
 
@@ -295,80 +273,25 @@ func GetTasksAwaitingPoll(limit int) ([]Task, error) {
 	// vendor_response 必须显式排除 NULL：该列可空，历史行或人工插入的行可能是
 	// NULL 而不是空串，而 `NULL <> ''` 在 SQL 里求值为 NULL（非真）——
 	// 只写 <> '' 的话这类行会被静默漏掉。
-	err := DB.Where("status NOT IN ? AND vendor_response IS NOT NULL AND vendor_response <> ''", terminalStatuses).
+	err := DB.Where("status = ? AND vendor_response IS NOT NULL AND vendor_response <> ''", StatusProcessing).
 		Order("id ASC").Limit(limit).Find(&tasks).Error
 	return tasks, err
 }
 
-// GetStalePendingTasks 取出「卡在 pending 且从未记下供应商响应」的任务。
-//
-// cutoff 必须显著晚于提交超时（调用方负责留出余量）：一条刚创建、
-// 正在同步提交上游的任务同样是 pending 且 vendor_response 为空，
-// 若把它也捞出来退款，就变成了「用户既拿图又退款」。
-// 只有确定超过提交窗口仍未落库的，才是真的没提交成功。
-func GetStalePendingTasks(cutoff time.Time, limit int) ([]Task, error) {
+// GetStaleSubmitTasks 取出提交阶段超时、仍没有供应商响应的任务。
+// now 由调用方传入，便于测试和批量对账使用同一时间基准。
+func GetStaleSubmitTasks(now time.Time, limit int) ([]Task, error) {
 	var tasks []Task
-	// 同样要覆盖 NULL：`NULL = ''` 求值为 NULL（非真），只写 = '' 会漏掉
-	// vendor_response 为 NULL 的行，让它们一路漏到兜底时限才被处理。
-	// 正常情况下 Go 侧写入的是空串，但历史行与人工插入的行可能是 NULL。
-	err := DB.Where("status = ? AND (vendor_response IS NULL OR vendor_response = '') AND updated_at < ?",
-		StatusPending, cutoff).
+	err := DB.Where("status = ? AND (vendor_response IS NULL OR vendor_response = '') AND submit_deadline IS NOT NULL AND submit_deadline <= ?",
+		StatusProcessing, now).
 		Order("id ASC").Limit(limit).Find(&tasks).Error
 	return tasks, err
 }
 
-// GetStaleSubmittingTasks 取出「后台同步提交」长时间没有结果的任务。
-//
-// 只取 vendor_response 为空的行：后台调用一旦成功，会先写入结果并把状态
-// 推进到 submitted，这样的任务绝不能在这里被退款。
-func GetStaleSubmittingTasks(cutoff time.Time, limit int) ([]Task, error) {
+// GetExpiredTasks 取出超过整体截止时间仍未终结的任务。
+func GetExpiredTasks(now time.Time, limit int) ([]Task, error) {
 	var tasks []Task
-	err := DB.Where("status = ? AND (vendor_response IS NULL OR vendor_response = '') AND updated_at < ?",
-		StatusSubmitting, cutoff).
-		Order("id ASC").Limit(limit).Find(&tasks).Error
-	return tasks, err
-}
-
-// FailStaleSubmittingTask 把超时仍无结果的后台同步任务置为 call_fail 并退款。
-//
-// 与 UpdateTaskStatusWithRefund 的区别：这里在事务内重新检查 status 与
-// vendor_response。后台 goroutine 可能刚好在查询与更新之间写入了结果；
-// 那种情况下任务已被推进到 submitted，继续退款会造成「用户既拿图又退款」。
-func FailStaleSubmittingTask(taskID string, queryResponse string) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var task Task
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("task_id = ?", taskID).First(&task).Error; err != nil {
-			return err
-		}
-
-		// 已经不在 submitting，或已经拿到结果：说明后台提交有了进展，不能退款。
-		if task.Status != StatusSubmitting || strings.TrimSpace(task.VendorResponse) != "" {
-			return nil
-		}
-
-		updates := map[string]interface{}{
-			"status": StatusCallFail,
-		}
-		if queryResponse != "" {
-			updates["query_response"] = queryResponse
-		}
-		if !task.CreditsRefunded && task.Credits > 0 {
-			if err := refundCreditsTx(tx, task.UserID, taskID, task.Credits, "任务失败退还"); err != nil {
-				return err
-			}
-			updates["credits_refunded"] = true
-			updates["credits"] = 0
-		}
-		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates).Error
-	})
-}
-
-// GetExpiredTasks 取出超过兜底时限仍未终结的任务。
-// 这些任务已无法通过轮询确认结果，需要退款并人工对账。
-func GetExpiredTasks(cutoff time.Time, limit int) ([]Task, error) {
-	var tasks []Task
-	err := DB.Where("status NOT IN ? AND created_at < ?", terminalStatuses, cutoff).
+	err := DB.Where("status = ? AND deadline_at IS NOT NULL AND deadline_at <= ?", StatusProcessing, now).
 		Order("id ASC").Limit(limit).Find(&tasks).Error
 	return tasks, err
 }

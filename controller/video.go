@@ -374,14 +374,19 @@ func VideoGenerate(c *gin.Context) {
 
 	// 11. 创建任务。没有扣费，因此不需要事务；幂等键冲突的处理与图像生成一致。
 	// 快照落库的是公开请求（file_id），不是带签名 URL 的内部请求。
+	now := time.Now()
+	submitDeadline := now.Add(videoSubmitConfirmWindow)
+	deadlineAt := now.Add(videoResultDeadline)
 	task := model.Task{
 		TaskID:         model.GenerateTaskID(),
 		UserID:         userID,
 		VendorID:       vendor.ID,
 		ModelID:        m.ID,
 		EndpointID:     endpoint.ID,
-		Status:         model.StatusPending, // 尚未提交上游
-		Credits:        0,                   // 计费尚未启用
+		Status:         model.StatusProcessing,
+		SubmitDeadline: &submitDeadline,
+		DeadlineAt:     &deadlineAt,
+		Credits:        0, // 计费尚未启用
 		RequestBody:    marshalRequestBodyFor("VideoGenerate", req),
 		IdempotencyKey: idemKey,
 	}
@@ -407,7 +412,7 @@ func VideoGenerate(c *gin.Context) {
 	})
 	if s == nil {
 		common.SysErrorf("[VideoGenerate] 不支持的视频供应商类型: %s", vendor.Name)
-		model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusCallFail, `{"error":"unsupported vendor"}`)
+		model.FailTask(task.TaskID, "internal_error", "服务暂时不可用", `{"error":"unsupported vendor"}`)
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "不支持的供应商类型"})
 		return
 	}
@@ -423,22 +428,23 @@ func VideoGenerate(c *gin.Context) {
 	if result.Code != "success" && result.FailureKind != supplier.FailureUnknown {
 		common.SysErrorf("[VideoGenerate] 供应商明确拒绝: vendor=%s, model=%s, kind=%s",
 			vendor.Name, modelName, result.FailureKind)
-		if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusCallFail, `{"error":"vendor rejected"}`); err != nil {
+		if err := model.FailTask(task.TaskID, "vendor_rejected", "上游拒绝受理", `{"error":"vendor rejected"}`); err != nil {
 			common.SysErrorf("[VideoGenerate] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
 		}
 		c.JSON(http.StatusOK, gin.H{"code": "fail", "message": "供应商调用失败"})
 		return
 	}
 
-	// 14. 结果不确定（超时、连接中断、响应读不完整）：不能当失败处理，
-	// 上游很可能已经建单并计费。置为非终态的 unknown，交给人工核对窗口。
+	// 14. 结果不确定（超时、连接中断、响应读不完整）。
+	// 任务保持 processing，由 submit_deadline 兜底；调用方拿到 taskId 后继续轮询。
 	if result.FailureKind == supplier.FailureUnknown {
-		common.SysErrorf("[VideoGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，转入人工核对（暂不转终态）: taskID=%s, userID=%d, vendor=%s, model=%s",
+		common.SysErrorf("[VideoGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，进入提交确认窗口: taskID=%s, userID=%d, vendor=%s, model=%s",
 			task.TaskID, userID, vendor.Name, modelName)
-		if err := model.UpdateTaskStatus(task.TaskID, model.StatusUnknown, `{"pending_manual_review":"submit result unknown"}`); err != nil {
-			common.SysErrorf("[VideoGenerate] 标记任务为 unknown 失败: taskID=%s, err=%v", task.TaskID, err)
-		}
-		c.JSON(http.StatusOK, gin.H{"code": "fail", "message": "上游调用结果不确定，任务已转入人工核对，请稍后用 taskId 查询状态"})
+		c.JSON(http.StatusOK, gin.H{
+			"code":    "success",
+			"taskId":  task.TaskID,
+			"message": "提交结果待确认",
+		})
 		return
 	}
 

@@ -32,7 +32,7 @@
 7. 计算积分。参考图附加计费只在供应商支持参考图时参与。
 8. 处理幂等键。命中已有任务时直接返回原任务 ID。
 9. 把 `image_ids` 解析成短期签名 URL。仅支持参考图的供应商会执行。
-10. 创建任务并扣费。同步提交的供应商状态为 `pending`，后台提交的供应商状态为 `submitting`。
+10. 创建任务并扣费。任务统一以 `processing` 落库，同时写入 `submit_deadline` 与 `deadline_at`。
 11. 提交上游。后台提交的供应商立即返回 `taskId`，由 goroutine 完成调用；其余供应商在 handler 内等待。
 12. 上游受理后写入 `vendor_response`，再交给对账循环查询结果。
 
@@ -65,32 +65,39 @@
 
 ## 6 任务状态机
 
-任务状态分为终态与非终态。只有终态允许退款，非终态由对账循环继续接管。
+任务只有三个状态。`processing` 覆盖提交、生成和结果确认；失败原因由 `error_code` 表达。
 
 | 状态 | 终态 | 用途 |
 |---|---|---|
-| `pending` | 否 | 已扣费，尚未提交上游 |
-| `submitting` | 否 | 已交给后台同步提交的 goroutine，尚未拿到结果 |
-| `submitted` | 否 | 上游已受理，正在轮询 |
-| `unknown` | 否 | 结果无法确认，等待人工核对或超龄兜底 |
-| `completed` | 是 | 已出图 |
-| `failed` | 是 | 上游明确失败，已退款 |
-| `cancelled` | 是 | 上游取消，已退款 |
-| `call_fail` | 是 | 上游拒绝、提交失败或超期无法确认，已退款 |
+| `processing` | 否 | 提交中、生成中或结果确认中 |
+| `completed` | 是 | 已出图，不退款 |
+| `failed` | 是 | 失败，已退款；包含上游拒绝、超时、取消、内部错误 |
 
-`submitting` 仅用于后台同步提交，对外查询时映射为 `pending`。状态映射由 `publicTaskStatus` 完成。
+阶段不靠状态区分，靠字段判断：
+
+| 字段 | 用途 |
+|---|---|
+| `vendor_response` | 空表示尚未拿到上游响应 |
+| `submit_deadline` | 提交确认截止；超时仍无响应则 `failed` |
+| `deadline_at` | 整体截止；超时仍未完成则 `failed` |
+| `error_code` / `error_message` | 失败原因 |
+
+- 异步提交确认窗口：60 秒；
+- 图片结果确认：创建后 15 分钟；
+- MOSS 同步生成：创建后 15 分钟；
+- 视频结果确认：创建后 30 分钟。
 
 ## 7 后台提交与对账
 
 同步接口（当前为 MOSS）不能占用 HTTP handler 等待完整生成，否则会被网关、服务端 `WriteTimeout` 和调用方 SDK 任意一层截断。因此控制器使用 `BackgroundSubmit` 能力把任务交给 goroutine：
 
-1. 任务以 `submitting` 落库，handler 立即返回 `taskId`。
+1. 任务以 `processing` 落库，同时写入 `submit_deadline` 与 `deadline_at`，handler 立即返回 `taskId`。
 2. goroutine 使用 `SubmitTimeout` 声明的超时调用上游。
-3. 成功时写入 `vendor_response`；`SetTaskVendorResponse` 同时把状态推进到 `submitted`，随后交给对账循环。
-4. 失败时进入 `call_fail` 并退款。
-5. 进程重启或 goroutine 丢失时，任务停在 `submitting`。对账循环超过 `backgroundSubmitGrace` 后调用 `FailStaleSubmittingTask` 退款。
+3. 成功时写入 `vendor_response`；任务保持 `processing`，随后交给对账循环。
+4. 失败时进入 `failed` 并退款，写入 `error_code`。
+5. 进程重启或 goroutine 丢失时，任务停在 `processing` 且 `vendor_response` 为空；超过 `submit_deadline` 后由对账循环调用 `FailStaleSubmitTask` 退款。
 
-`FailStaleSubmittingTask` 在事务内加行锁并重新检查状态与 `vendor_response`，避免与后台成功写入竞争。
+`FailStaleSubmitTask` 在事务内加行锁并重新检查状态与 `vendor_response`，避免与后台成功写入竞争。
 
 ## 8 结果转存与失败语义
 
@@ -98,7 +105,7 @@
 
 失败分两类。`filestore.ErrSourceUnavailable` 表示上游结果资产不可用，包括 URL 非法、下载失败、404 和内容不是图片。其余错误表示平台存储侧失败。
 
-供应商可以通过 `TaskQueryResponse.RequireResultFetch` 声明「必须成功下载结果才能判为完成」。当前 MOSS 使用该标记：成图下载失败会重试两次，仍失败则 `call_fail` 并退款。普通供应商保持尽力而为，存储失败不影响任务完成，`data.url_vendor` 仍可用于取图。
+供应商可以通过 `TaskQueryResponse.RequireResultFetch` 声明「必须成功下载结果才能判为完成」。当前 MOSS 使用该标记：成图下载失败会重试两次，仍失败则进入 `failed` 并退款。普通供应商保持尽力而为，存储失败不影响任务完成，`data.url_vendor` 仍可用于取图。
 
 ## 9 模型设计文档
 

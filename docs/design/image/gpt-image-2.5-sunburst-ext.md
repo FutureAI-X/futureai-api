@@ -105,12 +105,12 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 | 场景 | 失败性质 | 处理 |
 |---|---|---|
 | 4xx、业务 `code` 不是 200、请求未发出 | `FailureRejected` | 退款 |
-| 5xx、超时、连接中断、响应读取失败、非预期的 202 | `FailureUnknown` | 不退款，转 `unknown` |
-| 缺少任务 ID | `FailureUnknown` | 不退款，转 `unknown` |
+| 5xx、超时、连接中断、响应读取失败、非预期的 202 | `FailureUnknown` | 保持 `processing`，超过 60 秒提交确认窗口后转 `failed` 并退款 |
+| 缺少任务 ID | `FailureUnknown` | 保持 `processing`，超过 60 秒提交确认窗口后转 `failed` 并退款 |
 
 ## 7 任务状态与对账
 
-与 flare 版本相同。对账循环查询 `/v1/tasks/{task_id}?language=zh`，把上游 `completed` / `failed` / `cancelled` 映射为平台终态。查询失败返回 `call_fail`，任务保持非终态；未识别的状态同样保持非终态，下一轮继续查询。
+与 flare 版本相同。对账循环查询 `/v1/tasks/{task_id}?language=zh`，把上游 `completed` 映射为 `completed`，把 `failed` / `cancelled` 映射为 `failed`。查询失败或未识别状态时任务保持 `processing`，下一轮继续查询；超过创建后 15 分钟仍未完成则转 `failed` 并退款。
 
 ## 8 结果转存
 
@@ -118,7 +118,7 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 ## 9 失败性质与退款
 
-与 flare 版本相同。`failed`、`cancelled`、`call_fail` 可退款；`unknown` 不退款，超龄后转 `call_fail` 并退款。
+与 flare 版本相同。任务只有 `processing` / `completed` / `failed` 三种状态；`failed` 表示已退款。
 
 ## 10 配置
 

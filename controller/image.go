@@ -300,24 +300,28 @@ func ImageGenerate(c *gin.Context) {
 	// 顺序至关重要：若先调用供应商再扣费，零余额用户可以让平台先产生真实成本，
 	// 随后扣费失败返回 402，形成「无限免费消耗上游额度」。
 	//
-	// 后台提交的供应商（MOSS）用 submitting 落库：它不是「尚未提交」，
-	// 而是「已交给后台 worker，同步接口还没返回」。这个状态不参与 stale-pending
-	// 退款，否则一次超过 90 秒的正常生成就会被误退款。
-	taskStatus := model.StatusPending
+	now := time.Now()
+	submitDeadline := now.Add(asyncSubmitConfirmWindow)
+	deadlineAt := now.Add(imageResultDeadline)
 	if caps.BackgroundSubmit {
-		taskStatus = model.StatusSubmitting
+		// 后台同步生成没有 vendor task_id 之前都算提交阶段；
+		// 上游调用本身最长 15 分钟，所以提交和整体截止共用同一窗口。
+		submitDeadline = now.Add(backgroundSubmitWindow)
+		deadlineAt = now.Add(backgroundSubmitWindow)
 	}
 	task := model.Task{
-		TaskID:     model.GenerateTaskID(),
-		UserID:     userID,
-		VendorID:   vendor.ID,
-		ModelID:    m.ID,
-		EndpointID: endpoint.ID,
-		Status:     taskStatus,
-		Credits:    credits.Total,
-		// 落库的是标准字段快照（已补齐默认值），即计费实际依据的那份数据：
-		// 供应商侧模型 ID 被 json:"-" 排除，回溯时可据此复现条件匹配过程。
+		TaskID:         model.GenerateTaskID(),
+		UserID:         userID,
+		VendorID:       vendor.ID,
+		ModelID:        m.ID,
+		EndpointID:     endpoint.ID,
+		Status:         model.StatusProcessing,
+		SubmitDeadline: &submitDeadline,
+		DeadlineAt:     &deadlineAt,
+		Credits:        credits.Total,
+		// 落库的是调用方原始请求快照：供应商侧模型 ID 被 json:"-" 排除，
 		// 快照在 file_id 解析前取好，保留调用方原始字段而不是签名 URL。
+		// 默认值由 param_spec 在运行时补齐，不写回快照。
 		RequestBody:    requestSnapshot,
 		IdempotencyKey: idemKey,
 	}
@@ -374,11 +378,11 @@ func ImageGenerate(c *gin.Context) {
 
 	result := s.ImageGenerate(submitCtx, req)
 
-	// 15. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 退还积分
+	// 15. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 退款
 	if result.Code != "success" && result.FailureKind != supplier.FailureUnknown {
 		common.SysErrorf("[ImageGenerate] 供应商明确拒绝: vendor=%s, model=%s, kind=%s",
 			vendor.Name, modelName, result.FailureKind)
-		if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusCallFail, `{"error":"vendor rejected"}`); err != nil {
+		if err := model.FailTask(task.TaskID, "vendor_rejected", "上游拒绝受理，积分已退回", `{"error":"vendor rejected"}`); err != nil {
 			common.SysErrorf("[ImageGenerate] 退还积分失败: taskID=%s, err=%v", task.TaskID, err)
 		}
 		c.JSON(http.StatusOK, gin.H{"code": "fail", "message": "供应商调用失败"})
@@ -387,21 +391,17 @@ func ImageGenerate(c *gin.Context) {
 
 	// 16. 结果不确定（超时、连接中断、响应读不完整）。
 	//
-	// 这里**不能退款**：上游很可能已经建单并计费，把它当失败处理就是
-	// supplier 层注释点名的那个资损来源——「上游照常出图、用户全额退款」，
-	// 平台净损失。但也确实查不到结果：连 vendor task_id 都没拿到，无从轮询。
-	//
-	// 因此置为非终态的 unknown：不退款、不自动轮询（没有可查的凭据），
-	// 留一个人工核对窗口；超过兜底时限后由对账循环转 call_fail 退款并打
-	// [需人工对账] 告警（见 reconcileOnce 的超龄任务处理）。[SUBMIT_UNKNOWN] 是留给
-	// 事后检索的标记——若频繁出现，说明上游不稳定或提交超时设置不合理。
+	// 任务保持 processing，由 submit_deadline 兜底：超过确认窗口仍没有
+	// vendor_response 时，对账循环会置为 failed 并退款。调用方拿到 taskId
+	// 后可以继续轮询，最多等一个提交确认窗口。
 	if result.FailureKind == supplier.FailureUnknown {
-		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，转入人工核对（暂不退款）: taskID=%s, userID=%d, vendor=%s, model=%s",
+		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，进入提交确认窗口: taskID=%s, userID=%d, vendor=%s, model=%s",
 			task.TaskID, userID, vendor.Name, modelName)
-		if err := model.UpdateTaskStatus(task.TaskID, model.StatusUnknown, `{"pending_manual_review":"submit result unknown"}`); err != nil {
-			common.SysErrorf("[ImageGenerate] 标记任务为 unknown 失败: taskID=%s, err=%v", task.TaskID, err)
-		}
-		c.JSON(http.StatusOK, gin.H{"code": "fail", "message": "上游调用结果不确定，任务已转入人工核对，请稍后用 taskId 查询状态"})
+		c.JSON(http.StatusOK, gin.H{
+			"code":    "success",
+			"taskId":  task.TaskID,
+			"message": "提交结果待确认",
+		})
 		return
 	}
 
@@ -478,12 +478,16 @@ func runBackgroundImageSubmit(taskID string, s supplier.Supplier, req supplier.I
 
 	result := s.ImageGenerate(ctx, req)
 	if result.Code != "success" {
+		errorCode := "vendor_rejected"
+		errorMessage := "上游拒绝受理，积分已退回"
 		if result.FailureKind == supplier.FailureUnknown {
+			errorCode = "submit_timeout"
+			errorMessage = "提交结果未确认，积分已退回"
 			common.SysErrorf("[ImageGenerate] [MANUAL_RECONCILE] 后台提交结果不确定，按策略退款: taskID=%s", taskID)
 		} else {
 			common.SysErrorf("[ImageGenerate] 后台提交失败，退款: taskID=%s, kind=%s", taskID, result.FailureKind)
 		}
-		if err := model.UpdateTaskStatusWithRefund(taskID, model.StatusCallFail, `{"error":"vendor rejected"}`); err != nil {
+		if err := model.FailTask(taskID, errorCode, errorMessage, `{"error":"vendor rejected"}`); err != nil {
 			common.SysErrorf("[ImageGenerate] 退还积分失败: taskID=%s, err=%v", taskID, err)
 		}
 		return
@@ -511,7 +515,7 @@ func runBackgroundImageSubmit(taskID string, s supplier.Supplier, req supplier.I
 func recoverBackgroundSubmit(taskID string) {
 	if r := recover(); r != nil {
 		common.SysErrorf("[ImageGenerate] 后台提交 panic，按失败退款: taskID=%s, err=%v", taskID, r)
-		if err := model.UpdateTaskStatusWithRefund(taskID, model.StatusCallFail, `{"error":"internal panic"}`); err != nil {
+		if err := model.FailTask(taskID, "internal_error", "内部错误，积分已退回", `{"error":"internal panic"}`); err != nil {
 			common.SysErrorf("[ImageGenerate] 退还积分失败: taskID=%s, err=%v", taskID, err)
 		}
 	}
@@ -903,13 +907,17 @@ func countRefImages(imageURLs []string) int {
 	return len(seen)
 }
 
-// publicTaskStatus 把内部任务状态映射为对外公开状态。
-// submitting 仅用于后台同步生成（MOSS），公开状态机里没有这个值，按 pending 返回。
-func publicTaskStatus(status string) string {
-	if status == model.StatusSubmitting {
-		return model.StatusPending
+// taskErrorPayload 生成任务失败时对外返回的 error 对象。
+func taskErrorPayload(task *model.Task) gin.H {
+	code := strings.TrimSpace(task.ErrorCode)
+	message := strings.TrimSpace(task.ErrorMessage)
+	if code == "" {
+		code = "task_failed"
 	}
-	return status
+	if message == "" {
+		message = "任务失败，积分已退回"
+	}
+	return gin.H{"code": code, "message": message}
 }
 
 // GetTask 查询任务状态
@@ -942,18 +950,47 @@ func GetTask(c *gin.Context) {
 		return
 	}
 
-	// submitting 是内部状态：后台同步生成（MOSS）正在进行。
-	// 公开状态机里没有这个值，对外统一显示为 pending，避免客户端不认识。
-	publicStatus := publicTaskStatus(task.Status)
-
-	if isVideoTask(task) {
-		// 视频任务对外只暴露 taskId / status / data.url（失败时为上游错误），
-		// 不返回 file_id 与其余元数据；完整结果仍保留在 query_response 中，
-		// 供管理端任务详情与事后回溯使用。
+	// processing：结果区不返回任何数据。
+	if task.Status == model.StatusProcessing {
 		c.JSON(http.StatusOK, gin.H{
 			"taskId": task.TaskID,
-			"status": publicStatus,
+			"status": model.StatusProcessing,
+			"data":   nil,
+			"error":  nil,
+		})
+		return
+	}
+
+	// failed：错误原因放顶层 error，data 固定为 null。
+	if task.Status == model.StatusFailed {
+		c.JSON(http.StatusOK, gin.H{
+			"taskId": task.TaskID,
+			"status": model.StatusFailed,
+			"data":   nil,
+			"error":  taskErrorPayload(task),
+		})
+		return
+	}
+
+	// 未迁移的旧状态按 processing 返回，避免把未知状态当成终态。
+	if task.Status != model.StatusCompleted {
+		c.JSON(http.StatusOK, gin.H{
+			"taskId": task.TaskID,
+			"status": model.StatusProcessing,
+			"data":   nil,
+			"error":  nil,
+		})
+		return
+	}
+
+	if isVideoTask(task) {
+		// 视频任务对外只暴露 taskId / status / data.url；
+		// 不返回 file_id 与其余元数据，完整结果仍保留在 query_response 中。
+		c.JSON(http.StatusOK, gin.H{
+			"taskId": task.TaskID,
+			"status": model.StatusCompleted,
 			"data":   videoTaskData(task.QueryResponse),
+			"error":  nil,
 		})
 		return
 	}
@@ -974,9 +1011,10 @@ func GetTask(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"taskId":  task.TaskID,
-		"status":  publicStatus,
+		"status":  model.StatusCompleted,
 		"file_id": task.FileID,
 		"data":    data,
+		"error":   nil,
 	})
 }
 
@@ -1090,20 +1128,27 @@ const (
 	// maxConcurrentQueries 同时在飞的上游查询数
 	maxConcurrentQueries = 50
 
-	// taskMaxPollAge 任务超过这个年龄仍无法确认结果，则退款并告警交人工对账。
-	// 上游异步生成正常在分钟级完成，6 小时仍未终结基本可以断定是异常。
-	taskMaxPollAge = 6 * time.Hour
+	// asyncSubmitConfirmWindow 异步提交的快速确认窗口。
+	// 超过这个时间仍没有 vendor_response，判定提交未成功并退款。
+	asyncSubmitConfirmWindow = 60 * time.Second
 
-	// stalePendingGrace 判定「从未提交成功」所需的静默期。
-	// 必须显著大于提交超时：一条**正在同步提交**的任务同样是 pending 且
-	// vendor_response 为空，若把它也捞出来退款，用户就会既拿图又退款。
-	// 只有确定超出提交窗口仍未落库的，才是真的没提交成功。
-	stalePendingGrace = supplier.SubmitTimeout + 60*time.Second
+	// imageResultDeadline 图片任务的结果确认截止时间。
+	imageResultDeadline = 15 * time.Minute
 
-	// backgroundSubmitGrace 后台同步提交的宽限期。
-	// MOSS 单次生成最长 15 分钟，留 5 分钟余量；超过这个时间仍没有结果，
-	// 说明后台调用已经异常（进程重启、goroutine 丢失），按失败退款。
-	backgroundSubmitGrace = 20 * time.Minute
+	// backgroundSubmitWindow 后台同步生成（MOSS）的截止时间。
+	// 上游同步调用本身最长 15 分钟，留 30 秒内部余量避免和写入结果竞争。
+	backgroundSubmitWindow = 15*time.Minute + 30*time.Second
+
+	// videoSubmitConfirmWindow / videoResultDeadline 视频任务的时间上限。
+	videoSubmitConfirmWindow = 60 * time.Second
+	videoResultDeadline      = 30 * time.Minute
+
+	// 上游查询状态。任务状态只有 processing/completed/failed，
+	// 这些常量只用于解析供应商返回的原始状态。
+	upstreamStatusCompleted = "completed"
+	upstreamStatusFailed    = "failed"
+	upstreamStatusCancelled = "cancelled"
+	upstreamStatusCallFail  = "call_fail"
 )
 
 // querySem 限制同时在飞的上游查询数
@@ -1174,8 +1219,8 @@ func ScheduleTaskPoll(taskID string) {
 // 原实现只在进程启动时扫一次，处理函数在扣费与安排轮询之间 panic，
 // 任务就会永远停在非终态、积分挂着不退；定时循环没有这个盲区。
 func RunTaskReconciler(ctx context.Context) {
-	common.SysLogf("[Reconcile] 任务对账循环已启动（间隔 %s，并发 %d，兜底时限 %s）",
-		reconcileInterval, maxConcurrentQueries, taskMaxPollAge)
+	common.SysLogf("[Reconcile] 任务对账循环已启动（间隔 %s，并发 %d）",
+		reconcileInterval, maxConcurrentQueries)
 
 	// 启动时先跑一轮，把上个进程遗留的非终态任务接过来
 	reconcileOnce()
@@ -1198,89 +1243,68 @@ func RunTaskReconciler(ctx context.Context) {
 func reconcileOnce() {
 	now := time.Now()
 
-	// 1) 停在 pending 且从未记下供应商响应：确定没有提交成功，退款。
-	//    有静默期保护，正在提交中的任务不会被误伤。
-	stale, err := model.GetStalePendingTasks(now.Add(-stalePendingGrace), reconcileBatchSize)
+	// 1) 提交确认超时：没有 vendor_response，判定提交未成功并退款。
+	stale, err := model.GetStaleSubmitTasks(now, reconcileBatchSize)
 	if err != nil {
-		common.SysErrorf("[Reconcile] 查询滞留任务失败: %v", err)
+		common.SysErrorf("[Reconcile] 查询超时提交任务失败: %v", err)
 	} else {
 		for _, t := range stale {
-			common.SysErrorf("[Reconcile] 任务停留 pending 且无供应商响应，判定提交未成功并退款: taskID=%s", t.TaskID)
-			if err := model.UpdateTaskStatusWithRefund(t.TaskID, model.StatusCallFail, `{"error":"submit never recorded"}`); err != nil {
+			common.SysErrorf("[Reconcile] 任务超过提交确认窗口且无供应商响应，判定提交未成功并退款: taskID=%s", t.TaskID)
+			if err := model.FailStaleSubmitTask(t.TaskID, "submit_timeout", "提交确认超时，积分已退回"); err != nil {
 				common.SysErrorf("[Reconcile] 退款失败: taskID=%s, err=%v", t.TaskID, err)
 			}
 		}
 	}
 
-	// 2) 后台同步提交（MOSS）超过宽限期仍无结果：按失败退款。
-	//    这类任务没有 task_id 可查，重启后也无法恢复结果，只能退款并人工对账。
-	staleSubmitting, err := model.GetStaleSubmittingTasks(now.Add(-backgroundSubmitGrace), reconcileBatchSize)
-	if err != nil {
-		common.SysErrorf("[Reconcile] 查询滞留 submitting 任务失败: %v", err)
-	} else {
-		for _, t := range staleSubmitting {
-			common.SysErrorf("[Reconcile] [MANUAL_RECONCILE] 后台提交超过 %s 仍无结果，退款: taskID=%s",
-				backgroundSubmitGrace, t.TaskID)
-			if err := model.FailStaleSubmittingTask(t.TaskID, `{"error":"background submit result unknown"}`); err != nil {
-				common.SysErrorf("[Reconcile] 退款失败: taskID=%s, err=%v", t.TaskID, err)
-			}
-		}
-	}
-
-	// 3) 超过兜底时限仍未能确认结果：退款 + 告警。这类任务已无法通过对账确认，
-	//    只能人工介入——日志里明确标出来，便于事后核对上游账单。
-	expired, err := model.GetExpiredTasks(now.Add(-taskMaxPollAge), reconcileBatchSize)
-	if err != nil {
-		common.SysErrorf("[Reconcile] 查询超龄任务失败: %v", err)
-	} else {
-		for _, t := range expired {
-			common.SysErrorf("[Reconcile] [需人工对账] 任务超过 %s 仍未能确认结果，退款并终结: taskID=%s, status=%s, 创建于=%s",
-				taskMaxPollAge, t.TaskID, t.Status, t.CreatedAt.Format(time.RFC3339))
-			if err := model.UpdateTaskStatusWithRefund(t.TaskID, model.StatusCallFail, `{"error":"unresolved beyond max age"}`); err != nil {
-				common.SysErrorf("[Reconcile] 退款失败: taskID=%s, err=%v", t.TaskID, err)
-			}
-		}
-	}
-
-	// 4) 其余非终态任务：查一次上游
+	// 2) 有 vendor_response 的任务：查一次上游。截止时间已到的任务也在这里
+	//    做最后一次查询，避免“刚完成却被直接判失败”的竞态。
 	tasks, err := model.GetTasksAwaitingPoll(reconcileBatchSize)
 	if err != nil {
 		common.SysErrorf("[Reconcile] 查询待轮询任务失败: %v", err)
-		return
-	}
-	if len(tasks) == 0 {
-		return
-	}
+	} else {
+		creds := newVendorCredentialCache()
+		var wg sync.WaitGroup
 
-	creds := newVendorCredentialCache()
-	var wg sync.WaitGroup
+	loop:
+		for _, t := range tasks {
+			if !claimPoll(t.TaskID) {
+				continue // 已在本进程的查询中
+			}
 
-	for _, t := range tasks {
-		if !claimPoll(t.TaskID) {
-			continue // 已在本进程的查询中
+			select {
+			case querySem <- struct{}{}:
+			default:
+				// 并发位已满：本轮到此为止，剩余任务下一轮继续。
+				releasePoll(t.TaskID)
+				break loop
+			}
+
+			wg.Add(1)
+			go func(t model.Task) {
+				defer wg.Done()
+				defer func() { <-querySem }()
+				defer releasePoll(t.TaskID)
+				defer recoverPollPanic(t.TaskID)
+				pollOnce(t, creds)
+			}(t)
 		}
 
-		select {
-		case querySem <- struct{}{}:
-		default:
-			// 并发位已满：本轮到此为止，剩余任务下一轮继续。
-			// 它们保持非终态，不受任何影响。
-			releasePoll(t.TaskID)
-			wg.Wait()
-			return
-		}
-
-		wg.Add(1)
-		go func(t model.Task) {
-			defer wg.Done()
-			defer func() { <-querySem }()
-			defer releasePoll(t.TaskID)
-			defer recoverPollPanic(t.TaskID)
-			pollOnce(t, creds)
-		}(t)
+		wg.Wait()
 	}
 
-	wg.Wait()
+	// 3) 整体截止时间已到仍未完成：失败并退款。
+	expired, err := model.GetExpiredTasks(now, reconcileBatchSize)
+	if err != nil {
+		common.SysErrorf("[Reconcile] 查询超时任务失败: %v", err)
+		return
+	}
+	for _, t := range expired {
+		common.SysErrorf("[Reconcile] 任务超过截止时间仍未完成，退款并终结: taskID=%s, 创建于=%s",
+			t.TaskID, t.CreatedAt.Format(time.RFC3339))
+		if err := model.FailTask(t.TaskID, "query_timeout", "任务超时未完成，积分已退回", ""); err != nil {
+			common.SysErrorf("[Reconcile] 退款失败: taskID=%s, err=%v", t.TaskID, err)
+		}
+	}
 }
 
 // resultKeys 上游用来承载成图 / 成片结果的字段名。
@@ -1356,13 +1380,13 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 	result := s.TaskQuery(ctx, task.VendorResponse)
 
 	switch result.Status {
-	case model.StatusCompleted:
+	case upstreamStatusCompleted:
 		// 上游说完成了，但结果里没有可用产出：按「上游没有产出」处理并退款。
 		// 不这么做的话任务会停在终态 completed —— 用户没有结果，钱却已经扣掉，
 		// 且没有任何后续流程会再碰它。
 		if !hasDeliverableResult(result.Data) {
 			common.SysErrorf("[Reconcile] 上游报告 completed 但未返回结果，按失败退款: taskID=%s", task.TaskID)
-			if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusFailed, `{"error":"upstream completed without result"}`); err != nil {
+			if err := model.FailTask(task.TaskID, "result_unavailable", "上游未返回结果，积分已退回", `{"error":"upstream completed without result"}`); err != nil {
 				common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
 			}
 			break
@@ -1394,7 +1418,7 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 				// 退款，否则用户拿到一个取不到图的 completed 任务，钱却已经扣了。
 				if result.RequireResultFetch && errors.Is(persistErr, filestore.ErrSourceUnavailable) {
 					common.SysErrorf("[Reconcile] 上游结果资产不可用，按失败退款: taskID=%s, err=%v", task.TaskID, persistErr)
-					if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusCallFail, `{"error":"result asset unavailable"}`); err != nil {
+					if err := model.FailTask(task.TaskID, "result_unavailable", "上游结果不可用，积分已退回", `{"error":"result asset unavailable"}`); err != nil {
 						common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
 					}
 					break
@@ -1410,8 +1434,8 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 			common.SysLogf("[Reconcile] 任务完成: taskID=%s, fileID=%s", task.TaskID, fileID)
 		}
 
-	case model.StatusFailed, model.StatusCancelled:
-		// 上游明确告诉我们任务失败/被取消 → 这是可退款的终态。
+	case upstreamStatusFailed, upstreamStatusCancelled:
+		// 上游明确告诉我们任务失败/被取消 → 统一置为 failed 并退款。
 		// 把上游错误信息写入 query_response，便于事后回溯（图片供应商通常为空）。
 		queryResp := ""
 		if len(result.Data) > 0 {
@@ -1419,18 +1443,25 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 				queryResp = string(b)
 			}
 		}
-		if err := model.UpdateTaskStatusWithRefund(task.TaskID, result.Status, queryResp); err != nil {
+		errorCode := "upstream_failed"
+		errorMessage := "任务失败，积分已退回"
+		if result.Status == upstreamStatusCancelled {
+			errorCode = "cancelled"
+			errorMessage = "任务已取消，积分已退回"
+		}
+		if err := model.FailTask(task.TaskID, errorCode, errorMessage, queryResp); err != nil {
 			common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
 		} else {
 			common.SysLogf("[Reconcile] 任务终止并退款: taskID=%s, status=%s", task.TaskID, result.Status)
 		}
 
-	case model.StatusCallFail:
-		// 查询本身失败，任务状态仍然未知——**不得退款**，等下一轮重试
-		common.SysErrorf("[Reconcile] 查询失败，任务保持非终态待下一轮: taskID=%s", task.TaskID)
+	case upstreamStatusCallFail:
+		// 查询本身失败，任务状态仍然未知——不得退款，等下一轮重试；
+		// 如果已经超过 deadline_at，本轮末尾的 expired 清扫会统一处理。
+		common.SysErrorf("[Reconcile] 查询失败，任务保持 processing 待下一轮: taskID=%s", task.TaskID)
 
 	default:
-		// pending / processing：上游仍在生成
+		// 上游仍在生成
 	}
 }
 

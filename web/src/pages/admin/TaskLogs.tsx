@@ -1,10 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Loader2,
-  Clock,
   CheckCircle2,
   XCircle,
-  AlertCircle,
   Eye,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -14,29 +12,17 @@ import { CopyButton } from '../../components/CopyButton'
 import { formatCredits } from '../../lib/credits'
 import { Pagination } from '../../components/Pagination'
 
-const STATUS_CONFIG: Record<string, { label: string; className: string; icon: typeof Clock }> = {
-  pending: { label: '待提交', className: 'bg-gray-500/10 text-gray-600 dark:text-gray-400', icon: Clock },
-  submitted: { label: '已提交', className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', icon: Clock },
+const STATUS_CONFIG: Record<string, { label: string; className: string; icon: typeof Loader2 }> = {
   processing: { label: '处理中', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', icon: Loader2 },
-  // 结果未确认：上游是否出图还不知道，任务留在非终态等对账或人工核对。
-  // 不要并进「已提交」——那会让人以为一切正常，而这类任务需要有人去看。
-  unknown: { label: '结果未确认', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', icon: AlertCircle },
   completed: { label: '已完成', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400', icon: CheckCircle2 },
   failed: { label: '失败', className: 'bg-red-500/10 text-red-600 dark:text-red-400', icon: XCircle },
-  cancelled: { label: '已取消', className: 'bg-gray-500/10 text-gray-600 dark:text-gray-400', icon: AlertCircle },
-  call_fail: { label: '调用失败', className: 'bg-red-500/10 text-red-600 dark:text-red-400', icon: XCircle },
 }
 
 const STATUS_OPTIONS = [
   { value: '', label: '全部状态' },
-  { value: 'pending', label: '待提交' },
-  { value: 'submitted', label: '已提交' },
   { value: 'processing', label: '处理中' },
-  { value: 'unknown', label: '结果未确认' },
   { value: 'completed', label: '已完成' },
   { value: 'failed', label: '失败' },
-  { value: 'cancelled', label: '已取消' },
-  { value: 'call_fail', label: '调用失败' },
 ]
 
 // 格式化时间
@@ -143,7 +129,7 @@ export function AdminTaskLogs() {
               ) : tasks.length === 0 ? (
                 <tr><td colSpan={8} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无任务记录</p></td></tr>
               ) : tasks.map((task) => {
-                const statusConf = STATUS_CONFIG[task.status] || STATUS_CONFIG.submitted
+                const statusConf = STATUS_CONFIG[task.status] || STATUS_CONFIG.processing
                 const StatusIcon = statusConf.icon
                 return (
                   <tr key={task.id} className='hover:bg-muted/20 transition-colors'>
@@ -226,7 +212,7 @@ export function AdminTaskLogs() {
                       <label className='text-muted-foreground text-xs font-medium'>状态</label>
                       <div className='mt-1'>
                         {(() => {
-                          const statusConf = STATUS_CONFIG[detailTask.status] || STATUS_CONFIG.submitted
+                          const statusConf = STATUS_CONFIG[detailTask.status] || STATUS_CONFIG.processing
                           const StatusIcon = statusConf.icon
                           return (
                             <span className={cn('inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium', statusConf.className)}>

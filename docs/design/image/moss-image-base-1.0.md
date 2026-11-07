@@ -22,7 +22,7 @@ MOSS 是同步接口：一次 `POST` 直接返回图片 URL，没有 `task_id`�
 
 | 字段 | 值 | 影响 |
 |---|---|---|
-| `BackgroundSubmit` | `true` | 控制器不阻塞 handler，任务以 `submitting` 落库 |
+| `BackgroundSubmit` | `true` | 控制器不阻塞 handler，任务以 `processing` 落库 |
 | `SupportsReferenceImages` | `false` | 忽略 `image_urls` / `image_ids`，不计参考图费用 |
 | `RequiresPixelSize` | `true` | `size` 必须是像素尺寸 |
 | `SubmitTimeout` | 15 分钟 | 与官方示例的 `--max-time 900` 对齐 |
@@ -121,28 +121,28 @@ MOSS 是同步接口：一次 `POST` 直接返回图片 URL，没有 `task_id`�
 
 控制器在处理 `BackgroundSubmit` 供应商时：
 
-1. 以 `submitting` 状态创建任务并扣费；
+1. 以 `processing` 状态创建任务并扣费，写入 `submit_deadline` 与 `deadline_at`；
 2. 启动 `runBackgroundImageSubmit` goroutine；
 3. 立即向调用方返回 `taskId`。
 
-goroutine 成功后调用 `SetTaskVendorResponse` 写入结果，该函数同时把状态推进到 `submitted`，随后调用 `ScheduleTaskPoll`。失败时调用 `UpdateTaskStatusWithRefund` 进入 `call_fail` 并退款。goroutine 内的 panic 由 `recoverBackgroundSubmit` 捕获并退款。
+goroutine 成功后调用 `SetTaskVendorResponse` 写入结果，任务保持 `processing`，随后调用 `ScheduleTaskPoll`。失败时调用 `FailTask` 进入 `failed` 并退款。goroutine 内的 panic 由 `recoverBackgroundSubmit` 捕获并退款。
 
 ## 7 任务状态与对账
 
 MOSS 的 `TaskQuery` 不发起任何网络请求。后台 goroutine 已经把最终结果写入 `vendor_response`，`TaskQuery` 只负责把它还原成 `completed`。
 
-`submitting` 状态不参与 stale-pending 退款，否则一次超过 90 秒的正常生成会被误退款。对账循环使用独立的 `backgroundSubmitGrace`（20 分钟）判断后台提交是否卡死，超过后调用 `FailStaleSubmittingTask` 转为 `call_fail` 并退款。
+`processing` 任务是否卡死由 `submit_deadline` 判断：MOSS 的截止时间是创建后 15 分钟（留 30 秒内部余量）。超过后调用 `FailStaleSubmitTask` 转为 `failed` 并退款。
 
-`FailStaleSubmittingTask` 在事务内加行锁，并重新检查 `status` 与 `vendor_response`。如果后台 goroutine 已经写入结果，任务状态已变为 `submitted`，这里不会退款。
+`FailStaleSubmitTask` 在事务内加行锁，并重新检查 `status` 与 `vendor_response`。如果后台 goroutine 已经写入结果，任务仍保持 `processing` 且 `vendor_response` 非空，这里不会退款。
 
-进程在生成中途重启时，任务停在 `submitting`，结果无法恢复。下次启动后由上述宽限期规则退款，并记录 `[MANUAL_RECONCILE]` 日志。
+进程在生成中途重启时，任务停在 `processing` 且没有 `vendor_response`，结果无法恢复。下次启动后由上述截止时间规则退款，并记录 `[MANUAL_RECONCILE]` 日志。
 
 ## 8 结果转存
 
 `TaskQuery` 返回 `RequireResultFetch=true`。对账循环在 `completed` 分支下载成图：
 
 - 下载失败、HTTP 404、或内容不是图片时返回 `filestore.ErrSourceUnavailable`；
-- 该错误会重试两次，仍失败则 `call_fail` 并退款；
+- 该错误会重试两次，仍失败则进入 `failed` 并退款；
 - 对象存储上传或写库失败不属于结果资产问题，任务仍按 `completed` 处理，`file_id` 为空，`data.url_vendor` 保留上游地址。
 
 成功转存后，`data.usage` 与 `data.created` 随 `query_response` 一起返回给调用方。
@@ -151,7 +151,7 @@ MOSS 的 `TaskQuery` 不发起任何网络请求。后台 goroutine 已经把最
 
 MOSS 适配层把所有失败统一标记为 `FailureRejected`。失败范围包括：请求构建失败、4xx、5xx、超时、连接中断、响应解析失败、响应缺少图片地址、图片地址不是 http(s)。
 
-后台提交路径对任何非成功结果都直接退款，不进入 `unknown`。超时或断连时 MOSS 可能已经生成并计费，平台仍按产品策略退款，并记录 `[MANUAL_RECONCILE]` 日志供事后对账。
+后台提交路径对任何非成功结果都直接退款。超时或断连时 MOSS 可能已经生成并计费，平台仍按产品策略退款，并记录 `[MANUAL_RECONCILE]` 日志供事后对账。
 
 ## 10 配置
 
