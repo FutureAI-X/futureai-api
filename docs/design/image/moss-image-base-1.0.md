@@ -41,6 +41,63 @@ MOSS 是同步接口：一次 `POST` 直接返回图片 URL，没有 `task_id`�
 
 参考图不做任何校验。控制器在能力分流阶段已经清空 `image_urls` 与 `image_ids`，供应商适配层不会再看到这两个字段。
 
+### 4.1 参数规格（param_spec）
+
+迁移后，本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。
+
+```json
+{
+  "params": [
+    {
+      "key": "prompt",
+      "widget": "textarea",
+      "label": "提示词",
+      "group": "basic",
+      "required": true,
+      "min_length": 1,
+      "max_length": 4000,
+      "count_mode": "codepoint"
+    },
+    {
+      "key": "size",
+      "widget": "pixel_size",
+      "label": "尺寸",
+      "group": "basic",
+      "required": true,
+      "pixel": {
+        "step": 16,
+        "min_side": 256,
+        "max_side": 2048,
+        "min_pixels": 0,
+        "max_pixels": 2097152
+      },
+      "presets": [
+        { "label": "正方形", "ratio": "1:1", "pixels": "1440x1440" },
+        { "label": "横图", "ratio": "16:9", "pixels": "1792x1008" },
+        { "label": "竖图", "ratio": "9:16", "pixels": "1008x1792" },
+        { "label": "4:3", "ratio": "4:3", "pixels": "1664x1248" },
+        { "label": "3:4", "ratio": "3:4", "pixels": "1248x1664" },
+        { "label": "3:2", "ratio": "3:2", "pixels": "1728x1152" },
+        { "label": "2:3", "ratio": "2:3", "pixels": "1152x1728" },
+        { "label": "5:4", "ratio": "5:4", "pixels": "1600x1280" },
+        { "label": "4:5", "ratio": "4:5", "pixels": "1280x1600" },
+        { "label": "21:9", "ratio": "21:9", "pixels": "2016x864" }
+      ],
+      "allow_custom": true
+    }
+  ]
+}
+```
+
+说明：
+
+- `size` 使用 `pixel_size` 组件：预设卡片 + 宽高输入，提交像素；`presets` 由管理端配置。
+- 规格中没有 `resolution`。MOSS 不支持该参数，组件也不展示。
+- 规格中没有 `ref_images`。服务端按“不支持参考图”静默忽略参考图字段。
+- `required=true` 且没有 `default` 时，前端使用第一个预设作为初始值。
+- 预设值均满足 `step=16`、单边 256–2048、总像素 ≤ 2,097,152；上线前需与 MOSS 文档复核。
+- 本节是迁移目标。P1 之前，校验仍由 `supplier/moss.go` 的 `ValidateImageRequest` 执行。
+
 ## 5 请求体转换
 
 `buildMossRequest` 只写入以下固定字段：

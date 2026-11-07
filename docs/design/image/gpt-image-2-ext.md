@@ -48,6 +48,75 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些�
 
 校验失败直接返回 400，不扣费、不建任务。
 
+### 4.1 参数规格（param_spec）
+
+迁移后，本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。
+
+```json
+{
+  "params": [
+    {
+      "key": "prompt",
+      "widget": "textarea",
+      "label": "提示词",
+      "group": "basic",
+      "required": true,
+      "min_length": 1,
+      "max_length": 2000,
+      "count_mode": "codepoint"
+    },
+    {
+      "key": "size",
+      "widget": "ratio_size",
+      "label": "尺寸",
+      "group": "basic",
+      "default": "16:9",
+      "modes": ["ratio", "pixel"],
+      "ratios": [
+        "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5",
+        "16:9", "9:16", "2:1", "1:2", "3:1", "1:3", "21:9", "9:21"
+      ],
+      "pixel": {
+        "step": 16,
+        "min_side": 0,
+        "max_side": 3840,
+        "min_pixels": 0,
+        "max_pixels": 8294400,
+        "aspect": { "min": "1:3", "max": "3:1" }
+      }
+    },
+    {
+      "key": "resolution",
+      "widget": "segmented",
+      "label": "分辨率",
+      "group": "basic",
+      "default": "1K",
+      "options": ["1K", "2K", "4K"]
+    },
+    {
+      "key": "images",
+      "path": "image_ids",
+      "widget": "ref_images",
+      "label": "参考图",
+      "group": "reference",
+      "max_count": 15,
+      "max_file_bytes": 10485760,
+      "max_total_bytes": 268435456,
+      "allowed_mime_types": ["image/png", "image/jpeg", "image/webp"]
+    }
+  ]
+}
+```
+
+说明：
+
+- `gpt-image-2` 与 `gpt-image-2-ext` 使用同一份规格，各自写入自己的模型行。
+- `modes` 同时包含 `ratio` 与 `pixel`，因为接口层仍接受像素尺寸；前端使用 `ratio_size` 组件，只渲染比例按钮。
+- `resolution` 在规格中统一为大写；本模型发往上游时转成小写的 `1k` / `2k` / `4k`，属于适配层行为（`lowercaseResolution=true`），不写入 `param_spec`。
+- prompt 上限 2000 是平台策略，与客户端现有上限一致；上游文档未给出硬上限。
+- 参考图单张 10MB、合计 256MB 与客户端现有上限一致；上传接口的全局单文件上限仍是 30MB。
+- 本节是迁移目标。P1 之前，校验仍由 `supplier/apimart.go` 的 `apimartImageModels` 执行。
+
 ## 5 请求体转换
 
 `buildRequest` 写入以下字段：

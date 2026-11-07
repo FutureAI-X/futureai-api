@@ -112,6 +112,8 @@
 | `gpt-image-2.5-flare-ext` | [gpt-image-2.5-flare-ext.md](gpt-image-2.5-flare-ext.md) |
 | `gpt-image-2.5-sunburst-ext` | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
 
+参数规格的字段定义、校验顺序与两端复用方式见 [params/README.md](params/README.md)。该目录描述的是待实现的设计，当前代码仍使用供应商适配层与客户端常量中的硬编码约束。
+
 ## 10 新增模型检查清单
 
 新增一个图像模型时，按以下清单补齐：

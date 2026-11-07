@@ -33,6 +33,65 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 校验失败在扣费前返回 400。
 
+### 4.1 参数规格（param_spec）
+
+迁移后，本模型的参数约束由 `models.param_spec` 提供。字段定义与校验规则见 [参数规格文档](params/README.md)。本规格与 [gpt-image-2.5-flare-ext](gpt-image-2.5-flare-ext.md) 完全一致，只有适配层写入的 `version` 不同。
+
+```json
+{
+  "params": [
+    {
+      "key": "prompt",
+      "widget": "textarea",
+      "label": "提示词",
+      "group": "basic",
+      "required": true,
+      "min_length": 1,
+      "max_length": 2000,
+      "count_mode": "codepoint"
+    },
+    {
+      "key": "size",
+      "widget": "ratio_size",
+      "label": "尺寸",
+      "group": "basic",
+      "default": "16:9",
+      "ratios": [
+        "1:1", "16:9", "9:16", "4:3", "3:4",
+        "3:2", "2:3", "5:4", "4:5", "21:9"
+      ]
+    },
+    {
+      "key": "resolution",
+      "widget": "segmented",
+      "label": "分辨率",
+      "group": "basic",
+      "default": "1K",
+      "options": ["1K", "2K", "4K"]
+    },
+    {
+      "key": "images",
+      "path": "image_ids",
+      "widget": "ref_images",
+      "label": "参考图",
+      "group": "reference",
+      "max_count": 16,
+      "max_file_bytes": 10485760,
+      "max_total_bytes": 268435456,
+      "allowed_mime_types": ["image/png", "image/jpeg", "image/webp"]
+    }
+  ]
+}
+```
+
+说明：
+
+- `version=sunburst` 是上游风格字段，属于适配层行为，不写入 `param_spec`。
+- `size` 只暴露比例，`widget` 为 `ratio_size`，不配置 `modes` 与 `pixel`。
+- `resolution` 在规格中统一为大写，发往上游时保持大写。
+- prompt 上限 2000 是平台策略，与客户端现有上限一致。
+- 本节是迁移目标。P1 之前，校验仍由 `supplier/apimart.go` 的 `apimartImageModels` 执行。
+
 ## 5 请求体转换
 
 `buildRequest` 写入 `model`、`prompt`、`size`、`resolution`、`n=1`，参考图非空时写入 `image_urls`。`resolution` 按模型规格转成大写（`1K` / `2K` / `4K`），平台模型名映射为 `version=sunburst`。
