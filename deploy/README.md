@@ -243,7 +243,7 @@ docker pull golang:1.27-alpine
 docker pull alpine:3.22
 ```
 
-再重新执行本步。以后修改 Dockerfile 中的基础镜像 tag，也要先拉取一次。理由见 [../docs/DOCKER.md](../docs/DOCKER.md)。
+再重新执行本步。以后修改 Dockerfile 中的基础镜像 tag，也要先拉取一次。理由见 [local/DOCKER.md](local/DOCKER.md)。
 
 ### 3.2 记下镜像标签
 

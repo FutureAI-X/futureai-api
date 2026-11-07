@@ -183,6 +183,9 @@ var (
 	outboundClientOnce sync.Once
 	outboundClient     *http.Client
 
+	longOutboundClientOnce sync.Once
+	longOutboundClient     *http.Client
+
 	fileDownloadClientOnce sync.Once
 	fileDownloadClient     *http.Client
 
@@ -193,6 +196,9 @@ var (
 // outboundClientOverride 测试注入用，生产运行期间始终为 nil。
 var outboundClientOverride atomic.Pointer[http.Client]
 
+// longOutboundClientOverride 测试注入用，生产运行期间始终为 nil。
+var longOutboundClientOverride atomic.Pointer[http.Client]
+
 // fileDownloadClientOverride 测试注入用，生产运行期间始终为 nil。
 var fileDownloadClientOverride atomic.Pointer[http.Client]
 
@@ -202,6 +208,12 @@ var fileDownloadClientOverride atomic.Pointer[http.Client]
 // 测试因此无法走真实拨号路径。生产代码不得调用本函数。
 func SetOutboundClientForTest(c *http.Client) {
 	outboundClientOverride.Store(c)
+}
+
+// SetLongOutboundClientForTest 替换「长响应」出站客户端，**仅供测试使用**，
+// 传 nil 恢复默认。理由同 SetOutboundClientForTest。
+func SetLongOutboundClientForTest(c *http.Client) {
+	longOutboundClientOverride.Store(c)
 }
 
 // SetFileDownloadClientForTest 替换公开文件下载客户端，**仅供测试使用**，
@@ -258,23 +270,55 @@ func OutboundHTTPClient() *http.Client {
 		dial, proxyURL := outboundDialer()
 
 		outboundClient = &http.Client{
-			Transport: newOutboundTransport(dial, proxyURL),
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 3 {
-					return errors.New("重定向次数过多")
-				}
-				origin := via[0].URL
-				if req.URL.Host != origin.Host {
-					return fmt.Errorf("拒绝跨主机重定向: %s -> %s", origin.Host, req.URL.Host)
-				}
-				if origin.Scheme == "https" && req.URL.Scheme != "https" {
-					return errors.New("拒绝重定向降级到非 HTTPS")
-				}
-				return nil
-			},
+			Transport:     newOutboundTransport(dial, proxyURL),
+			CheckRedirect: outboundCheckRedirect,
 		}
 	})
 	return outboundClient
+}
+
+// outboundCheckRedirect 是带凭证出站请求的重定向策略：
+// 跨主机重定向会把 Authorization 头交给另一个主机，必须拒绝。
+func outboundCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 3 {
+		return errors.New("重定向次数过多")
+	}
+	origin := via[0].URL
+	if req.URL.Host != origin.Host {
+		return fmt.Errorf("拒绝跨主机重定向: %s -> %s", origin.Host, req.URL.Host)
+	}
+	if origin.Scheme == "https" && req.URL.Scheme != "https" {
+		return errors.New("拒绝重定向降级到非 HTTPS")
+	}
+	return nil
+}
+
+// LongOutboundHTTPClient 返回用于「同步长任务」的出站客户端。
+//
+// 与 OutboundHTTPClient 的唯一区别是不设 ResponseHeaderTimeout：
+// 同步图像生成（如 MOSS）在图片生成完之前不会返回响应头，通用客户端的
+// 30 秒头超时会先切断连接，导致一个已经在上游执行的任务被误判为失败。
+// 整次调用的时限仍由调用方通过 context 控制，因此这里放开响应头超时
+// 不会让连接无限悬挂。
+//
+// 与其它出站客户端一样必须是进程级单例：每次新建 Transport 会让连接池失效。
+func LongOutboundHTTPClient() *http.Client {
+	if c := longOutboundClientOverride.Load(); c != nil {
+		return c
+	}
+
+	longOutboundClientOnce.Do(func() {
+		dial, proxyURL := outboundDialer()
+
+		transport := newOutboundTransport(dial, proxyURL)
+		transport.ResponseHeaderTimeout = 0
+
+		longOutboundClient = &http.Client{
+			Transport:     transport,
+			CheckRedirect: outboundCheckRedirect,
+		}
+	})
+	return longOutboundClient
 }
 
 // FileDownloadHTTPClient 返回拉取公开文件内容用的出站客户端。

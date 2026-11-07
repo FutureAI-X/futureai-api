@@ -210,6 +210,7 @@ func main() {
 	stopReconciler()
 	stopCleaner()
 	common.OutboundHTTPClient().CloseIdleConnections()
+	common.LongOutboundHTTPClient().CloseIdleConnections()
 	common.FileDownloadHTTPClient().CloseIdleConnections()
 	common.TrustedEndpointHTTPClient().CloseIdleConnections()
 

@@ -212,6 +212,11 @@ type TaskQueryResponse struct {
 	// Kind 结果类型：image / video。空串按 image 处理（兼容旧供应商实现）。
 	// 控制器据此决定是否把完成结果转存到对象存储——视频只返回上游 URL，不转存。
 	Kind string `json:"kind,omitempty"`
+
+	// RequireResultFetch 为 true 时，控制器必须成功下载结果资产才能判为完成。
+	// MOSS 的结果 URL 可能指向不存在的资产（文档中的 404）；此时任务应失败
+	// 并退款，而不是带着一个取不到图的地址进入 completed。
+	RequireResultFetch bool `json:"require_result_fetch,omitempty"`
 }
 
 // 结果类型
@@ -219,6 +224,47 @@ const (
 	ResultKindImage = "image"
 	ResultKindVideo = "video"
 )
+
+// ImageCapabilities 供应商对图像请求的能力声明。
+//
+// 平台公开契约保持统一，但不同供应商的语义并不相同：MOSS 是同步生图且
+// 不接受参考图，而 APIMart 是异步提交且支持参考图。控制器只通过能力声明
+// 决定分流，不在控制器里写供应商名字。
+type ImageCapabilities struct {
+	// BackgroundSubmit 为 true 时，控制器不在 HTTP handler 里等待上游，
+	// 而是先返回 taskId，由后台 goroutine 完成调用。
+	BackgroundSubmit bool
+
+	// SupportsReferenceImages 为 false 时，控制器忽略 image_urls / image_ids，
+	// 不解析 file_id，也不计参考图附加费用。
+	SupportsReferenceImages bool
+
+	// RequiresPixelSize 为 true 时，size 必须是「宽x高」像素尺寸（如 1024x1024），
+	// 比例值（如 16:9）会被拒绝。
+	RequiresPixelSize bool
+
+	// SubmitTimeout 本次提交允许的最长耗时；0 表示使用包级 SubmitTimeout。
+	SubmitTimeout time.Duration
+}
+
+// DefaultImageCapabilities 返回未声明能力时的默认值：
+// 同步提交、支持参考图、size 仍按平台原有语义透传。
+func DefaultImageCapabilities() ImageCapabilities {
+	return ImageCapabilities{SupportsReferenceImages: true}
+}
+
+// ImageCapabilityProvider 由需要覆盖默认能力的图像供应商实现。
+type ImageCapabilityProvider interface {
+	ImageCapabilities() ImageCapabilities
+}
+
+// ImageRequestValidator 供应商可选的请求预校验。
+//
+// 控制器在扣费、建任务、调用上游之前调用。返回错误说明请求本身不合法，
+// 应当直接 400，绝不能先扣费再让上游拒绝。
+type ImageRequestValidator interface {
+	ValidateImageRequest(req ImageGenerateRequest) error
+}
 
 // Supplier 图像供应商接口，每个图像供应商实现此接口。
 //
@@ -248,6 +294,8 @@ func NewSupplier(vendorName string, cfg Config) Supplier {
 	switch strings.ToLower(strings.TrimSpace(vendorName)) {
 	case "apimart":
 		return newAPIMart(cfg)
+	case "moss":
+		return newMoss(cfg)
 	default:
 		return nil
 	}
@@ -271,6 +319,8 @@ func NewTaskQuerier(vendorName string, cfg Config) TaskQuerier {
 		return newAPIMart(cfg)
 	case "metaso":
 		return newMetaso(cfg)
+	case "moss":
+		return newMoss(cfg)
 	default:
 		return nil
 	}

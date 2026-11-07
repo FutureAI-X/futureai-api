@@ -493,3 +493,24 @@ func TestHasDeliverableResult(t *testing.T) {
 		})
 	}
 }
+
+// submitting 只是内部状态（后台同步生成），公开状态机里没有它。
+func TestPublicTaskStatusMapsSubmittingToPending(t *testing.T) {
+	if got := publicTaskStatus(model.StatusSubmitting); got != model.StatusPending {
+		t.Errorf("publicTaskStatus(submitting) = %q, want pending", got)
+	}
+
+	for _, status := range []string{
+		model.StatusPending,
+		model.StatusSubmitted,
+		model.StatusCompleted,
+		model.StatusFailed,
+		model.StatusCancelled,
+		model.StatusCallFail,
+		model.StatusUnknown,
+	} {
+		if got := publicTaskStatus(status); got != status {
+			t.Errorf("publicTaskStatus(%q) = %q, want unchanged", status, got)
+		}
+	}
+}

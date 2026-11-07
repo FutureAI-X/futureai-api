@@ -2,7 +2,7 @@
 
 将项目构建成镜像、以 Docker Desktop 在本地运行，也是发版前验证镜像的方式。
 
-日常改代码见 [DEV.md](DEV.md)，部署到服务器见 [../deploy/README.md](../deploy/README.md)。
+日常改代码见 [DEV.md](DEV.md)，部署到服务器见 [../README.md](../README.md)。
 
 仅在本机验证时执行第 1 至 3 章即可；发版则在此基础上继续执行第 5 章。第 6 章为常用操作，第 7 章为故障排查。
 
@@ -205,9 +205,9 @@ docker compose up -d
 
 ### 7.4 更换端口
 
-修改 [../docker-compose.yml](../docker-compose.yml) 中 `futureai-api` 服务 `ports` 左侧的数字即可。右侧的 `3001` 是容器内端口，不要改动。
+修改 [../../docker-compose.yml](../../docker-compose.yml) 中 `futureai-api` 服务 `ports` 左侧的数字即可。右侧的 `3001` 是容器内端口，不要改动。
 
 ## 下一步
 
-- 部署到服务器 → [../deploy/README.md](../deploy/README.md)
-- 上线前自检、升级回滚备份、排查 → [../deploy/NOTES.md](../deploy/NOTES.md)
+- 部署到服务器 → [../README.md](../README.md)
+- 上线前自检、升级回滚备份、排查 → [../NOTES.md](../NOTES.md)

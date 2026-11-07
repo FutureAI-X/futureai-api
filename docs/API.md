@@ -37,7 +37,7 @@
 - 若设置了 `INITIAL_ROOT_PASSWORD` 环境变量，则使用该值；
 - 否则随机生成并写入 `./root_initial_password.txt`（权限 `0600`）。
 
-该密码不会写入日志。登录后应立即通过 `PUT /api/user/password` 修改，并删除密码文件。容器部署建议直接使用环境变量，理由见 [ENV.md](ENV.md#initial_root_password)。
+该密码不会写入日志。登录后应立即通过 `PUT /api/user/password` 修改，并删除密码文件。容器部署建议直接使用环境变量，理由见 [ENV.md](../deploy/local/ENV.md#initial_root_password)。
 
 响应：
 
@@ -212,8 +212,8 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/v1/models` | 可用模型列表 |
-| POST | `/v1/images/generations` | 图像生成 |
-| POST | `/v1/videos/generations` | 视频生成（见 4.5 节） |
+| POST | `/v1/images/generations` | 图像生成（见 [图像生成](client/image/README.md)） |
+| POST | `/v1/videos/generations` | 视频生成（见 [视频生成](client/video/README.md)） |
 | POST | `/v1/uploads/images` | 图片上传（单文件上限 10MB，行为不变） |
 | POST | `/v1/files/upload/prepare` | 参考媒体上传：申请直传凭证（见 4.6 节） |
 | POST | `/v1/files/upload/complete` | 参考媒体上传：完成校验并登记（见 4.6 节） |
@@ -250,78 +250,26 @@
 
 服务端可通过 `IMAGE_UPLOAD_BACKEND=apimart` 切回第三方上传，此时 `url` 是第三方的托管地址，其余字段不变。
 
-### 4.1 图像生成的请求标准
+### 4.1 图像生成
 
-`POST /v1/images/generations` 只接受下表字段，请求体中的其他字段一律忽略（不报错，也不透传给上游）。平台对各供应商的适配（参数改名、变体参数补全等）全部在这一层之下完成，调用方只需面向这一套字段。
+`POST /v1/images/generations`。通用请求字段、`size` 的两种格式、参考图规则、响应与任务轮询见 [图像生成](client/image/README.md)。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `model` | string | 必填，平台模型名（不是供应商侧模型 ID） |
-| `prompt` | string | 提示词 |
-| `size` | string | 画幅比例，如 `16:9` / `1:1`，默认 `16:9` |
-| `resolution` | string | 分辨率档位，如 `1k` / `2k`，默认 `1k` |
-| `image_urls` | string[] | 参考图 URL 数组，同时决定参考图附加计费张数 |
-| `image_ids` | string[] | 参考图 file_id 数组（由 `/v1/files/upload/complete` 返回）。非空时优先生效，忽略 `image_urls`；去重后最多 15 张 |
+按模型查看：
 
-`size` 与 `resolution` 省略时按上表默认值补齐，且补齐发生在计费之前，因此省略 `resolution` 的请求按 `resolution=1k` 匹配计费条件，与实际生成的分辨率一致。调用方显式传入的值原样保留。
+- [moss-image-base-1.0](client/image/moss-image-base-1.0.md)
+- [moss-image-sft-1.0](client/image/moss-image-sft-1.0.md)
+- [gpt-image-2.5-flare-ext](client/image/gpt-image-2.5-flare-ext.md)
+- [gpt-image-2.5-sunburst-ext](client/image/gpt-image-2.5-sunburst-ext.md)
 
-#### `image_urls` 与 `image_ids` 的优先级
+### 4.2 视频生成
 
-- `image_ids` 非空（数组里至少有一项）时，只使用 `image_ids`，`image_urls` 被完全忽略。
-- `image_ids` 缺省或为空数组 `[]` 时，回退到 `image_urls`，行为与旧版本完全一致。
-- 两个字段都只接受字符串数组：单个字符串会被判为类型错误返回 400，而不是被忽略。
+`POST /v1/videos/generations`。通用请求字段、参考媒体规则、响应与任务轮询见 [视频生成](client/video/README.md)。
 
-#### `image_ids` 的校验规则
+按模型查看：
 
-`image_ids` 中的每一项必须是平台上传接口返回的 `file_id`（`file_` 开头），并满足：
+- [MiniMax-H3](client/video/minimax-h3.md)
 
-- 属于当前 API Key 对应的用户；
-- 用途为 `reference`（上传的参考图）或 `result`（该用户自己生成的图片结果）；
-- 处理状态为 `ready`；
-- 媒体类型为图片；
-- 未过期，且剩余有效期不少于 30 分钟。
-
-校验失败不会扣费、不会创建任务，直接返回 4xx/503：
-
-| 状态码 | 场景 |
-|---|---|
-| 400 | file_id 形态错误、去重后超过 15 张、不是图片、HEIC/HEIF |
-| 404 | 文件不存在、不属于当前用户、用途不符 |
-| 409 | 文件尚未完成处理 |
-| 410 | 文件已过期或剩余有效期不足 30 分钟 |
-| 503 | 文件存储暂不可用 |
-
-服务端把 `file_id` 解析成短期签名 URL 后交给上游，签名有效期不超过 1 小时、且不超过文件剩余有效期。调用方不需要也不会看到签名地址。
-
-`image_ids` 路径暂不支持 HEIC/HEIF 参考图（上游兼容性未确认），请先转换为 JPG/PNG/WEBP 再上传。
-
-参考图附加计费按本次实际生效的字段计数：`image_ids` 非空时按去重后的 file_id 张数计费；否则按去重后的 `image_urls` 张数计费（旧路径上限仍为 100 张）。使用 `Idempotency-Key` 重试时，即使参考文件在此之间过期，仍会返回原任务。
-
-file_id 请求示例：
-
-```json
-{
-  "model": "gpt-image-2.5-flare-ext",
-  "prompt": "a cat sitting on a windowsill",
-  "resolution": "2k",
-  "image_ids": ["file_1a2b3c4d5e6f"]
-}
-```
-
-URL 请求示例（旧版兼容）：
-
-```json
-{
-  "model": "gpt-image-2.5-flare-ext",
-  "prompt": "a cat sitting on a windowsill",
-  "resolution": "2k",
-  "image_urls": ["https://example.com/ref.png"]
-}
-```
-
-`image_urls` 应传上传接口返回的 URL，不要内联 base64 data URI：请求体上限为 1MB，一张 10MB 的图 base64 之后约 13MB，会在网关层即被拒绝（413）。新接入建议直接使用 `image_ids`，避免自行托管参考图。
-
-### 4.2 请求体大小限制
+### 4.3 请求体大小限制
 
 各端点的上限如下。
 
@@ -330,7 +278,7 @@ URL 请求示例（旧版兼容）：
 | `/v1/uploads/images` | 10MB + multipart 余量 | `413` |
 | 其余所有端点 | 1MB | `413` |
 
-### 4.3 幂等键（可选）
+### 4.4 幂等键（可选）
 
 提交图像或视频生成时携带 `Idempotency-Key` 请求头，可在窗口内安全重试：
 
@@ -347,15 +295,15 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 - 不携带该请求头时不去重，保持原有行为。
 - 键最长 128 字符。
 
-**强烈建议调用方使用它**：提交是同步语义（上游最长 30 秒才响应），而多数 OpenAI 兼容 SDK 在超时后会自动重试；没有幂等键时，一次超时重试就会重复扣费，并在上游重复生成。
+**强烈建议调用方使用它**：上游提交可能耗时较长（普通供应商最长 30 秒；MOSS 同步生成最长 15 分钟），而多数 OpenAI 兼容 SDK 在超时后会自动重试；没有幂等键时，一次超时重试就会重复扣费，并在上游重复生成。
 
-### 4.4 任务状态
+### 4.5 任务状态
 
 `GET /v1/tasks/:task_id` 返回的 `status` 取值如下。
 
 | 状态 | 终态 | 含义 | 积分 |
 |---|---|---|---|
-| `pending` | 否 | 已扣费，正在提交上游 | 已扣 |
+| `pending` | 否 | 已扣费，正在提交/生成 | 已扣 |
 | `submitted` | 否 | 上游已受理，正在生成 | 已扣 |
 | `unknown` | 否 | 结果无法确认（提交响应丢失，或查询持续失败） | 已扣 |
 | `completed` | 是 | 生成完成，结果在 `data` 里 | 已扣 |
@@ -363,7 +311,9 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | `cancelled` | 是 | 上游明确返回取消 | **已退** |
 | `call_fail` | 是 | 上游明确拒绝受理 / 提交未成功 / 超期无法确认 | **已退** |
 
-只有 `completed` 时 `data` 才有值。非终态表示仍在推进中，应继续轮询（建议间隔 5 秒左右），不要当作失败。视频生成任务当前按 0 积分创建（见 4.5 节），上表的积分列对它不适用。
+只有 `completed` 时 `data` 才有值。非终态表示仍在推进中，应继续轮询（建议间隔 5 秒左右），不要当作失败。视频生成任务当前按 0 积分创建（见 [视频生成](client/video/README.md)），上表的积分列对它不适用。
+
+MOSS 是同步接口，由平台后台提交：任务在生成期间显示为 `pending`。任何失败（4xx、5xx、超时、断连、结果资产下载失败、进程重启中断）都会直接转为 `call_fail` 并退款，不会进入 `unknown`。超时或断连时 MOSS 可能实际上仍在生成并计费，平台会记录日志供事后对账。
 
 `completed` 响应还包含 `file_id`：成图已转存到对象存储时为该文件 ID，转存失败时为空字符串。文件有效期由 `FILE_TTL_SECONDS` 配置，默认 24 小时。到期后不再签发新的签名地址，旧的 `/v1/images/get/:file_id` 代理返回 `410`；记录会在对象删除 7 天后回收，之后再访问返回 `404`。
 
@@ -375,7 +325,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 签名有效期不超过文件剩余有效期，最长 24 小时。签名地址不可用（存储类型不支持、签名失败等）时，`data.url` 回落到应用代理地址 `{PUBLIC_BASE_URL}/v1/images/get/{file_id}`；若 `PUBLIC_BASE_URL` 未配置或非法，则与旧版本一致，回落到上游原始地址。代理接口仍然可用，旧客户端不受影响。
 
-视频任务不套用上述地址改写：`data.url` 就是上游的限时下载地址，没有 `file_id` 与 `url_vendor`，详见 4.5 节。
+视频任务不套用上述地址改写：`data.url` 就是上游的限时下载地址，没有 `file_id` 与 `url_vendor`，详见 [视频生成](client/video/README.md)。
 
 `unknown` 是刻意保留的非终态：平台并不知道上游是否出图，此时既不能算成功也不能退款。分两种情况——
 
@@ -384,85 +334,11 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 两种都会在原任务创建满 6 小时后被对账循环转为 `call_fail` 并退款，同时打 `[需人工对账]` 日志。因此看到 `unknown` 时积分不会被吞掉，只是退还时间被推迟到兜底时限。
 
-### 4.5 视频生成
-
-`POST /v1/videos/generations` 只接受下表字段，请求体中的其他字段一律忽略。`model`、`prompt`、`resolution`、`duration`、`ratio` 必填；三个媒体数组可以为空。
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `model` | string | 平台模型名（不是供应商侧模型 ID） |
-| `prompt` | string | 提示词，必填 |
-| `images` | string[] | 参考图片的 `file_id` 数组，可空 |
-| `videos` | string[] | 参考视频的 `file_id` 数组，可空 |
-| `audios` | string[] | 参考音频的 `file_id` 数组，可空 |
-| `resolution` | string | 分辨率档位，如 `480P` / `1K` / `2K` |
-| `duration` | integer | 输出时长（秒），必须为正整数 |
-| `ratio` | string | 画幅，如 `16:9` / `adaptive` |
-
-`images` / `videos` / `audios` 只接受 `/v1/files/upload/complete` 返回的 `file_id`，不接受外部 URL；数组里出现 URL 返回 400。`prompt` 必填，三个数组可以为空（纯文生视频）。同一个 `file_id` 在同一个数组里重复出现只处理一次。
-
-每个参考文件必须属于调用方，且满足：
-
-- `purpose` 为 `reference`（上传的参考媒体）或 `result`（自己生成的媒体结果）；
-- `status` 为 `ready`；
-- 未过期，且剩余有效期不少于 30 分钟；
-- 媒体类型与所在数组匹配（`images` → image，`videos` → video，`audios` → audio）；
-- 视频参考文件有可用的时长信息。
-
-服务端把 `file_id` 解析成最长 2 小时有效的短期签名 URL（不超过文件剩余有效期）再交给上游；签名 URL 不会返回给客户端，也不会写入任务快照。`role`（`reference_image` 等）由供应商适配层按数组类型自动补全，不属于公开字段。
-
-请求示例：
-
-```json
-{
-  "model": "MiniMax-H3",
-  "prompt": "从首帧平滑过渡到尾帧，保持参考图中角色的外观与服装一致。",
-  "images": ["file_..."],
-  "videos": ["file_..."],
-  "audios": ["file_..."],
-  "resolution": "2K",
-  "duration": 5,
-  "ratio": "adaptive"
-}
-```
-
-成功响应：
-
-```json
-{ "code": "success", "taskId": "task_e629c5e8a37a614cf2289f650585aae4" }
-```
-
-上游明确拒绝受理时返回 HTTP 200 与：
-
-```json
-{ "code": "fail", "message": "供应商调用失败" }
-```
-
-参数、身份、模型配置或参考文件校验错误沿用 `/v1` 现有语义（参数/类型错误 400、文件不存在或无权使用 404、文件尚未就绪 409、文件已过期或即将过期 410、端点不存在 404、无可用供应商 503 等）；提交结果不确定时返回 200 与 `code=fail`，任务状态为 `unknown`，由对账循环继续确认。
-
-视频生成当前不扣积分：任务按 `credits = 0` 创建，因此不会出现 402，也不会产生积分流水。
-
-任务完成后，`GET /v1/tasks/:task_id` 对视频任务只返回 `taskId`、`status` 与 `data.url`，不返回 `file_id` 及其余元数据：
-
-```json
-{
-  "taskId": "task_e629c5e8a37a614cf2289f650585aae4",
-  "status": "completed",
-  "data": { "url": "https://files.metaso.cn/api/minimax/v2/video_generation/..." }
-}
-```
-
-`data.url` 是上游的限时下载地址，平台不转存到对象存储：URL 过期后需要重新生成任务，也没有 `url_vendor`。失败或取消时 `data` 为 `{ "error": { "code": ..., "message": ... } }`；非终态时 `data` 为 `null`。`resolution`、`duration`、`usage` 等完整字段只保留在管理端任务详情的 `query_response` 中。
-
-上游的 `queued` / `running` 在平台侧统一显示为 `submitted`；`succeeded` / `failed` / `cancelled` 分别对应 `completed` / `failed` / `cancelled`。状态机见 4.4 节。
-
-> **注意**：使用前需要在管理后台创建 `/v1/videos/generations` 端点、类型为 `video` 的模型，并完成模型↔端点绑定、供应商（METASO，Base URL `https://metaso.cn/api/minimax/v2`）与供应商模型的映射。
-
 ### 4.6 参考媒体上传
 
 `POST /v1/files/upload/prepare` 与 `POST /v1/files/upload/complete` 用于上传后续生成所需的参考图片、参考视频和参考音频。上传的文件保存在平台的对象存储中，只有上传者可以使用，不会通过 `/v1/images/get/:file_id` 公开。
 
-上传图片后，把 `complete` 返回的 `file_id` 填进图像生成接口的 `image_ids`（见 4.1）；上传视频/音频后填进视频生成接口的 `images` / `videos` / `audios`（见 4.5）。用户自己生成、仍在有效期内的图片结果也可以作为后续生成的参考图。
+上传图片后，把 `complete` 返回的 `file_id` 填进图像生成接口的 `image_ids`（见 [图像生成](client/image/README.md)）；上传视频/音频后填进视频生成接口的 `images` / `videos` / `audios`（见 [视频生成](client/video/README.md)）。用户自己生成、仍在有效期内的图片结果也可以作为后续生成的参考图。
 
 Electron 客户端的完整接入示例（主进程直传、IPC、错误处理）见 [CLIENT_IMAGE_UPLOAD.md](CLIENT_IMAGE_UPLOAD.md)。
 
@@ -587,6 +463,6 @@ POST /v1/files/upload/complete
 | 401 | API Key 缺失、无效、已过期，或所属账号被禁用 |
 | 402 | 积分不足 |
 | 403 | 无权访问该资源（如查询他人的任务） |
-| 413 | 请求体超过上限，见 4.2 节 |
+| 413 | 请求体超过上限，见 4.3 节 |
 | 429 | 触发限流，`Retry-After` 头给出建议等待秒数 |
 | 503 | 无可用供应商，或该模型未配置计费规则 |

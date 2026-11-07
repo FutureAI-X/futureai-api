@@ -2,7 +2,7 @@
 
 本文说明 Electron 客户端如何把本地图片上传为参考图，并取得 `file_id` 用于图像生成。适用范围：`futureai-image` 等需要给 `/v1/images/generations` 传参考图的桌面应用。
 
-服务端接口定义见 [API.md](API.md#46-参考媒体上传)；`image_ids` 的生成侧规则见 [API.md](API.md#41-图像生成的请求标准)。
+服务端接口定义见 [API.md](API.md#46-参考媒体上传)；`image_ids` 的生成侧规则见 [图像生成](client/image/README.md)。
 
 ## 1 与旧上传方式的区别
 
@@ -299,7 +299,7 @@ Content-Type: application/json
 
 用户自己生成且仍在有效期内的图片结果也可以作为参考图。结果文件的 `file_id` 来自任务完成后的结果，不需要再次上传。
 
-视频生成接口的参考媒体同样使用文件上传，但字段是 `images` / `videos` / `audios`，见 [API.md](API.md#45-视频生成)。
+视频生成接口的参考媒体同样使用文件上传，但字段是 `images` / `videos` / `audios`，见 [视频生成](client/video/README.md)。
 
 ### 6.1 结果下载地址
 

@@ -53,19 +53,9 @@ func ImageGenerate(c *gin.Context) {
 	// 否则省略 resolution 的请求会计基础价、实际按 1k 出图，价格与生成结果不符。
 	req.ApplyDefaults()
 
-	// image_ids 的形态与数量先本地校验：参数错误不查端点、不扣费、不建任务。
-	// 空数组视为未使用 file_id 路径，回退 image_urls。
-	useFileIDs := useImageFileIDs(req.ImageIDs)
-	if useFileIDs {
-		if err := validateImageFileIDs(req.ImageIDs); err != nil {
-			common.SysErrorf("[ImageGenerate] image_ids 校验失败: userID=%d, err=%v", c.GetInt("user_id"), err)
-			c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": err.Error()})
-			return
-		}
-	}
-
 	// 快照保存调用方原始请求（原始 image_urls + image_ids），必须在把 file_id
 	// 解析并覆盖 ImageURLs 之前取好，否则落库的会是带签名的临时地址。
+	// 供应商不支持参考图时也会在下面清空字段，因此快照必须在这里取。
 	requestSnapshot := marshalRequestBody(req)
 
 	common.SysLogf("[ImageGenerate] 收到请求: model=%s", modelName)
@@ -144,9 +134,54 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 7. 计算积分消耗。条件按标准字段匹配：差异化计费规则可能以 model 作为条件，
+	// 7. 构造供应商客户端并读取能力声明。
+	// 提前构造的理由：后台提交、参考图处理、请求校验都需要先知道供应商能力。
+	cfg := supplier.Config{
+		BaseURL: vendor.BaseURL,
+		APIKey:  apiKey,
+	}
+	s := supplier.NewSupplier(vendor.Name, cfg)
+	if s == nil {
+		common.SysErrorf("[ImageGenerate] 不支持的供应商类型: %s", vendor.Name)
+		// 尚未扣费、未建任务，直接返回即可
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "不支持的供应商类型"})
+		return
+	}
+	caps := supplier.DefaultImageCapabilities()
+	if cp, ok := s.(supplier.ImageCapabilityProvider); ok {
+		caps = cp.ImageCapabilities()
+	}
+
+	// 8. 参考图处理。供应商不支持参考图时彻底忽略：不校验、不解析 file_id、
+	// 不计参考图费用，也不把字段传给上游。
+	useFileIDs := caps.SupportsReferenceImages && useImageFileIDs(req.ImageIDs)
+	if !caps.SupportsReferenceImages {
+		if useImageFileIDs(req.ImageIDs) || countRefImages(req.ImageURLs) > 0 {
+			common.SysLogf("[ImageGenerate] 供应商 %s 不支持参考图，已忽略 image_urls/image_ids: userID=%d",
+				vendor.Name, userID)
+		}
+		req.ImageIDs = nil
+		req.ImageURLs = nil
+	} else if useFileIDs {
+		if err := validateImageFileIDs(req.ImageIDs); err != nil {
+			common.SysErrorf("[ImageGenerate] image_ids 校验失败: userID=%d, err=%v", userID, err)
+			c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": err.Error()})
+			return
+		}
+	}
+
+	// 9. 供应商特有的请求校验。必须在扣费与建任务之前：参数错误不该产生任务行。
+	if validator, ok := s.(supplier.ImageRequestValidator); ok {
+		if err := validator.ValidateImageRequest(req); err != nil {
+			common.SysErrorf("[ImageGenerate] 请求参数校验失败: model=%s, err=%v", modelName, err)
+			c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": err.Error()})
+			return
+		}
+	}
+
+	// 10. 计算积分消耗。条件按标准字段匹配：差异化计费规则可能以 model 作为条件，
 	// 此处匹配的是调用方传入的模型名，供应商侧模型 ID 不作为计费条件。
-	credits, err := resolveCredits(m.ID, m.Type, req, endpoint.Path)
+	credits, err := resolveCredits(m.ID, m.Type, req, endpoint.Path, caps.SupportsReferenceImages)
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 计费规则解析失败: model=%s, err=%v", modelName, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费规则，暂不可用"})
@@ -157,9 +192,10 @@ func ImageGenerate(c *gin.Context) {
 			modelName, credits.RefImageCount, credits.Base, credits.Total)
 	}
 
-	// 8. 幂等键。带了这个头的请求在窗口内重复提交只会扣一次费：
-	// 上游提交是同步语义（最长 30s），而 OpenAI 兼容 SDK 默认会重试，
-	// 没有这个机制时客户端超时重发就会重复扣费、重复占用上游额度。
+	// 11. 幂等键。带了这个头的请求在窗口内重复提交只会扣一次费：
+	// 上游提交可能耗时较长（普通供应商最长 30s，MOSS 后台生成最长 15min），
+	// 而 OpenAI 兼容 SDK 默认会重试，没有这个机制时客户端超时重发就会
+	// 重复扣费、重复占用上游额度。
 	idemKey, ok := parseIdempotencyKey(c)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "fail", "message": "Idempotency-Key 过长"})
@@ -173,7 +209,7 @@ func ImageGenerate(c *gin.Context) {
 		}
 	}
 
-	// 9. 解析 image_ids：校验归属/用途/状态/类型/有效期，并生成短期签名 URL。
+	// 12. 解析 image_ids：校验归属/用途/状态/类型/有效期，并生成短期签名 URL。
 	//
 	// 放在幂等键之后：参考文件过期后客户端重试同一个 Idempotency-Key，
 	// 应当返回原任务而不是 410。
@@ -196,16 +232,24 @@ func ImageGenerate(c *gin.Context) {
 		req.ImageURLs = signedURLs
 	}
 
-	// 10. 先扣费、后调用上游。
+	// 13. 先扣费、后调用上游。
 	// 顺序至关重要：若先调用供应商再扣费，零余额用户可以让平台先产生真实成本，
 	// 随后扣费失败返回 402，形成「无限免费消耗上游额度」。
+	//
+	// 后台提交的供应商（MOSS）用 submitting 落库：它不是「尚未提交」，
+	// 而是「已交给后台 worker，同步接口还没返回」。这个状态不参与 stale-pending
+	// 退款，否则一次超过 90 秒的正常生成就会被误退款。
+	taskStatus := model.StatusPending
+	if caps.BackgroundSubmit {
+		taskStatus = model.StatusSubmitting
+	}
 	task := model.Task{
 		TaskID:     model.GenerateTaskID(),
 		UserID:     userID,
 		VendorID:   vendor.ID,
 		ModelID:    m.ID,
 		EndpointID: endpoint.ID,
-		Status:     model.StatusPending, // 尚未提交上游
+		Status:     taskStatus,
 		Credits:    credits.Total,
 		// 落库的是标准字段快照（已补齐默认值），即计费实际依据的那份数据：
 		// 供应商侧模型 ID 被 json:"-" 排除，回溯时可据此复现条件匹配过程。
@@ -236,35 +280,37 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 11. 构造供应商客户端
-	cfg := supplier.Config{
-		BaseURL: vendor.BaseURL,
-		APIKey:  apiKey,
-	}
-	s := supplier.NewSupplier(vendor.Name, cfg)
-	if s == nil {
-		common.SysErrorf("[ImageGenerate] 不支持的供应商类型: %s", vendor.Name)
-		// 未调用上游即失败，退还预扣积分
-		model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusCallFail, `{"error":"unsupported vendor"}`)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "不支持的供应商类型"})
-		return
-	}
-
-	// 12. 调用供应商 API。标准字段原样传下去，供应商侧模型 ID 单独给出：
+	// 14. 调用供应商 API。标准字段原样传下去，供应商侧模型 ID 单独给出：
 	// 供应商需要同时知道「调用方请求的是哪个模型」（多个模型可能映射到同一个
 	// vendor_model_id，要靠它区分变体）和「该往上游发哪个模型 ID」。
 	req.VendorModelID = vendorModel.VendorModelID
+
+	submitTimeout := supplier.SubmitTimeout
+	if caps.SubmitTimeout > 0 {
+		submitTimeout = caps.SubmitTimeout
+	}
+
+	// 后台提交：handler 立即返回 taskId，长耗时调用交给 goroutine。
+	// 这是 MOSS 这类同步接口的唯一可行方式——handler 等 15 分钟会被
+	// 网关、服务端 WriteTimeout 和调用方 SDK 任何一层先截断。
+	if caps.BackgroundSubmit {
+		common.SysLogf("[ImageGenerate] 后台提交任务: taskId=%s, vendor=%s, model=%s, timeout=%s",
+			task.TaskID, vendor.Name, modelName, submitTimeout)
+		go runBackgroundImageSubmit(task.TaskID, s, req, submitTimeout)
+		c.JSON(http.StatusOK, gin.H{"code": "success", "taskId": task.TaskID})
+		return
+	}
 
 	// 提交用独立带超时的 context，而不是请求的 context：
 	// 客户端断开时若直接取消上游调用，我们就再也不知道它有没有建单
 	// （task_id 只存在于响应里），会掉进「上游已受理却无从查证」的窗口。
 	// 提交最多 30s，让它跑完并把结果落库，状态才是自洽的。
-	submitCtx, cancelSubmit := context.WithTimeout(context.Background(), supplier.SubmitTimeout)
+	submitCtx, cancelSubmit := context.WithTimeout(context.Background(), submitTimeout)
 	defer cancelSubmit()
 
 	result := s.ImageGenerate(submitCtx, req)
 
-	// 13. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 退还积分
+	// 15. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 退还积分
 	if result.Code != "success" && result.FailureKind != supplier.FailureUnknown {
 		common.SysErrorf("[ImageGenerate] 供应商明确拒绝: vendor=%s, model=%s, kind=%s",
 			vendor.Name, modelName, result.FailureKind)
@@ -275,7 +321,7 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 14. 结果不确定（超时、连接中断、响应读不完整）。
+	// 16. 结果不确定（超时、连接中断、响应读不完整）。
 	//
 	// 这里**不能退款**：上游很可能已经建单并计费，把它当失败处理就是
 	// supplier 层注释点名的那个资损来源——「上游照常出图、用户全额退款」，
@@ -283,7 +329,7 @@ func ImageGenerate(c *gin.Context) {
 	//
 	// 因此置为非终态的 unknown：不退款、不自动轮询（没有可查的凭据），
 	// 留一个人工核对窗口；超过兜底时限后由对账循环转 call_fail 退款并打
-	// [需人工对账] 告警（见 reconcileOnce 第 2 步）。[SUBMIT_UNKNOWN] 是留给
+	// [需人工对账] 告警（见 reconcileOnce 的超龄任务处理）。[SUBMIT_UNKNOWN] 是留给
 	// 事后检索的标记——若频繁出现，说明上游不稳定或提交超时设置不合理。
 	if result.FailureKind == supplier.FailureUnknown {
 		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，转入人工核对（暂不退款）: taskID=%s, userID=%d, vendor=%s, model=%s",
@@ -295,7 +341,7 @@ func ImageGenerate(c *gin.Context) {
 		return
 	}
 
-	// 15. 提交成功：记录供应商响应并交给对账循环轮询。
+	// 17. 提交成功：记录供应商响应并交给对账循环轮询。
 	//
 	// 这一步必须在把 taskId 返回给调用方之前成功：vendor_response 是重启后
 	// 找回上游任务的唯一线索，写失败而进程随后退出，就再也查不到这个任务了。
@@ -310,11 +356,11 @@ func ImageGenerate(c *gin.Context) {
 
 	common.SysLogf("[ImageGenerate] 任务创建成功: taskId=%s, vendor=%s, model=%s", task.TaskID, vendor.Name, modelName)
 
-	// 16. 立即安排一次轮询；抢不到并发位也无妨——任务保持非终态，
+	// 18. 立即安排一次轮询；抢不到并发位也无妨——任务保持非终态，
 	// 下一轮对账循环会接手。这里**绝不**因为「排不上队」而退款。
 	ScheduleTaskPoll(task.TaskID)
 
-	// 17. 返回系统 taskId
+	// 19. 返回系统 taskId
 	c.JSON(http.StatusOK, gin.H{
 		"code":   "success",
 		"taskId": task.TaskID,
@@ -351,6 +397,60 @@ func setVendorResponseWithRetry(tag, taskID, vendorResponse string) error {
 		time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
 	}
 	return err
+}
+
+// runBackgroundImageSubmit 在后台完成一次同步生图，并推进任务状态。
+//
+// 与 handler 内的同步提交不同，这里没有 HTTP 响应可返回：
+//   - 成功时把结果写入 vendor_response 并交给对账循环转存；
+//   - 失败时按产品约定直接退款（call_fail），不再进入 unknown。
+//
+// 所有模糊失败都打 [MANUAL_RECONCILE]，因为 MOSS 可能实际上已经出图并计费。
+func runBackgroundImageSubmit(taskID string, s supplier.Supplier, req supplier.ImageGenerateRequest, timeout time.Duration) {
+	defer recoverBackgroundSubmit(taskID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	result := s.ImageGenerate(ctx, req)
+	if result.Code != "success" {
+		if result.FailureKind == supplier.FailureUnknown {
+			common.SysErrorf("[ImageGenerate] [MANUAL_RECONCILE] 后台提交结果不确定，按策略退款: taskID=%s", taskID)
+		} else {
+			common.SysErrorf("[ImageGenerate] 后台提交失败，退款: taskID=%s, kind=%s", taskID, result.FailureKind)
+		}
+		if err := model.UpdateTaskStatusWithRefund(taskID, model.StatusCallFail, `{"error":"vendor rejected"}`); err != nil {
+			common.SysErrorf("[ImageGenerate] 退还积分失败: taskID=%s, err=%v", taskID, err)
+		}
+		return
+	}
+
+	vendorRespJSON, err := json.Marshal(result.Data)
+	if err != nil {
+		// 上游已经出图，不能重试；任务保持 submitting，超时后由对账循环退款。
+		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 供应商响应序列化失败: taskID=%s, err=%v", taskID, err)
+		return
+	}
+	if err := setVendorResponseWithRetry("ImageGenerate", taskID, string(vendorRespJSON)); err != nil {
+		common.SysErrorf("[ImageGenerate] [SUBMIT_UNKNOWN] 记录供应商响应失败，超时后将退款: taskID=%s, err=%v", taskID, err)
+		return
+	}
+
+	common.SysLogf("[ImageGenerate] 后台提交成功: taskId=%s", taskID)
+	ScheduleTaskPoll(taskID)
+}
+
+// recoverBackgroundSubmit 兜住后台 goroutine 里的 panic。
+//
+// 与轮询 goroutine 一样，gin 的 Recovery 中间件覆盖不到这里；一个后台任务
+// 的 panic 不该终止整个进程，更不能让任务永远停在 submitting。
+func recoverBackgroundSubmit(taskID string) {
+	if r := recover(); r != nil {
+		common.SysErrorf("[ImageGenerate] 后台提交 panic，按失败退款: taskID=%s, err=%v", taskID, r)
+		if err := model.UpdateTaskStatusWithRefund(taskID, model.StatusCallFail, `{"error":"internal panic"}`); err != nil {
+			common.SysErrorf("[ImageGenerate] 退还积分失败: taskID=%s, err=%v", taskID, err)
+		}
+	}
 }
 
 // maxStoredRequestBody 落库的请求体长度上限（字节）。
@@ -621,7 +721,7 @@ func formatCredits(v float64) string {
 //
 // 计费口径只认标准字段：调用方发的非标准字段进不了 req，因此既不会命中条件，
 // 也不会被算成参考图——价格永远对得上实际发往上游的请求。
-func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGenerateRequest, endpointPath string) (creditResolution, error) {
+func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGenerateRequest, endpointPath string, refImagesSupported bool) (creditResolution, error) {
 	creditRule, err := model.GetCreditRuleByModelID(modelID)
 	if err != nil || creditRule == nil {
 		return creditResolution{}, errors.New("模型未配置计费规则")
@@ -657,7 +757,12 @@ func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGe
 	// 而端点白名单同时挡住了「将来多模态对话端点复用本函数被误加价」。
 	refImageCount := 0
 	if creditRule.RefImageCredits > 0 && isRefImageModel(modelType) {
-		if isRefImageEndpoint(endpointPath) {
+		if !refImagesSupported {
+			// 供应商不支持参考图时，控制器已经把参考图字段清空；这里再显式跳过，
+			// 避免「收了参考图的钱却静默忽略」。配了单价却收不到钱属于误配，必须可见。
+			common.SysErrorf("[resolveCredits] 供应商不支持参考图，本次跳过参考图计费: modelID=%d, 每张=%.2f",
+				modelID, creditRule.RefImageCredits)
+		} else if isRefImageEndpoint(endpointPath) {
 			// 只数本次实际生效的字段：image_ids 非空时 URL 被忽略，
 			// 不能把调用方额外塞进来的 URL 也算成钱。
 			refImageCount = effectiveRefImageCount(req)
@@ -703,6 +808,15 @@ func countRefImages(imageURLs []string) int {
 	return len(seen)
 }
 
+// publicTaskStatus 把内部任务状态映射为对外公开状态。
+// submitting 仅用于后台同步生成（MOSS），公开状态机里没有这个值，按 pending 返回。
+func publicTaskStatus(status string) string {
+	if status == model.StatusSubmitting {
+		return model.StatusPending
+	}
+	return status
+}
+
 // GetTask 查询任务状态
 // GET /v1/tasks/:task_id
 func GetTask(c *gin.Context) {
@@ -733,13 +847,17 @@ func GetTask(c *gin.Context) {
 		return
 	}
 
+	// submitting 是内部状态：后台同步生成（MOSS）正在进行。
+	// 公开状态机里没有这个值，对外统一显示为 pending，避免客户端不认识。
+	publicStatus := publicTaskStatus(task.Status)
+
 	if isVideoTask(task) {
 		// 视频任务对外只暴露 taskId / status / data.url（失败时为上游错误），
 		// 不返回 file_id 与其余元数据；完整结果仍保留在 query_response 中，
 		// 供管理端任务详情与事后回溯使用。
 		c.JSON(http.StatusOK, gin.H{
 			"taskId": task.TaskID,
-			"status": task.Status,
+			"status": publicStatus,
 			"data":   videoTaskData(task.QueryResponse),
 		})
 		return
@@ -761,7 +879,7 @@ func GetTask(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"taskId":  task.TaskID,
-		"status":  task.Status,
+		"status":  publicStatus,
 		"file_id": task.FileID,
 		"data":    data,
 	})
@@ -886,6 +1004,11 @@ const (
 	// vendor_response 为空，若把它也捞出来退款，用户就会既拿图又退款。
 	// 只有确定超出提交窗口仍未落库的，才是真的没提交成功。
 	stalePendingGrace = supplier.SubmitTimeout + 60*time.Second
+
+	// backgroundSubmitGrace 后台同步提交的宽限期。
+	// MOSS 单次生成最长 15 分钟，留 5 分钟余量；超过这个时间仍没有结果，
+	// 说明后台调用已经异常（进程重启、goroutine 丢失），按失败退款。
+	backgroundSubmitGrace = 20 * time.Minute
 )
 
 // querySem 限制同时在飞的上游查询数
@@ -994,7 +1117,22 @@ func reconcileOnce() {
 		}
 	}
 
-	// 2) 超过兜底时限仍未能确认结果：退款 + 告警。这类任务已无法通过对账确认，
+	// 2) 后台同步提交（MOSS）超过宽限期仍无结果：按失败退款。
+	//    这类任务没有 task_id 可查，重启后也无法恢复结果，只能退款并人工对账。
+	staleSubmitting, err := model.GetStaleSubmittingTasks(now.Add(-backgroundSubmitGrace), reconcileBatchSize)
+	if err != nil {
+		common.SysErrorf("[Reconcile] 查询滞留 submitting 任务失败: %v", err)
+	} else {
+		for _, t := range staleSubmitting {
+			common.SysErrorf("[Reconcile] [MANUAL_RECONCILE] 后台提交超过 %s 仍无结果，退款: taskID=%s",
+				backgroundSubmitGrace, t.TaskID)
+			if err := model.FailStaleSubmittingTask(t.TaskID, `{"error":"background submit result unknown"}`); err != nil {
+				common.SysErrorf("[Reconcile] 退款失败: taskID=%s, err=%v", t.TaskID, err)
+			}
+		}
+	}
+
+	// 3) 超过兜底时限仍未能确认结果：退款 + 告警。这类任务已无法通过对账确认，
 	//    只能人工介入——日志里明确标出来，便于事后核对上游账单。
 	expired, err := model.GetExpiredTasks(now.Add(-taskMaxPollAge), reconcileBatchSize)
 	if err != nil {
@@ -1009,7 +1147,7 @@ func reconcileOnce() {
 		}
 	}
 
-	// 3) 其余非终态任务：查一次上游
+	// 4) 其余非终态任务：查一次上游
 	tasks, err := model.GetTasksAwaitingPoll(reconcileBatchSize)
 	if err != nil {
 		common.SysErrorf("[Reconcile] 查询待轮询任务失败: %v", err)
@@ -1086,25 +1224,26 @@ func hasDeliverableResult(data map[string]interface{}) bool {
 // persistCompletedImage 把上游成图转存到对象存储，返回 files.file_id。
 //
 // userID 用于登记结果归属，使生成结果可以作为后续视频生成的参考输入复用。
-// 失败只记日志并返回空串：任务照常完成，原始上游 URL 仍保留在
-// query_response 的 data.url 中。转存是附加能力，不能让它把
-// 「已经出图且已扣费」的任务变成失败。
-func persistCompletedImage(taskID string, userID int, data map[string]interface{}) string {
+//
+// 返回错误由调用方决定后果：普通供应商失败只记日志、任务照常完成
+// （原始上游 URL 仍保留在 query_response 的 data.url 中）；MOSS 这类
+// 要求结果资产必须可下载的供应商则按失败退款。
+func persistCompletedImage(taskID string, userID int, data map[string]interface{}) (string, error) {
 	rawURL, _ := data["url"].(string)
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		// 仅返回 b64_json 的结果不在此处理，保持原有行为
-		return ""
+		return "", nil
 	}
 
 	file, err := filestore.Default().PersistURLForUser(context.Background(), rawURL, userID)
 	if err != nil {
-		common.SysErrorf("[Reconcile] 成图转存失败，任务仍按完成处理: taskID=%s, err=%v", taskID, err)
-		return ""
+		common.SysErrorf("[Reconcile] 成图转存失败: taskID=%s, err=%v", taskID, err)
+		return "", err
 	}
 
 	common.SysLogf("[Reconcile] 成图已转存: taskID=%s, fileID=%s", taskID, file.FileID)
-	return file.FileID
+	return file.FileID, nil
 }
 
 // pollOnce 查询一次上游任务状态并据此推进状态机。
@@ -1144,7 +1283,30 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 		// 视频结果不转存，直接使用上游的限时下载地址。
 		fileID := ""
 		if result.Kind != supplier.ResultKindVideo {
-			fileID = persistCompletedImage(task.TaskID, task.UserID, result.Data)
+			var persistErr error
+			fileID, persistErr = persistCompletedImage(task.TaskID, task.UserID, result.Data)
+			// 要求结果资产必须可下载的供应商（MOSS）先重试两次：
+			// CDN 瞬时抖动不该直接变成一次退款。404 这类确定性失败重试也无妨，
+			// 最多多花约 3 秒。
+			if result.RequireResultFetch && errors.Is(persistErr, filestore.ErrSourceUnavailable) {
+				for attempt := 1; attempt <= 2 && errors.Is(persistErr, filestore.ErrSourceUnavailable); attempt++ {
+					time.Sleep(time.Duration(attempt) * time.Second)
+					fileID, persistErr = persistCompletedImage(task.TaskID, task.UserID, result.Data)
+				}
+			}
+			if persistErr != nil {
+				// 某些供应商（MOSS）的结果地址可能指向不存在的资产。这类失败必须
+				// 退款，否则用户拿到一个取不到图的 completed 任务，钱却已经扣了。
+				if result.RequireResultFetch && errors.Is(persistErr, filestore.ErrSourceUnavailable) {
+					common.SysErrorf("[Reconcile] 上游结果资产不可用，按失败退款: taskID=%s, err=%v", task.TaskID, persistErr)
+					if err := model.UpdateTaskStatusWithRefund(task.TaskID, model.StatusCallFail, `{"error":"result asset unavailable"}`); err != nil {
+						common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
+					}
+					break
+				}
+				// 存储侧故障：不影响任务完成，原始上游 URL 仍在 data.url 中。
+				common.SysErrorf("[Reconcile] 成图转存失败，任务仍按完成处理: taskID=%s, err=%v", task.TaskID, persistErr)
+			}
 		}
 
 		if err := model.UpdateTaskCompleted(task.TaskID, string(dataJSON), fileID); err != nil {

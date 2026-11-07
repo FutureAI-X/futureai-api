@@ -22,6 +22,11 @@ import (
 const (
 	// StatusPending 已扣费、已建任务行，但尚未向上游提交成功
 	StatusPending = "pending"
+	// StatusSubmitting 已扣费，正在后台执行同步生成（当前仅 MOSS 使用）。
+	// 与 pending 的区别：pending 表示还没提交；submitting 表示已经交给后台
+	// worker，但同步接口还没有返回结果。对外查询时映射为 pending，
+	// 因为公开状态机里没有这个中间态。
+	StatusSubmitting = "submitting"
 	// StatusSubmitted 上游已受理，正在轮询
 	StatusSubmitted = "submitted"
 	// StatusCompleted 上游已出图（终态，不退款）
@@ -310,6 +315,53 @@ func GetStalePendingTasks(cutoff time.Time, limit int) ([]Task, error) {
 		StatusPending, cutoff).
 		Order("id ASC").Limit(limit).Find(&tasks).Error
 	return tasks, err
+}
+
+// GetStaleSubmittingTasks 取出「后台同步提交」长时间没有结果的任务。
+//
+// 只取 vendor_response 为空的行：后台调用一旦成功，会先写入结果并把状态
+// 推进到 submitted，这样的任务绝不能在这里被退款。
+func GetStaleSubmittingTasks(cutoff time.Time, limit int) ([]Task, error) {
+	var tasks []Task
+	err := DB.Where("status = ? AND (vendor_response IS NULL OR vendor_response = '') AND updated_at < ?",
+		StatusSubmitting, cutoff).
+		Order("id ASC").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}
+
+// FailStaleSubmittingTask 把超时仍无结果的后台同步任务置为 call_fail 并退款。
+//
+// 与 UpdateTaskStatusWithRefund 的区别：这里在事务内重新检查 status 与
+// vendor_response。后台 goroutine 可能刚好在查询与更新之间写入了结果；
+// 那种情况下任务已被推进到 submitted，继续退款会造成「用户既拿图又退款」。
+func FailStaleSubmittingTask(taskID string, queryResponse string) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("task_id = ?", taskID).First(&task).Error; err != nil {
+			return err
+		}
+
+		// 已经不在 submitting，或已经拿到结果：说明后台提交有了进展，不能退款。
+		if task.Status != StatusSubmitting || strings.TrimSpace(task.VendorResponse) != "" {
+			return nil
+		}
+
+		updates := map[string]interface{}{
+			"status": StatusCallFail,
+		}
+		if queryResponse != "" {
+			updates["query_response"] = queryResponse
+		}
+		if !task.CreditsRefunded && task.Credits > 0 {
+			if err := refundCreditsTx(tx, task.UserID, taskID, task.Credits, "任务失败退还"); err != nil {
+				return err
+			}
+			updates["credits_refunded"] = true
+			updates["credits"] = 0
+		}
+		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates).Error
+	})
 }
 
 // GetExpiredTasks 取出超过兜底时限仍未终结的任务。

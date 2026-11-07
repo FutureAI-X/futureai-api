@@ -50,6 +50,14 @@ const (
 	orphanCleanupTimeout = 10 * time.Second
 )
 
+// ErrSourceUnavailable 表示上游结果资产本身不可用：
+// URL 非法、下载失败、HTTP 404、或下载到的内容不是受支持的图片格式。
+//
+// 与「上传到对象存储失败」刻意区分：前者说明上游没有交付可用的成图，
+// 调用方可以据此判定任务失败并退款；后者是我们自己的存储侧故障，
+// 不应把一次已经成功的生成判成失败。
+var ErrSourceUnavailable = errors.New("结果资产不可用")
+
 // Config 转存配置
 type Config struct {
 	ServiceType string
@@ -142,7 +150,7 @@ func (p *Persister) PersistURL(ctx context.Context, rawURL string) (*model.File,
 func (p *Persister) PersistURLForUser(ctx context.Context, rawURL string, userID int) (*model.File, error) {
 	target, err := parseSourceURL(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrSourceUnavailable, err)
 	}
 
 	if ctx == nil {
@@ -153,12 +161,12 @@ func (p *Persister) PersistURLForUser(ctx context.Context, rawURL string, userID
 
 	data, err := p.download(ctx, target)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrSourceUnavailable, err)
 	}
 
 	ext, contentType, ok := detectImageExt(data)
 	if !ok {
-		return nil, errors.New("仅支持 JPEG/PNG/WebP/GIF 图片")
+		return nil, fmt.Errorf("%w: 仅支持 JPEG/PNG/WebP/GIF 图片", ErrSourceUnavailable)
 	}
 
 	return p.persistBytes(ctx, data, ext, contentType, resultKeyPrefix, model.FilePurposeResult, userID)

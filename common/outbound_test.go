@@ -134,6 +134,30 @@ func TestOutboundHTTPClientRejectsCrossHostRedirect(t *testing.T) {
 	}
 }
 
+// 长响应客户端用于同步生图（MOSS）：它必须在响应头到达前一直等待，
+// 同时仍然复用共享连接池并保留跨主机重定向防护。
+func TestLongOutboundHTTPClientIsSharedAndHasNoHeaderTimeout(t *testing.T) {
+	a := LongOutboundHTTPClient()
+	b := LongOutboundHTTPClient()
+	if a != b {
+		t.Fatal("LongOutboundHTTPClient 必须返回同一个实例，否则连接池无法复用")
+	}
+	if a.CheckRedirect == nil {
+		t.Fatal("必须设置 CheckRedirect，否则跨主机重定向会带着 API Key 跳走")
+	}
+
+	tr, ok := a.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport 类型 = %T, want *http.Transport", a.Transport)
+	}
+	if tr.ResponseHeaderTimeout != 0 {
+		t.Errorf("ResponseHeaderTimeout = %s，长响应客户端不应设置响应头超时", tr.ResponseHeaderTimeout)
+	}
+	if tr.IdleConnTimeout <= 0 {
+		t.Error("IdleConnTimeout 必须大于 0：Go 只在它大于 0 时才回收空闲连接")
+	}
+}
+
 // 出站客户端必须是共享单例：每个请求新建 Transport 等于连接池归零，
 // keep-alive 完全失效，且未设 IdleConnTimeout 时空闲连接永不回收。
 func TestOutboundHTTPClientIsShared(t *testing.T) {

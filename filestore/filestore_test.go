@@ -254,6 +254,9 @@ func TestPersistURLRejectsNonImage(t *testing.T) {
 	if err == nil {
 		t.Fatal("非图片内容应返回错误")
 	}
+	if !errors.Is(err, ErrSourceUnavailable) {
+		t.Errorf("非图片内容应标记为 ErrSourceUnavailable, got %v", err)
+	}
 	if len(store.uploads) != 0 {
 		t.Error("非图片内容不应上传")
 	}
@@ -284,6 +287,9 @@ func TestPersistURLPropagatesHTTPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("上游 404 应返回错误")
 	}
+	if !errors.Is(err, ErrSourceUnavailable) {
+		t.Errorf("上游 404 应标记为 ErrSourceUnavailable, got %v", err)
+	}
 	if len(store.uploads) != 0 {
 		t.Error("下载失败不应上传")
 	}
@@ -294,8 +300,13 @@ func TestPersistURLRejectsInvalidURL(t *testing.T) {
 
 	cases := []string{"ftp://example.com/a.png", "file:///etc/passwd", "/relative/a.png", "", "https://user:pass@example.com/a.png"}
 	for _, raw := range cases {
-		if _, err := persister.PersistURL(context.Background(), raw); err == nil {
+		_, err := persister.PersistURL(context.Background(), raw)
+		if err == nil {
 			t.Errorf("%q 应被拒绝", raw)
+			continue
+		}
+		if !errors.Is(err, ErrSourceUnavailable) {
+			t.Errorf("%q 应标记为 ErrSourceUnavailable, got %v", raw, err)
 		}
 	}
 }
@@ -411,8 +422,13 @@ func TestPersistURLPropagatesUploadError(t *testing.T) {
 	})
 	store.uploadErr = errors.New("COS 上传失败")
 
-	if _, err := persister.PersistURL(context.Background(), srv.URL+"/source"); err == nil {
+	_, err := persister.PersistURL(context.Background(), srv.URL+"/source")
+	if err == nil {
 		t.Fatal("上传失败应返回错误")
+	}
+	// 上传失败是平台存储侧问题，不能被当成「上游没有交付成图」而触发退款。
+	if errors.Is(err, ErrSourceUnavailable) {
+		t.Errorf("上传失败不应标记为 ErrSourceUnavailable, got %v", err)
 	}
 }
 

@@ -12,10 +12,10 @@
 |---|---|
 | 构建镜像并以 Docker 在本地运行 | [DOCKER.md](DOCKER.md) |
 | 在本地验证部署架构（Nginx 网关） | [GATEWAY.md](GATEWAY.md) |
-| 部署至服务器 | [../deploy/README.md](../deploy/README.md) |
-| 查询接口 | [API.md](API.md) |
-| Electron 客户端更新检查接入 | [CLIENT_UPDATE.md](CLIENT_UPDATE.md) |
-| Electron 客户端图片上传接入 | [CLIENT_IMAGE_UPLOAD.md](CLIENT_IMAGE_UPLOAD.md) |
+| 部署至服务器 | [../README.md](../README.md) |
+| 查询接口 | [API.md](../../docs/API.md) |
+| Electron 客户端更新检查接入 | [CLIENT_UPDATE.md](../../docs/CLIENT_UPDATE.md) |
+| Electron 客户端图片上传接入 | [CLIENT_IMAGE_UPLOAD.md](../../docs/CLIENT_IMAGE_UPLOAD.md) |
 | 环境变量完整说明 | [ENV.md](ENV.md) |
 
 ---
@@ -182,7 +182,7 @@ go run main.go
 cd web && npm run dev
 ```
 
-启动后访问 http://localhost:5173。该方式下 `/api`、`/v1`、`/health` 由 Vite 代理至 :3001，配置见 [web/vite.config.ts](../web/vite.config.ts)。
+启动后访问 http://localhost:5173。该方式下 `/api`、`/v1`、`/health` 由 Vite 代理至 :3001，配置见 [web/vite.config.ts](../../web/vite.config.ts)。
 
 > **注意**：方式 B 仅作用于 :5173，:3001 上的页面不会随之更新，因该端口提供的是上一次 `npm run build` 的产物。若需 :3001 使用最新前端，应重新执行 1.4 节的构建步骤。
 
@@ -248,7 +248,7 @@ IPv6：
 netsh int ipv6 set dynamicport tcp start=49152 num=16384
 ```
 
-亦可临时绕过：修改 `.env` 中的 `PORT`，同时修改 [web/vite.config.ts](../web/vite.config.ts) 中的三处 `target`。
+亦可临时绕过：修改 `.env` 中的 `PORT`，同时修改 [web/vite.config.ts](../../web/vite.config.ts) 中的三处 `target`。
 
 ---
 
