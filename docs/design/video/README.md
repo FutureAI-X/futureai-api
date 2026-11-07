@@ -1,6 +1,6 @@
 # 视频生成链路设计
 
-本文面向维护者，说明视频生成从 HTTP 请求进入系统到结果返回的完整设计。调用方文档见 [客户端视频生成文档](../../client/video/README.md)。
+本文面向维护者，说明视频生成从 HTTP 请求进入系统到结果返回的完整设计。调用方文档见 [客户端视频生成文档](../../api/video/README.md)。
 
 ## 1 范围
 
@@ -99,5 +99,5 @@ Metaso 提交接口的失败性质如下。
 2. 在 `NewVideoSupplier` 与 `NewTaskQuerier` 注册供应商名称。
 3. 确认参考媒体类型与上游 `role` 的映射。
 4. 补充单元测试，覆盖成功、4xx、5xx、超时、任务查询状态映射。
-5. 在 `docs/client/video/` 增加客户端文档，在 `docs/design/video/` 增加设计文档。
+5. 在 `docs/api/video/` 增加客户端文档，在 `docs/design/video/` 增加设计文档。
 6. 在管理端配置供应商、供应商模型、模型类型、端点绑定。

@@ -2,7 +2,7 @@
 
 ## 1 范围
 
-本文说明平台模型 `gpt-image-2.5-flare-ext` 的内部实现。通用图像链路见 [图像生成链路设计](README.md)，调用方文档见 [客户端文档](../../client/image/gpt-image-2.5-flare-ext.md)。
+本文说明平台模型 `gpt-image-2.5-flare-ext` 的内部实现。通用图像链路见 [图像生成链路设计](README.md)，调用方文档见 [客户端文档](../../api/image/gpt-image-2.5-flare-ext.md)。
 
 ## 2 供应商与端点
 
@@ -37,7 +37,7 @@ APIMart 没有供应商特有的请求预校验。平台标准字段校验与参
 - `image_ids` 去重后最多 15 张；
 - `image_urls` 去重后单次最多 100 张计入计费。
 
-参考图字段的优先级与校验规则见 [客户端图像生成文档](../../client/image/README.md#4-参考图)。
+参考图字段的优先级与校验规则见 [客户端图像生成文档](../../api/image/README.md#4-参考图)。
 
 ## 5 请求体转换
 

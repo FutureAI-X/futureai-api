@@ -15,7 +15,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
   -d '{"model":"...","prompt":"a cat"}'
 ```
 
-认证方式、限流参数与常见状态码见 [API.md](../../API.md)。
+认证方式、限流参数与常见状态码见 [客户端 API](../README.md)。
 
 ## 2 请求字段
 
@@ -155,7 +155,7 @@ MOSS 采用后台提交，提交请求总是先返回 `taskId`。上游失败体
 | `data.url_expires_at` | 签名地址的失效时间；过期后重新查询任务即可 |
 | `data.url_vendor` | 上游供应商返回的原始地址 |
 
-任务状态与退款规则见 [API.md](../../API.md#45-任务状态)。
+任务状态与退款规则见 [任务查询](../tasks/get-task.md#2-任务状态)。
 
 ## 7 幂等与请求体限制
 
@@ -169,9 +169,9 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
   -d '{"model":"moss-image-base-1.0","prompt":"a cat","size":"1024x1024"}'
 ```
 
-不携带该请求头时不去重。键最长 128 字符。完整说明见 [API.md](../../API.md#44-幂等键可选)。
+不携带该请求头时不去重。键最长 128 字符。完整说明见 [客户端 API](../README.md#4-幂等键)。
 
-除 `/v1/uploads/images` 外，其余端点请求体上限为 1MB，超限返回 413，见 [API.md](../../API.md#43-请求体大小限制)。
+除 `/v1/uploads/images` 外，其余端点请求体上限为 1MB，超限返回 413，见 [客户端 API](../README.md#3-请求体大小限制)。
 
 ## 8 计费
 

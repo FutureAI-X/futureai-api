@@ -2,7 +2,7 @@
 
 ## 1 范围
 
-本文说明平台模型 `MiniMax-H3` 的内部实现。通用视频链路见 [视频生成链路设计](README.md)，调用方文档见 [客户端文档](../../client/video/minimax-h3.md)。
+本文说明平台模型 `MiniMax-H3` 的内部实现。通用视频链路见 [视频生成链路设计](README.md)，调用方文档见 [客户端文档](../../api/video/minimax-h3.md)。
 
 ## 2 供应商与端点
 

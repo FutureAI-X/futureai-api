@@ -2,7 +2,7 @@
 
 ## 1 范围
 
-本文说明平台模型 `gpt-image-2.5-sunburst-ext` 的内部实现。除 `version` 取值外，其余设计与 [gpt-image-2.5-flare-ext](gpt-image-2.5-flare-ext.md) 一致。通用图像链路见 [图像生成链路设计](README.md)，调用方文档见 [客户端文档](../../client/image/gpt-image-2.5-sunburst-ext.md)。
+本文说明平台模型 `gpt-image-2.5-sunburst-ext` 的内部实现。除 `version` 取值外，其余设计与 [gpt-image-2.5-flare-ext](gpt-image-2.5-flare-ext.md) 一致。通用图像链路见 [图像生成链路设计](README.md)，调用方文档见 [客户端文档](../../api/image/gpt-image-2.5-sunburst-ext.md)。
 
 ## 2 供应商与端点
 

@@ -12,10 +12,10 @@
 |---|---|
 | 构建镜像并以 Docker 在本地运行 | [DOCKER.md](DOCKER.md) |
 | 在本地验证部署架构（Nginx 网关） | [GATEWAY.md](GATEWAY.md) |
-| 部署至服务器 | [../README.md](../README.md) |
-| 查询接口 | [API.md](../../docs/API.md) |
-| Electron 客户端更新检查接入 | [CLIENT_UPDATE.md](../../docs/CLIENT_UPDATE.md) |
-| Electron 客户端图片上传接入 | [CLIENT_IMAGE_UPLOAD.md](../../docs/CLIENT_IMAGE_UPLOAD.md) |
+| 部署至服务器 | [../../deploy/README.md](../../deploy/README.md) |
+| 查询接口 | [客户端 API](../api/README.md) |
+| Electron 客户端更新检查接入 | [版本更新检查](../api/version-update/README.md) |
+| Electron 客户端图片上传接入 | [文件上传客户端指南](../api/file-upload/README.md) |
 | 环境变量完整说明 | [ENV.md](ENV.md) |
 
 ---

@@ -59,7 +59,7 @@ bash deploy/build-image.sh linux/amd64
 
 标签取构建时刻，每次构建都不同，记下来供后续章节使用。产出两项：本机镜像 `futureai-api:<标签>` 与仓库根目录下的 `futureai-api-<标签>-<架构>.tar.gz`。
 
-报 `failed to fetch anonymous token` 时见 [local/DOCKER.md 第 7.1 节](local/DOCKER.md#71-构建时报-failed-to-fetch-anonymous-token)。
+报 `failed to fetch anonymous token` 时见 [../docs/dev/DOCKER.md 第 7.1 节](../docs/dev/DOCKER.md#71-构建时报-failed-to-fetch-anonymous-token)。
 
 ## 2 本机：上传
 

@@ -2,7 +2,7 @@
 
 ## 1 范围
 
-本文说明平台模型 `moss-image-base-1.0` 的内部实现。通用图像链路见 [图像生成链路设计](README.md)，调用方文档见 [客户端文档](../../client/image/moss-image-base-1.0.md)。
+本文说明平台模型 `moss-image-base-1.0` 的内部实现。通用图像链路见 [图像生成链路设计](README.md)，调用方文档见 [客户端文档](../../api/image/moss-image-base-1.0.md)。
 
 ## 2 供应商与端点
 

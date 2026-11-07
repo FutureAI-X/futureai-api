@@ -2,7 +2,7 @@
 
 在本地复现生产架构（域名分流 + TLS 终止），用于验证网关配置。不需要真实域名和证书，自签证书加 hosts 即可。
 
-日常开发见 [DEV.md](DEV.md)，验证镜像见 [DOCKER.md](DOCKER.md)，部署到服务器见 [../README.md](../README.md)。
+日常开发见 [DEV.md](DEV.md)，验证镜像见 [DOCKER.md](DOCKER.md)，部署到服务器见 [../../deploy/README.md](../../deploy/README.md)。
 
 除第 4、5 章外，各章命令均在仓库根目录执行。
 
@@ -176,4 +176,4 @@ docker network rm gateway-proxy
 | 修改模板未生效 | 改的是渲染产物。应修改 `templates/default.conf.template`，然后执行 `docker compose up -d --force-recreate` |
 | 浏览器打不开，但 curl 正常 | 系统代理绕过了 hosts，把 `futureaiapi.com` 加入代理的直连规则 |
 
-更深入的排查见 [NOTES.md](../NOTES.md#10-排查表)。
+更深入的排查见 [NOTES.md](../../deploy/NOTES.md#10-排查表)。

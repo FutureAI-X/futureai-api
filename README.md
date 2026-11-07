@@ -6,14 +6,16 @@
 
 | 我想… | 看这里 |
 |---|---|
-| 本地跑起来、改代码 | **[deploy/local/DEV.md](deploy/local/DEV.md)** |
-| 查环境变量的含义 | [deploy/local/ENV.md](deploy/local/ENV.md) |
-| 打包成镜像、用 Docker 在本地跑 | **[deploy/local/DOCKER.md](deploy/local/DOCKER.md)** |
-| 在本地跑 Nginx 网关（验证部署架构） | [deploy/local/GATEWAY.md](deploy/local/GATEWAY.md) |
+| 本地跑起来、改代码 | **[docs/dev/DEV.md](docs/dev/DEV.md)** |
+| 查环境变量的含义 | [docs/dev/ENV.md](docs/dev/ENV.md) |
+| 打包成镜像、用 Docker 在本地跑 | **[docs/dev/DOCKER.md](docs/dev/DOCKER.md)** |
+| 在本地跑 Nginx 网关（验证部署架构） | [docs/dev/GATEWAY.md](docs/dev/GATEWAY.md) |
 | 部署到服务器 | [deploy/README.md](deploy/README.md) |
 | 部署出问题了 | [deploy/NOTES.md](deploy/NOTES.md) |
-| 查接口 | [docs/API.md](docs/API.md) |
-| Electron 客户端上传参考图 | [docs/CLIENT_IMAGE_UPLOAD.md](docs/CLIENT_IMAGE_UPLOAD.md) |
+| 客户端 API：图像、视频、任务、文件、版本、模型 | [docs/api/README.md](docs/api/README.md) |
+| Web 前端 API：登录、用户、管理端、计费 | [docs/web/README.md](docs/web/README.md) |
+| 图像/视频生成的内部设计 | [docs/design/image/README.md](docs/design/image/README.md)、[docs/design/video/README.md](docs/design/video/README.md) |
+| Electron 客户端上传参考图 | [docs/api/file-upload/README.md](docs/api/file-upload/README.md) |
 
 ## 技术栈
 
@@ -35,14 +37,14 @@ futureai-api/
 ├── .env.example         # 环境变量模板
 │
 ├── docs/                # 文档
-│   ├── API.md           #   接口参考（认证、公开接口、管理接口、通用行为）
-│   ├── client/          #   对外文档：图像/视频通用约定 + 各模型使用说明
-│   └── design/          #   内部设计：图像/视频链路 + 各模型实现说明
+│   ├── dev/             #   开发环境：本地开发、Docker、环境变量、网关、写作规范
+│   ├── api/             #   客户端 API：图像/视频/任务/文件/版本/模型
+│   ├── web/             #   Web 前端 API：登录、用户、管理端、计费
+│   └── design/          #   内部设计：图像/视频链路与各模型实现
 │
-├── deploy/              # 部署编排
+├── deploy/              # 服务器部署编排
 │   ├── README.md        #   服务器部署步骤
 │   ├── NOTES.md         #   为什么这么设计 / 排查 / 升级备份 / 上线自检清单
-│   ├── local/           #   本地开发、Docker、环境变量与网关文档
 │   ├── build-image.sh   #   构建镜像并导出，收平台参数
 │   ├── backup.sh        #   数据库 + .env 定时备份（含轮转）
 │   ├── restore.sh       #   从备份恢复（演练用）
