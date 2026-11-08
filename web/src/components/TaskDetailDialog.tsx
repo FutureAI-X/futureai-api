@@ -55,6 +55,8 @@ interface TaskDetailDialogProps {
   showUsername?: boolean
   // 管理员端保留原始查询响应入口（默认收起）
   showRawQueryResponse?: boolean
+  // 结果地址只对管理员展示。个人端不展示，避免把上游地址泄露给用户。
+  showResultUrl?: boolean
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -68,16 +70,18 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-// 字段区 + 结果地址 + 请求体。
+// 字段区 + 请求体；结果地址按 showResultUrl 决定是否展示。
 // 单独拆组件是为了让 extractTaskResult 的 useMemo 只在 task 存在时运行。
 function TaskDetailContent({
   task,
   showUsername,
   showRawQueryResponse,
+  showResultUrl,
 }: {
   task: TaskDetailData
   showUsername: boolean
   showRawQueryResponse: boolean
+  showResultUrl: boolean
 }) {
   const result = useMemo(() => extractTaskResult(task.query_response), [task.query_response])
   const prompt = useMemo(() => extractPrompt(task.request_body), [task.request_body])
@@ -150,26 +154,28 @@ function TaskDetailContent({
         />
       </div>
 
-      <div>
-        <label className='text-muted-foreground text-xs font-medium'>结果地址</label>
-        {failed ? (
-          <p className='text-muted-foreground mt-1 text-sm'>暂无</p>
-        ) : result.url ? (
-          <div className='mt-1 flex min-w-0 items-start gap-1'>
-            <a
-              href={result.url}
-              target='_blank'
-              rel='noreferrer noopener'
-              className='text-primary min-w-0 font-mono text-xs break-all hover:underline'
-            >
-              {result.url}
-            </a>
-            <CopyButton text={result.url} />
-          </div>
-        ) : (
-          <p className='text-muted-foreground mt-1 text-sm'>{resultNote || '暂无结果地址'}</p>
-        )}
-      </div>
+      {showResultUrl && (
+        <div>
+          <label className='text-muted-foreground text-xs font-medium'>结果地址</label>
+          {failed ? (
+            <p className='text-muted-foreground mt-1 text-sm'>暂无</p>
+          ) : result.url ? (
+            <div className='mt-1 flex min-w-0 items-start gap-1'>
+              <a
+                href={result.url}
+                target='_blank'
+                rel='noreferrer noopener'
+                className='text-primary min-w-0 font-mono text-xs break-all hover:underline'
+              >
+                {result.url}
+              </a>
+              <CopyButton text={result.url} />
+            </div>
+          ) : (
+            <p className='text-muted-foreground mt-1 text-sm'>{resultNote || '暂无结果地址'}</p>
+          )}
+        </div>
+      )}
 
       {showRawQueryResponse && task.query_response && (
         <details className='group border-border/50 rounded-lg border'>
@@ -198,6 +204,7 @@ export function TaskDetailDialog({
   onClose,
   showUsername = false,
   showRawQueryResponse = false,
+  showResultUrl = false,
 }: TaskDetailDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -271,6 +278,7 @@ export function TaskDetailDialog({
               task={task}
               showUsername={showUsername}
               showRawQueryResponse={showRawQueryResponse}
+              showResultUrl={showResultUrl}
             />
           ) : (
             <p className='text-muted-foreground py-12 text-center text-sm'>加载失败</p>

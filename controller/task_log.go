@@ -17,6 +17,25 @@ type taskDetailResponse struct {
 	DurationSeconds int64 `json:"duration_seconds"`
 }
 
+// userTaskDetailResponse 个人端任务详情：只返回用户可见字段。
+//
+// 刻意不嵌入 model.Task：vendor_response / query_response 包含上游任务 ID、
+// 结果地址等上游信息，个人端不需要也不应该拿到。结果地址同理不在个人端展示，
+// 如后续需要给用户下载成图，应返回平台自己的文件地址而不是上游地址。
+type userTaskDetailResponse struct {
+	ID              int       `json:"id"`
+	TaskID          string    `json:"task_id"`
+	Status          string    `json:"status"`
+	ErrorCode       string    `json:"error_code,omitempty"`
+	ErrorMessage    string    `json:"error_message,omitempty"`
+	Credits         float64   `json:"credits"`
+	CreditsRefunded bool      `json:"credits_refunded"`
+	RequestBody     string    `json:"request_body"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	DurationSeconds int64     `json:"duration_seconds"`
+}
+
 // taskDurationSeconds 返回任务耗时（秒）。
 //
 // 终态取 updated_at - created_at；进行中的任务取当前时间，否则耗时会一直停在上一次
@@ -210,6 +229,18 @@ func GetUserTaskLogDetail(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    taskDetailResponse{Task: *task, DurationSeconds: taskDurationSeconds(*task)},
+		"data": userTaskDetailResponse{
+			ID:              task.ID,
+			TaskID:          task.TaskID,
+			Status:          task.Status,
+			ErrorCode:       task.ErrorCode,
+			ErrorMessage:    task.ErrorMessage,
+			Credits:         task.Credits,
+			CreditsRefunded: task.CreditsRefunded,
+			RequestBody:     task.RequestBody,
+			CreatedAt:       task.CreatedAt,
+			UpdatedAt:       task.UpdatedAt,
+			DurationSeconds: taskDurationSeconds(*task),
+		},
 	})
 }

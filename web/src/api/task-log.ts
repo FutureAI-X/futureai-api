@@ -30,7 +30,7 @@ export interface TaskLog {
   error_code?: string
   error_message?: string
   request_body?: string
-  query_response?: string
+  // query_response 属于上游原始响应，后端只对管理员返回，个人端不返回。
   created_at: string
   updated_at: string
 }

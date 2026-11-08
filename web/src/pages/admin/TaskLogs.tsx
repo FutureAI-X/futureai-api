@@ -178,6 +178,7 @@ export function AdminTaskLogs() {
         onClose={() => setDetailOpen(false)}
         showUsername
         showRawQueryResponse
+        showResultUrl
       />
     </div>
   )
