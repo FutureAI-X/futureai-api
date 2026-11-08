@@ -39,6 +39,22 @@ func IsValidModelType(t ModelType) bool {
 	return false
 }
 
+// GetModelNameMap 获取模型 ID 到名称的映射。
+//
+// 只查 id、name：任务日志列表要展示模型名，但不需要 ParamSpec、
+// Description 等大字段，避免每次翻页都把整张模型表的大列读进来。
+func GetModelNameMap() (map[int]string, error) {
+	var models []Model
+	if err := DB.Select("id", "name").Find(&models).Error; err != nil {
+		return nil, err
+	}
+	m := make(map[int]string, len(models))
+	for _, item := range models {
+		m[item.ID] = item.Name
+	}
+	return m, nil
+}
+
 type Model struct {
 	// 唯一标识，自增主键
 	ID int `json:"id" gorm:"primaryKey"`

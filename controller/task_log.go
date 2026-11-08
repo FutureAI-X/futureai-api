@@ -3,11 +3,37 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/gin-gonic/gin"
 )
+
+// taskDetailResponse 详情响应：在任务字段之外补上耗时。
+// 用嵌入而不是往 model.Task 上加字段：耗时是展示层派生值，只属于详情接口。
+type taskDetailResponse struct {
+	model.Task
+	DurationSeconds int64 `json:"duration_seconds"`
+}
+
+// taskDurationSeconds 返回任务耗时（秒）。
+//
+// 终态取 updated_at - created_at；进行中的任务取当前时间，否则耗时会一直停在上一次
+// 状态写入的时刻（通常就是 0）。cancelled / call_fail 是历史状态值，也视为终态。
+func taskDurationSeconds(t model.Task) int64 {
+	end := t.UpdatedAt
+	switch t.Status {
+	case model.StatusCompleted, model.StatusFailed, "cancelled", "call_fail":
+	default:
+		end = time.Now()
+	}
+	seconds := int64(end.Sub(t.CreatedAt).Seconds())
+	if seconds < 0 {
+		return 0
+	}
+	return seconds
+}
 
 // AdminGetTaskLogs 管理员获取任务日志列表（支持按用户/状态筛选）
 func AdminGetTaskLogs(c *gin.Context) {
@@ -34,9 +60,11 @@ func AdminGetTaskLogs(c *gin.Context) {
 		TaskID          string  `json:"task_id"`
 		UserID          int     `json:"user_id"`
 		Username        string  `json:"username,omitempty"`
+		ModelName       string  `json:"model_name,omitempty"`
 		Status          string  `json:"status"`
 		Credits         float64 `json:"credits"`
 		CreditsRefunded bool    `json:"credits_refunded"`
+		DurationSeconds int64   `json:"duration_seconds"`
 		CreatedAt       string  `json:"created_at"`
 		UpdatedAt       string  `json:"updated_at"`
 	}
@@ -48,9 +76,11 @@ func AdminGetTaskLogs(c *gin.Context) {
 			TaskID:          t.TaskID,
 			UserID:          t.UserID,
 			Username:        t.Username,
+			ModelName:       t.ModelName,
 			Status:          t.Status,
 			Credits:         t.Credits,
 			CreditsRefunded: t.CreditsRefunded,
+			DurationSeconds: taskDurationSeconds(t),
 			CreatedAt:       common.FormatDisplayTime(t.CreatedAt),
 			UpdatedAt:       common.FormatDisplayTime(t.UpdatedAt),
 		}
@@ -81,7 +111,10 @@ func AdminGetTaskLogDetail(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": task})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    taskDetailResponse{Task: *task, DurationSeconds: taskDurationSeconds(*task)},
+	})
 }
 
 // GetUserTaskLogs 获取当前用户的任务日志
@@ -111,25 +144,29 @@ func GetUserTaskLogs(c *gin.Context) {
 	}
 
 	type taskResponse struct {
-		ID            int     `json:"id"`
-		TaskID        string  `json:"task_id"`
-		Status        string  `json:"status"`
-		Credits       float64 `json:"credits"`
-		CreditsRefunded bool  `json:"credits_refunded"`
-		CreatedAt     string  `json:"created_at"`
-		UpdatedAt     string  `json:"updated_at"`
+		ID              int     `json:"id"`
+		TaskID          string  `json:"task_id"`
+		ModelName       string  `json:"model_name,omitempty"`
+		Status          string  `json:"status"`
+		Credits         float64 `json:"credits"`
+		CreditsRefunded bool    `json:"credits_refunded"`
+		DurationSeconds int64   `json:"duration_seconds"`
+		CreatedAt       string  `json:"created_at"`
+		UpdatedAt       string  `json:"updated_at"`
 	}
 
 	items := make([]taskResponse, len(tasks))
 	for i, t := range tasks {
 		items[i] = taskResponse{
-			ID:            t.ID,
-			TaskID:        t.TaskID,
-			Status:        t.Status,
-			Credits:       t.Credits,
+			ID:              t.ID,
+			TaskID:          t.TaskID,
+			ModelName:       t.ModelName,
+			Status:          t.Status,
+			Credits:         t.Credits,
 			CreditsRefunded: t.CreditsRefunded,
-			CreatedAt:     common.FormatDisplayTime(t.CreatedAt),
-			UpdatedAt:     common.FormatDisplayTime(t.UpdatedAt),
+			DurationSeconds: taskDurationSeconds(t),
+			CreatedAt:       common.FormatDisplayTime(t.CreatedAt),
+			UpdatedAt:       common.FormatDisplayTime(t.UpdatedAt),
 		}
 	}
 
@@ -171,5 +208,8 @@ func GetUserTaskLogDetail(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": task})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    taskDetailResponse{Task: *task, DurationSeconds: taskDurationSeconds(*task)},
+	})
 }

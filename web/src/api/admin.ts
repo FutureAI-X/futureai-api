@@ -135,9 +135,11 @@ export interface AdminTaskLog {
   task_id: string
   user_id: number
   username?: string
+  model_name?: string
   status: string
   credits: number
   credits_refunded: boolean
+  duration_seconds?: number
   error_code?: string
   error_message?: string
   request_body?: string

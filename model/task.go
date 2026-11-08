@@ -94,7 +94,8 @@ type Task struct {
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 
 	// 非数据库字段
-	Username string `json:"username,omitempty" gorm:"-"`
+	Username  string `json:"username,omitempty" gorm:"-"`
+	ModelName string `json:"model_name,omitempty" gorm:"-"`
 }
 
 // TableName 指定表名，并把幂等键的唯一性与 user_id 绑定
@@ -333,6 +334,9 @@ func GetTaskLogs(page, pageSize int, status string, userID int) ([]Task, int64, 
 	if err := fillTaskUsernames(tasks); err != nil {
 		return nil, 0, err
 	}
+	if err := fillTaskModelNames(tasks); err != nil {
+		return nil, 0, err
+	}
 
 	return tasks, total, nil
 }
@@ -359,6 +363,9 @@ func GetTaskLogsByUserID(userID int, page, pageSize int, status string) ([]Task,
 	if err := fillTaskUsernames(tasks); err != nil {
 		return nil, 0, err
 	}
+	if err := fillTaskModelNames(tasks); err != nil {
+		return nil, 0, err
+	}
 
 	return tasks, total, nil
 }
@@ -373,6 +380,19 @@ func fillTaskUsernames(tasks []Task) error {
 		if name, ok := userMap[tasks[i].UserID]; ok {
 			tasks[i].Username = name
 		}
+	}
+	return nil
+}
+
+// fillTaskModelNames 为任务列表填充模型名。
+// 模型被删除时名称为空，由前端显示占位符。
+func fillTaskModelNames(tasks []Task) error {
+	modelMap, err := GetModelNameMap()
+	if err != nil {
+		return err
+	}
+	for i := range tasks {
+		tasks[i].ModelName = modelMap[tasks[i].ModelID]
 	}
 	return nil
 }

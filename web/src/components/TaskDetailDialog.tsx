@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { formatCredits } from '../lib/credits'
-import { formatTime } from '../lib/time'
+import { formatDuration, formatTime } from '../lib/time'
 import { extractPrompt, extractTaskResult } from '../lib/task-result'
 import { CopyButton } from './CopyButton'
 import { JsonViewer } from './JsonViewer'
@@ -36,6 +36,7 @@ export interface TaskDetailData {
   status: string
   credits: number
   credits_refunded: boolean
+  duration_seconds?: number
   request_body?: string
   query_response?: string
   error_code?: string
@@ -119,6 +120,11 @@ function TaskDetailContent({
               <span className='ml-2 text-xs text-emerald-600 dark:text-emerald-400'>已退还</span>
             )}
           </p>
+        </div>
+
+        <div>
+          <label className='text-muted-foreground text-xs font-medium'>耗时</label>
+          <p className='mt-1 text-sm'>{formatDuration(task.duration_seconds)}</p>
         </div>
 
         <div>

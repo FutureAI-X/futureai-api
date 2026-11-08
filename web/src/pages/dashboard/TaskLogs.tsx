@@ -12,7 +12,7 @@ import { getTaskLogs, getTaskLogDetail, type TaskLog } from '../../api/task-log'
 import { CopyButton } from '../../components/CopyButton'
 import { TaskDetailDialog } from '../../components/TaskDetailDialog'
 import { formatCredits } from '../../lib/credits'
-import { formatTime } from '../../lib/time'
+import { formatDuration, formatTime } from '../../lib/time'
 import { Pagination } from '../../components/Pagination'
 
 const STATUS_CONFIG: Record<string, { label: string; className: string; icon: typeof Clock }> = {
@@ -106,8 +106,10 @@ export function TaskLogs() {
               <tr className='bg-muted/30 border-border/40 border-b'>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>ID</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>任务ID</th>
+                <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>模型</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>状态</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>积分消耗</th>
+                <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>耗时</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>创建时间</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>更新时间</th>
                 <th className='text-muted-foreground px-4 py-3 text-left text-xs font-semibold tracking-wider uppercase'>操作</th>
@@ -115,9 +117,9 @@ export function TaskLogs() {
             </thead>
             <tbody className='divide-border/40 divide-y'>
               {loading ? (
-                <tr><td colSpan={8} className='px-4 py-12 text-center'><Loader2 className='text-muted-foreground mx-auto size-6 animate-spin' /></td></tr>
+                <tr><td colSpan={9} className='px-4 py-12 text-center'><Loader2 className='text-muted-foreground mx-auto size-6 animate-spin' /></td></tr>
               ) : tasks.length === 0 ? (
-                <tr><td colSpan={7} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无任务记录</p></td></tr>
+                <tr><td colSpan={9} className='px-4 py-12 text-center'><p className='text-muted-foreground text-sm'>暂无任务记录</p></td></tr>
               ) : tasks.map((task) => {
                 const statusConf = STATUS_CONFIG[task.status] || STATUS_CONFIG.submitted
                 const StatusIcon = statusConf.icon
@@ -130,6 +132,7 @@ export function TaskLogs() {
                         <CopyButton text={task.task_id} />
                       </div>
                     </td>
+                    <td className='px-4 py-3'><span className='text-xs'>{task.model_name || '-'}</span></td>
                     <td className='px-4 py-3'>
                       <span className={cn('inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium', statusConf.className)}>
                         <StatusIcon className='size-3' />
@@ -144,6 +147,7 @@ export function TaskLogs() {
                         )}
                       </div>
                     </td>
+                    <td className='px-4 py-3'><span className='text-muted-foreground text-xs'>{formatDuration(task.duration_seconds)}</span></td>
                     <td className='px-4 py-3'><span className='text-muted-foreground text-xs'>{formatTime(task.created_at)}</span></td>
                     <td className='px-4 py-3'><span className='text-muted-foreground text-xs'>{formatTime(task.updated_at)}</span></td>
                     <td className='px-4 py-3'>

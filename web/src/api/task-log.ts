@@ -22,7 +22,9 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 export interface TaskLog {
   id: number
   task_id: string
+  model_name?: string
   status: string
+  duration_seconds?: number
   credits: number
   credits_refunded: boolean
   error_code?: string
