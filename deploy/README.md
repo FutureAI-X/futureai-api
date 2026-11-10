@@ -37,6 +37,7 @@
 | 知道为什么这么设计 | [NOTES.md](NOTES.md#1-为什么是这套结构) |
 | 上线前逐项自检 | [NOTES.md](NOTES.md#5-上线自检清单) |
 | 更新已部署的实例（打包、上传、切换） | [UPDATE.md](UPDATE.md) |
+| 查生产日志（应用、网关、数据库、定时任务） | [LOGS.md](LOGS.md) |
 | 回滚 | [NOTES.md](NOTES.md#7-回滚) |
 | 备份 | [NOTES.md](NOTES.md#8-备份) |
 | 出问题了 | [NOTES.md](NOTES.md#10-排查表) |
