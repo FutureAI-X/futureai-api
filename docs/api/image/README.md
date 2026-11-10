@@ -26,14 +26,14 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | `model` | string | 必填，平台模型名 |
 | `prompt` | string | 提示词 |
 | `size` | string | 画幅。支持比例或像素尺寸，见第 3 章 |
-| `resolution` | string | 分辨率档位，如 `1K` / `2K` / `4K`，默认 `1K`。具体支持见模型文档，部分模型忽略 |
+| `resolution` | string | 分辨率档位，如 `1K` / `1.5K` / `2K` / `4K`，默认 `1K`。具体支持见模型文档，部分模型忽略 |
 | `quality` | string | 生成质量。仅 `gpt-image-2.6-*` 支持，取值见模型文档；不影响计费 |
 | `output_format` | string | 输出格式。仅 `gpt-image-2.6-*` 支持，当前为 `png` / `jpeg` / `webp` |
 | `complexity` | string | 画面复杂度。仅 `gpt-image-2.6-*` 支持，省略时由上游决定 |
 | `image_urls` | string[] | 参考图 URL 数组 |
 | `image_ids` | string[] | 参考图 file_id 数组，由 `/v1/files/upload/complete` 返回 |
 
-`size` 与 `resolution` 省略时，平台按 `size=16:9`、`resolution=1K` 补齐。`gpt-image-2.6-*` 的 `quality` / `output_format` 省略时分别按 `auto` / `png` 补齐，`complexity` 不补默认值、省略即不发送。使用 MOSS 模型时必须显式传 `size`，原因见第 3 章。
+`size` 与 `resolution` 省略时，平台按 `size=16:9`、`resolution=1K` 补齐。`seedream-5-5` 的 `resolution` 还支持 `1.5K`。`gpt-image-2.6-*` 的 `quality` / `output_format` 省略时分别按 `auto` / `png` 补齐，`complexity` 不补默认值、省略即不发送。使用 MOSS 模型时必须显式传 `size`，原因见第 3 章。
 
 ## 3 size 的两种格式
 
@@ -41,11 +41,12 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 
 | 写法 | 示例 | 配合字段 | 当前模型 |
 |---|---|---|---|
-| 比例 | `16:9`、`1:1` | `resolution` | `gpt-image-2.5-*`、`gpt-image-2.6-*`、`gpt-image-2` / `gpt-image-2-ext` |
+| 比例 | `16:9`、`1:1` | `resolution` | `gpt-image-2.5-*`、`gpt-image-2.6-*`、`gpt-image-2` / `gpt-image-2-ext`、`seedream-5-5` |
 | 像素尺寸 | `1024x1024` | 无 | MOSS 模型、`gpt-image-2` / `gpt-image-2-ext` |
 
 - `gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext`：只接受比例；
 - `gpt-image-2.6-flare-ext` / `gpt-image-2.6-sunburst-ext`：只接受比例，且新增 `quality` / `output_format` / `complexity`；
+- `seedream-5-5`：只接受比例，不支持像素、`2K` 这类档位写法与 `auto`；
 - `gpt-image-2` / `gpt-image-2-ext`：比例或像素均可；
 - MOSS 模型：只接受像素。
 
@@ -53,7 +54,8 @@ APIMart 模型的可用比例随模型不同，均不支持 `auto`：
 
 - `gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext`：`1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`；
 - `gpt-image-2.6-flare-ext` / `gpt-image-2.6-sunburst-ext`：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`5:4`、`4:5`、`16:9`、`9:16`、`21:9`；
-- `gpt-image-2` / `gpt-image-2-ext`：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`5:4`、`4:5`、`16:9`、`9:16`、`2:1`、`1:2`、`3:1`、`1:3`、`21:9`、`9:21`。
+- `gpt-image-2` / `gpt-image-2-ext`：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`5:4`、`4:5`、`16:9`、`9:16`、`2:1`、`1:2`、`3:1`、`1:3`、`21:9`、`9:21`；
+- `seedream-5-5`：`1:1`、`4:3`、`3:4`、`16:9`、`9:16`、`3:2`、`2:3`、`21:9`、`2:1`、`1:2`。
 
 `gpt-image-2` / `gpt-image-2-ext` 接受像素尺寸时，需同时满足：
 
@@ -91,7 +93,7 @@ MOSS 模型要求像素尺寸，且宽高需满足模型文档中的限制。省
 | 410 | 文件已过期或剩余有效期不足 30 分钟 |
 | 503 | 文件存储暂不可用 |
 
-参考图上限随模型不同：`gpt-image-2.5-*` 与 `gpt-image-2.6-*` 最多 16 张，`gpt-image-2` / `gpt-image-2-ext` 最多 15 张。超过上限会在扣费前返回 400。
+参考图上限随模型不同：`gpt-image-2.5-*` 与 `gpt-image-2.6-*` 最多 16 张，`gpt-image-2` / `gpt-image-2-ext` 最多 15 张，`seedream-5-5` 最多 10 张。超过上限会在扣费前返回 400。
 
 服务端把 `file_id` 解析成短期签名 URL 后交给上游，调用方不需要也不会看到签名地址。HEIC/HEIF 参考图暂不支持，请先转换为 JPG/PNG/WEBP。
 
@@ -221,5 +223,6 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | `gpt-image-2.5-sunburst-ext` | 支持，最多 16 张 | 比例 + resolution | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
 | `gpt-image-2.6-flare-ext` | 支持，最多 16 张 | 比例 + resolution + quality/output_format/complexity | [gpt-image-2.6-flare-ext.md](gpt-image-2.6-flare-ext.md) |
 | `gpt-image-2.6-sunburst-ext` | 支持，最多 16 张 | 比例 + resolution + quality/output_format/complexity | [gpt-image-2.6-sunburst-ext.md](gpt-image-2.6-sunburst-ext.md) |
+| `seedream-5-5` | 支持，最多 10 张 | 比例 + resolution（1K/1.5K/2K） | [seedream-5-5.md](seedream-5-5.md) |
 
 模型以管理端实际配置为准。

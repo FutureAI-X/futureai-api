@@ -586,6 +586,8 @@ func TestAPIMartValidateImageRequest(t *testing.T) {
 	ids16, urls16 := fileIDs(16), urls(16)
 	ids17, urls17 := fileIDs(17), urls(17)
 	ids15, urls15 := fileIDs(15), urls(15)
+	ids10, urls10 := fileIDs(10), urls(10)
+	ids11, urls11 := fileIDs(11), urls(11)
 
 	tests := []struct {
 		name    string
@@ -646,6 +648,23 @@ func TestAPIMartValidateImageRequest(t *testing.T) {
 		{"gpt-image-2 像素比例过宽", ImageGenerateRequest{Model: "gpt-image-2", Prompt: "cat", Size: "1552x512", Resolution: "1K"}, true},
 		{"gpt-image-2.5 拒绝像素", ImageGenerateRequest{Model: testAPIMartModel, Prompt: "cat", Size: "1024x1024", Resolution: "1K"}, true},
 
+		// seedream-5-5：10 种比例、10 张参考图、1K/1.5K/2K、只接受比例
+		{"seedream 合法比例", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "16:9", Resolution: "1.5K"}, false},
+		{"seedream 21:9 可用", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "21:9", Resolution: "2K"}, false},
+		{"seedream 2:1 可用", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "2:1", Resolution: "1K"}, false},
+		{"seedream 1:2 可用", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:2", Resolution: "1K"}, false},
+		{"seedream 上限 10 张 image_ids", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "1K", ImageIDs: ids10}, false},
+		{"seedream 上限 10 张 image_urls", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "1K", ImageURLs: urls10}, false},
+		{"seedream 不支持 4K", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "4K"}, true},
+		{"seedream 不支持 5:4", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "5:4", Resolution: "1K"}, true},
+		{"seedream 不支持像素", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1024x1024", Resolution: "1K"}, true},
+		{"seedream 不支持 auto", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "auto", Resolution: "1K"}, true},
+		{"seedream 超限 11 张 image_ids", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "1K", ImageIDs: ids11}, true},
+		{"seedream 超限 11 张 image_urls", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "1K", ImageURLs: urls11}, true},
+		{"seedream 不支持 quality", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "1K", Quality: "high"}, true},
+		{"seedream 不支持 output_format", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "1K", OutputFormat: "png"}, true},
+		{"seedream 不支持 complexity", ImageGenerateRequest{Model: "seedream-5-5", Prompt: "cat", Size: "1:1", Resolution: "1K", Complexity: "low"}, true},
+
 		// 通用
 		{"空 prompt", ImageGenerateRequest{Model: testAPIMartModel, Size: "1:1", Resolution: "1k"}, true},
 		{"未登记模型被拒绝", ImageGenerateRequest{Model: "gpt-image-2.5-unknown-ext", Prompt: "cat", Size: "1:1", Resolution: "1k"}, true},
@@ -694,6 +713,7 @@ func TestBuildRequestFormatsResolutionPerModel(t *testing.T) {
 		{"gpt-image-2.5-sunburst-ext", "4K", "4K"},
 		{"gpt-image-2.6-flare-ext", "2K", "2k"},
 		{"gpt-image-2.6-sunburst-ext", "4k", "4k"},
+		{"seedream-5-5", "1.5k", "1.5K"},
 	}
 
 	for _, tc := range cases {
@@ -742,5 +762,99 @@ func TestAPIMartSpecsArePerModel(t *testing.T) {
 	two := []string{"file_a", "file_b"}
 	if err := a.ValidateImageRequest(ImageGenerateRequest{Model: custom, Prompt: "cat", Size: "1:1", Resolution: "1K", ImageIDs: two}); err == nil {
 		t.Error("自定义模型的参考图上限未生效")
+	}
+}
+
+// Seedream 5.5 的请求体只包含平台开放的字段：固定 watermark=false，
+// 不发送 background / output_format / quality / complexity 等未开放字段。
+func TestBuildRequestMapsSeedream55Fields(t *testing.T) {
+	body := buildRequest(ImageGenerateRequest{
+		Model:         "seedream-5-5",
+		Prompt:        "a cat",
+		Size:          "16:9",
+		Resolution:    "2K",
+		ImageURLs:     []string{"https://a.png"},
+		VendorModelID: "seedream-5-5",
+	})
+
+	wants := map[string]interface{}{
+		"model":      "seedream-5-5",
+		"prompt":     "a cat",
+		"size":       "16:9",
+		"resolution": "2K",
+		"n":          1,
+		"watermark":  false,
+	}
+	for k, want := range wants {
+		if got := body[k]; got != want {
+			t.Errorf("%s = %v, want %v（请求体=%v）", k, got, want, body)
+		}
+	}
+
+	urls, ok := body["image_urls"].([]string)
+	if !ok || len(urls) != 1 {
+		t.Errorf("image_urls = %#v, want 一个 URL", body["image_urls"])
+	}
+	if len(body) != len(wants)+1 {
+		t.Errorf("请求体字段数 = %d, want %d（存在未预期字段）: %v", len(body), len(wants)+1, body)
+	}
+	for _, key := range []string{
+		"background", "output_format", "quality", "complexity",
+		"optimize_prompt_options", "layer_decomposition", "version",
+	} {
+		if _, ok := body[key]; ok {
+			t.Errorf("模型未开放字段 %s 不应写入请求体: %v", key, body)
+		}
+	}
+}
+
+func TestAPIMartFailureReasonMapping(t *testing.T) {
+	cases := []struct {
+		reason string
+		want   string
+	}{
+		{"content_policy_violation", FailureReasonContentPolicy},
+		{"invalid_parameter", FailureReasonInvalidParameter},
+		{"unsupported_option", FailureReasonInvalidParameter},
+		{"invalid_media", FailureReasonInvalidMedia},
+		{"media_unreachable", FailureReasonMediaUnreachable},
+		{"generation_timeout", FailureReasonGenerationTimeout},
+		{"service_unavailable", FailureReasonServiceUnavailable},
+		{"delivery_failed", FailureReasonUpstreamFailed},
+		{"internal_error", FailureReasonUpstreamFailed},
+		{"unknown_error", FailureReasonUpstreamFailed},
+		{" CONTENT_POLICY_VIOLATION ", FailureReasonContentPolicy},
+		{"unexpected_reason", ""},
+		{"", ""},
+	}
+
+	for _, tc := range cases {
+		if got := apimartFailureReason(tc.reason); got != tc.want {
+			t.Errorf("apimartFailureReason(%q) = %q, want %q", tc.reason, got, tc.want)
+		}
+	}
+}
+
+// 失败任务的原因要同时提供「归一化原因」和「上游原文」：
+// 前者用于生成用户文案，后者落库供排查。
+func TestTaskQueryCarriesFailureReasonAndRawError(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":200,"data":{"id":"task_s","status":"failed","error":{"message":"blocked by policy","reason":"content_policy_violation"}}}`)
+	})
+	defer cleanup()
+
+	resp := a.TaskQuery(context.Background(), `{"taskId":"task_s"}`)
+
+	if resp.Status != "failed" {
+		t.Fatalf("status = %q, want failed", resp.Status)
+	}
+	if resp.FailureReason != FailureReasonContentPolicy {
+		t.Errorf("FailureReason = %q, want %q", resp.FailureReason, FailureReasonContentPolicy)
+	}
+	if resp.Data["error"] != "blocked by policy" {
+		t.Errorf("Data.error = %v, want blocked by policy", resp.Data["error"])
+	}
+	if resp.Data["reason"] != "content_policy_violation" {
+		t.Errorf("Data.reason = %v, want content_policy_violation", resp.Data["reason"])
 	}
 }

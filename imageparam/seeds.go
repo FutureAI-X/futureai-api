@@ -12,8 +12,8 @@ var seedFS embed.FS
 //
 // 只映射当前在售的模型名；gpt-image-2 与 gpt-image-2-ext 共用一份规格，
 // gpt-image-2.5 与 gpt-image-2.6 的 flare/sunburst 分别共用一份，
-// MOSS 的 base/sft 共用一份。调用方应只在 param_spec 为空时写入，
-// 避免覆盖管理端的修改。
+// MOSS 的 base/sft 共用一份，seedream-5-5 单独一份。调用方应只在
+// param_spec 为空时写入，避免覆盖管理端的修改。
 func SeedSpecs() map[string]string {
 	files := map[string]string{
 		"gpt-image-2":                 "seeds/gpt-image-2.json",
@@ -24,6 +24,7 @@ func SeedSpecs() map[string]string {
 		"gpt-image-2.6-sunburst-ext":  "seeds/gpt-image-2.6-ext.json",
 		"moss-image-base-1.0":         "seeds/moss-image.json",
 		"moss-image-sft-1.0":          "seeds/moss-image.json",
+		"seedream-5-5":                "seeds/seedream-5-5.json",
 	}
 
 	out := make(map[string]string, len(files))

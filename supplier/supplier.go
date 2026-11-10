@@ -231,11 +231,31 @@ type TaskQueryResponse struct {
 	// 控制器据此决定是否把完成结果转存到对象存储——视频只返回上游 URL，不转存。
 	Kind string `json:"kind,omitempty"`
 
+	// FailureReason 供应商归一化后的失败原因（取值见 FailureReason* 常量）。
+	// 仅在 failed / cancelled 时有意义；控制器据此生成用户可见的错误码与文案。
+	// 空串表示供应商未提供或原因无法识别，控制器回退到默认文案。
+	FailureReason string `json:"failure_reason,omitempty"`
+
 	// RequireResultFetch 为 true 时，控制器必须成功下载结果资产才能判为完成。
 	// MOSS 的结果 URL 可能指向不存在的资产（文档中的 404）；此时任务应失败
 	// 并退款，而不是带着一个取不到图的地址进入 completed。
 	RequireResultFetch bool `json:"require_result_fetch,omitempty"`
 }
+
+// 供应商归一化的任务失败原因。
+//
+// 供应商负责把各自上游的错误码翻译成这些值，控制器负责把它们翻译成
+// 用户可见的错误码与文案。这样用户文案与供应商解耦：新增供应商时只映射原因，
+// 不需要改控制器；也不会把上游原文（英文、内部术语）直接透给调用方。
+const (
+	FailureReasonContentPolicy      = "content_policy_violation"
+	FailureReasonInvalidParameter   = "invalid_parameter"
+	FailureReasonInvalidMedia       = "invalid_media"
+	FailureReasonMediaUnreachable   = "media_unreachable"
+	FailureReasonGenerationTimeout  = "generation_timeout"
+	FailureReasonServiceUnavailable = "service_unavailable"
+	FailureReasonUpstreamFailed     = "upstream_failed"
+)
 
 // 结果类型
 const (

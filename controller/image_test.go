@@ -571,3 +571,32 @@ func TestCreditParamValuesEqual(t *testing.T) {
 		})
 	}
 }
+
+// 供应商失败原因到用户文案的映射：未知原因必须返回 ok=false，
+// 由调用方回退到默认文案，不能把空原因当成已映射。
+func TestFailureReasonText(t *testing.T) {
+	cases := []struct {
+		reason  string
+		code    string
+		message string
+		ok      bool
+	}{
+		{supplier.FailureReasonContentPolicy, "content_policy_violation", "内容审核未通过，请修改提示词或参考图后重试，积分已退回", true},
+		{supplier.FailureReasonInvalidParameter, "invalid_parameter", "生成参数不受支持，请调整后重试，积分已退回", true},
+		{supplier.FailureReasonInvalidMedia, "invalid_media", "参考图格式或内容无效，积分已退回", true},
+		{supplier.FailureReasonMediaUnreachable, "media_unreachable", "参考图无法访问，请重新上传后重试，积分已退回", true},
+		{supplier.FailureReasonGenerationTimeout, "generation_timeout", "生成超时，积分已退回，请稍后重试", true},
+		{supplier.FailureReasonServiceUnavailable, "service_unavailable", "上游服务繁忙，积分已退回，请稍后重试", true},
+		{supplier.FailureReasonUpstreamFailed, "upstream_failed", "上游生成失败，积分已退回", true},
+		{"", "", "", false},
+		{"unknown_reason", "", "", false},
+	}
+
+	for _, tc := range cases {
+		code, message, ok := failureReasonText(tc.reason)
+		if code != tc.code || message != tc.message || ok != tc.ok {
+			t.Errorf("failureReasonText(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tc.reason, code, message, ok, tc.code, tc.message, tc.ok)
+		}
+	}
+}

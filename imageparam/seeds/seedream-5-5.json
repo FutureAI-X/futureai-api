@@ -1,0 +1,44 @@
+{
+  "params": [
+    {
+      "key": "prompt",
+      "widget": "textarea",
+      "label": "提示词",
+      "group": "basic",
+      "required": true,
+      "min_length": 1,
+      "max_length": 2000,
+      "count_mode": "codepoint"
+    },
+    {
+      "key": "size",
+      "widget": "ratio_size",
+      "label": "尺寸",
+      "group": "basic",
+      "default": "16:9",
+      "ratios": [
+        "1:1", "4:3", "3:4", "16:9", "9:16",
+        "3:2", "2:3", "21:9", "2:1", "1:2"
+      ]
+    },
+    {
+      "key": "resolution",
+      "widget": "segmented",
+      "label": "分辨率",
+      "group": "basic",
+      "default": "1K",
+      "options": ["1K", "1.5K", "2K"]
+    },
+    {
+      "key": "images",
+      "path": "image_ids",
+      "widget": "ref_images",
+      "label": "参考图",
+      "group": "reference",
+      "max_count": 10,
+      "max_file_bytes": 31457280,
+      "max_total_bytes": 314572800,
+      "allowed_mime_types": ["image/png", "image/jpeg", "image/webp"]
+    }
+  ]
+}

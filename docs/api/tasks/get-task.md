@@ -100,8 +100,14 @@ MOSS 是同步接口，由平台后台提交，任务在生成期间显示为 `p
 | `query_timeout` | 结果确认超时 |
 | `cancelled` | 上游取消 |
 | `upstream_failed` | 上游返回失败 |
+| `content_policy_violation` | 内容审核未通过 |
+| `invalid_parameter` | 上游参数不受支持 |
+| `invalid_media` | 参考图格式或内容无效 |
+| `media_unreachable` | 参考图无法访问 |
+| `generation_timeout` | 生成超时 |
+| `service_unavailable` | 上游服务繁忙 |
 | `result_unavailable` | 上游报告完成但没有可用结果 |
 | `internal_error` | 平台内部错误 |
 | `task_failed` | 历史任务缺少具体原因时的兜底值 |
 
-`failed` 表示积分已退还，调用方不需要再轮询。
+`error.message` 是面向用户的说明，已经包含“积分已退回”等处理结果；调用方可以直接展示，不建议再拼接上游原文。`failed` 表示积分已退还，调用方不需要再轮询。

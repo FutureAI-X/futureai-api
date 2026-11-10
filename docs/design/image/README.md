@@ -107,6 +107,8 @@
 
 供应商可以通过 `TaskQueryResponse.RequireResultFetch` 声明「必须成功下载结果才能判为完成」。当前 MOSS 使用该标记：成图下载失败会重试两次，仍失败则进入 `failed` 并退款。普通供应商保持尽力而为，存储失败不影响任务完成，`data.url_vendor` 仍可用于取图。
 
+供应商还可以通过 `TaskQueryResponse.FailureReason` 声明归一化后的失败原因（取值见 `supplier.FailureReason*` 常量）。控制器把它翻译成用户可见的 `error.code` 与 `error.message`；未知原因回退到默认文案。上游原始错误不直接透传，只写入 `query_response` 供排查。
+
 ## 9 模型设计文档
 
 各模型的设计文档如下。
@@ -120,6 +122,7 @@
 | `gpt-image-2.5-sunburst-ext` | [gpt-image-2.5-sunburst-ext.md](gpt-image-2.5-sunburst-ext.md) |
 | `gpt-image-2.6-flare-ext` | [gpt-image-2.6-flare-ext.md](gpt-image-2.6-flare-ext.md) |
 | `gpt-image-2.6-sunburst-ext` | [gpt-image-2.6-sunburst-ext.md](gpt-image-2.6-sunburst-ext.md) |
+| `seedream-5-5` | [seedream-5-5.md](seedream-5-5.md) |
 
 参数规格的字段定义、校验顺序与两端复用方式见 [params/README.md](params/README.md)。该目录描述的是待实现的设计，当前代码仍使用供应商适配层与客户端常量中的硬编码约束。
 
@@ -128,7 +131,7 @@
 新增一个图像模型时，按以下清单补齐：
 
 1. 在 `supplier` 包实现 `Supplier` 接口。同步接口还需要实现 `ImageCapabilityProvider` 和 `ImageRequestValidator`。
-2. APIMart 模型要在 `supplier/apimart.go` 的 `apimartImageModels` 登记模型规格（size 集合、分辨率档位及大小写、参考图上限、version，以及 quality / output_format / complexity 等可选参数的允许值），未登记会在扣费前被拒绝。
+2. APIMart 模型要在 `supplier/apimart.go` 的 `apimartImageModels` 登记模型规格（size 集合、分辨率档位及大小写、参考图上限、version、模型级固定字段如 watermark，以及 quality / output_format / complexity 等可选参数的允许值），未登记会在扣费前被拒绝。
 3. 在 `NewSupplier` 与 `NewTaskQuerier` 注册供应商名称。
 4. 同步接口使用 `common.LongOutboundHTTPClient`，避免通用客户端的响应头超时。
 5. 在控制器侧确认参考图、计费与状态映射符合预期。

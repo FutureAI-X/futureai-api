@@ -10,6 +10,7 @@
 | `gpt-image-2.5-flare-ext` / `sunburst-ext` | 比例 10 种 | 1K/2K/4K | 16 | 2000 |
 | `moss-image-base-1.0` / `sft-1.0` | 像素；`step=16`，单边 256–2048，总像素 ≤ 2,097,152 | 无 | 0 | 4000 |
 | `gpt-image-2.6-flare-ext` / `sunburst-ext` | 比例 10 种（auto 暂不开放） | 1K/2K/4K | 16 | 2000 |
+| `seedream-5-5` | 比例 10 种（不支持像素、档位写法与 auto） | 1K/1.5K/2K | 10（单张 30MB，合计 300MB） | 2000 |
 | `gpt-image-2.6` 正式版（按 token 计费） | 比例 10 种（auto 暂不开放） | 1K | 16 | 32000 |
 
 2.6 的 GIF/SVG 参数与 `auto` 尺寸在后续阶段补入；本期种子只包含静态图片。
@@ -21,6 +22,7 @@
 - [gpt-image-2.5-sunburst-ext.md](../gpt-image-2.5-sunburst-ext.md)
 - [gpt-image-2.6-flare-ext.md](../gpt-image-2.6-flare-ext.md)
 - [gpt-image-2.6-sunburst-ext.md](../gpt-image-2.6-sunburst-ext.md)
+- [seedream-5-5.md](../seedream-5-5.md)
 - [moss-image-base-1.0.md](../moss-image-base-1.0.md)
 - [moss-image-sft-1.0.md](../moss-image-sft-1.0.md)
 

@@ -64,6 +64,10 @@ type apimartImageModelSpec struct {
 	qualityLevels    []string
 	outputFormats    []string
 	complexityLevels []string
+
+	// watermark 非 nil 时固定写入请求体的 watermark 字段。
+	// 用于把模型强制为无水印/有水印；平台没有对应的公开字段，调用方无法覆盖。
+	watermark *bool
 }
 
 // apimartImageSizes15 gpt-image-2 / gpt-image-2-ext 支持的画幅比例。
@@ -83,6 +87,21 @@ var apimartImageSizes10 = []string{
 // apimartImageResolutions 平台对外统一的分辨率档位。
 // 发往上游时由模型的 lowercaseResolution 决定是否转小写。
 var apimartImageResolutions = []string{"1K", "2K", "4K"}
+
+// apimartSeedreamSizes Seedream 5.5 支持的画幅比例。
+// 上游还接受「1K / 1.5K / 2K」档位、auto 和精确像素写法，平台只开放比例：
+// 档位写法会让上游自行决定比例，输出尺寸不可预期；像素写法的档位计费无法
+// 在扣费前准确计算（上游按实际像素分档）。
+var apimartSeedreamSizes = []string{
+	"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "2:1", "1:2",
+}
+
+// apimartSeedreamResolutions Seedream 5.5 支持的分辨率档位（不支持 4K）。
+// 上游要求大写，因此 lowercaseResolution 保持为 false。
+var apimartSeedreamResolutions = []string{"1K", "1.5K", "2K"}
+
+// apimartWatermarkOff 固定无水印，供模型规格引用。
+var apimartWatermarkOff = false
 
 // gpt-image-2.6-ext 开放的可选参数取值。
 // quality 不影响单张价格；output_format 本期只开放静态图片格式（SVG/GIF 暂不接入）；
@@ -183,6 +202,19 @@ var apimartImageModels = map[string]apimartImageModelSpec{
 		qualityLevels:       apimartImage26QualityLevels,
 		outputFormats:       apimartImage26OutputFormats,
 		complexityLevels:    apimartImage26ComplexityLevels,
+	},
+
+	// Seedream 5.5：只开放比例尺寸；最多 10 张参考图；固定无水印。
+	// background / output_format / optimize_prompt_options 等字段一律不传，
+	// 由上游使用默认值；layer_decomposition（图层拆分）不在平台开放。
+	"seedream-5-5": {
+		sizeRule: SizeRule{
+			AllowRatio: true,
+			Ratios:     apimartSeedreamSizes,
+		},
+		resolutions:        apimartSeedreamResolutions,
+		maxReferenceImages: 10,
+		watermark:          &apimartWatermarkOff,
 	},
 }
 
@@ -344,6 +376,12 @@ func buildRequest(req ImageGenerateRequest) map[string]interface{} {
 		}
 	}
 
+	// 模型级固定字段。watermark 目前只有 Seedream 声明，显式下发 false，
+	// 不依赖上游默认值。
+	if spec.watermark != nil {
+		body["watermark"] = *spec.watermark
+	}
+
 	applyImageVersion(body, req.Model)
 
 	return body
@@ -468,6 +506,7 @@ type apimartTaskQueryData struct {
 	Status   string            `json:"status"`
 	Progress int               `json:"progress"`
 	Result   apimartTaskResult `json:"result"`
+	Error    *apimartTaskError `json:"error"`
 }
 
 type apimartTaskResult struct {
@@ -477,6 +516,33 @@ type apimartTaskResult struct {
 type apimartTaskImage struct {
 	URL     []string `json:"url"`
 	B64JSON string   `json:"b64_json"`
+}
+
+// apimartTaskError 失败任务的上游错误。reason 是机器可读的分类，
+// message 是上游原文；平台只把 reason 映射成用户文案，原文仅用于日志。
+type apimartTaskError struct {
+	Message string `json:"message"`
+	Reason  string `json:"reason"`
+}
+
+// apimartFailureReasons APIMart 失败原因 → 平台统一失败原因。
+// 未列出的原因（包括空串）返回空串，由控制器回退到默认文案。
+var apimartFailureReasons = map[string]string{
+	"content_policy_violation": FailureReasonContentPolicy,
+	"invalid_parameter":        FailureReasonInvalidParameter,
+	"unsupported_option":       FailureReasonInvalidParameter,
+	"invalid_media":            FailureReasonInvalidMedia,
+	"media_unreachable":        FailureReasonMediaUnreachable,
+	"generation_timeout":       FailureReasonGenerationTimeout,
+	"service_unavailable":      FailureReasonServiceUnavailable,
+	"delivery_failed":          FailureReasonUpstreamFailed,
+	"internal_error":           FailureReasonUpstreamFailed,
+	"unknown_error":            FailureReasonUpstreamFailed,
+}
+
+// apimartFailureReason 归一化上游失败原因。
+func apimartFailureReason(raw string) string {
+	return apimartFailureReasons[strings.ToLower(strings.TrimSpace(raw))]
 }
 
 // apimartTaskIDPattern 供应商任务 ID 的合法形态。
@@ -578,7 +644,17 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 
 	// 终态：failed / cancelled
 	if taskData.Status == "failed" || taskData.Status == "cancelled" {
-		return TaskQueryResponse{TaskID: taskID, Status: taskData.Status}
+		result := TaskQueryResponse{TaskID: taskID, Status: taskData.Status}
+		if taskData.Error != nil {
+			result.FailureReason = apimartFailureReason(taskData.Error.Reason)
+			// 原始错误只放进 Data，由控制器落到 query_response 供排查；
+			// 不直接透传给调用方，避免把上游英文原文当成用户文案。
+			result.Data = map[string]interface{}{
+				"error":  taskData.Error.Message,
+				"reason": taskData.Error.Reason,
+			}
+		}
+		return result
 	}
 
 	// 中间态：pending / processing

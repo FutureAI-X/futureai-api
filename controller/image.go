@@ -1397,6 +1397,32 @@ func persistCompletedImage(taskID string, userID int, data map[string]interface{
 	return file.FileID, nil
 }
 
+// failureReasonText 把供应商归一化的失败原因转成用户可见的错误码与文案。
+// ok 为 false 时调用方使用默认文案。
+//
+// 文案集中在控制器而不是供应商：供应商只负责把上游错误分类，平台统一措辞，
+// 避免不同供应商把英文原文或内部术语直接透给调用方。
+func failureReasonText(reason string) (code, message string, ok bool) {
+	switch reason {
+	case supplier.FailureReasonContentPolicy:
+		return "content_policy_violation", "内容审核未通过，请修改提示词或参考图后重试，积分已退回", true
+	case supplier.FailureReasonInvalidParameter:
+		return "invalid_parameter", "生成参数不受支持，请调整后重试，积分已退回", true
+	case supplier.FailureReasonInvalidMedia:
+		return "invalid_media", "参考图格式或内容无效，积分已退回", true
+	case supplier.FailureReasonMediaUnreachable:
+		return "media_unreachable", "参考图无法访问，请重新上传后重试，积分已退回", true
+	case supplier.FailureReasonGenerationTimeout:
+		return "generation_timeout", "生成超时，积分已退回，请稍后重试", true
+	case supplier.FailureReasonServiceUnavailable:
+		return "service_unavailable", "上游服务繁忙，积分已退回，请稍后重试", true
+	case supplier.FailureReasonUpstreamFailed:
+		return "upstream_failed", "上游生成失败，积分已退回", true
+	default:
+		return "", "", false
+	}
+}
+
 // pollOnce 查询一次上游任务状态并据此推进状态机。
 func pollOnce(task model.Task, creds *vendorCredentialCache) {
 	s, ok := creds.supplierFor(task.VendorID)
@@ -1478,8 +1504,12 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 		errorCode := "upstream_failed"
 		errorMessage := "任务失败，积分已退回"
 		if result.Status == upstreamStatusCancelled {
+			// 取消是调用方主动终止，优先于上游给出的具体原因
 			errorCode = "cancelled"
 			errorMessage = "任务已取消，积分已退回"
+		} else if code, message, ok := failureReasonText(result.FailureReason); ok {
+			errorCode = code
+			errorMessage = message
 		}
 		if err := model.FailTask(task.TaskID, errorCode, errorMessage, queryResp); err != nil {
 			common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)

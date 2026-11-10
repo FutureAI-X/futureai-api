@@ -128,6 +128,83 @@ func TestGptImage26DefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestSeedream55DefaultsAndValidation(t *testing.T) {
+	spec := mustSpec(t, "seedream-5-5")
+	values := Values{"prompt": "a cat"}
+	if err := spec.ApplyDefaults(values); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	if values["size"] != "16:9" || values["resolution"] != "1K" {
+		t.Fatalf("默认值不符: size=%v resolution=%v", values["size"], values["resolution"])
+	}
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate defaults: %v", err)
+	}
+
+	// 1.5K 是本模型独有档位。
+	values["resolution"] = "1.5K"
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate 1.5K: %v", err)
+	}
+
+	// 不支持 4K。
+	values["resolution"] = "4K"
+	err := spec.Validate(values)
+	if err == nil || err.Code != "PARAM_UNSUPPORTED_VALUE" {
+		t.Fatalf("Validate 4K = %v, want PARAM_UNSUPPORTED_VALUE", err)
+	}
+
+	// 比例集合与上游一致：2:1 / 1:2 可用，5:4 不可用。
+	values["resolution"] = "1K"
+	values["size"] = "2:1"
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate 2:1: %v", err)
+	}
+	values["size"] = "5:4"
+	err = spec.Validate(values)
+	if err == nil || err.Code != "PARAM_SIZE_RATIO_UNSUPPORTED" {
+		t.Fatalf("Validate 5:4 = %v, want PARAM_SIZE_RATIO_UNSUPPORTED", err)
+	}
+
+	// 只开放比例，不接受像素尺寸。
+	values["size"] = "1024x1024"
+	err = spec.Validate(values)
+	if err == nil || err.Code != "PARAM_SIZE_MODE_UNSUPPORTED" {
+		t.Fatalf("Validate pixel = %v, want PARAM_SIZE_MODE_UNSUPPORTED", err)
+	}
+
+	// 参考图上限 10 张。
+	ids := make([]string, 11)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("file_%d", i)
+	}
+	values = Values{"prompt": "a cat", "image_ids": ids}
+	if err := spec.ApplyDefaults(values); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	err = spec.Validate(values)
+	if err == nil || err.Code != "PARAM_REF_TOO_MANY" {
+		t.Fatalf("Validate 11 refs = %v, want PARAM_REF_TOO_MANY", err)
+	}
+}
+
+func TestSeedream55RefFileLimits(t *testing.T) {
+	spec := mustSpec(t, "seedream-5-5")
+	rule := spec.RefImagesRule()
+	if rule == nil {
+		t.Fatal("缺少 ref_images 规则")
+	}
+	if rule.MaxCount != 10 {
+		t.Errorf("MaxCount = %d, want 10", rule.MaxCount)
+	}
+	if rule.MaxFileBytes != int64(30)<<20 {
+		t.Errorf("MaxFileBytes = %d, want %d", rule.MaxFileBytes, int64(30)<<20)
+	}
+	if rule.MaxTotalBytes != int64(300)<<20 {
+		t.Errorf("MaxTotalBytes = %d, want %d", rule.MaxTotalBytes, int64(300)<<20)
+	}
+}
+
 func TestMossPixelSize(t *testing.T) {
 	spec := mustSpec(t, "moss-image-base-1.0")
 	values := Values{"prompt": "a cat", "size": "1440x1440"}
