@@ -50,7 +50,7 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 - `gpt-image-2` / `gpt-image-2-ext`：比例或像素均可；
 - MOSS 模型：只接受像素。
 
-APIMart 模型的可用比例随模型不同，均不支持 `auto`：
+APIMart 模型的可用比例随模型不同；`auto` 是否可用取决于该模型的参数规格是否在 `ratios` 中配置了它：
 
 - `gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext`：`1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`、`5:4`、`4:5`、`21:9`；
 - `gpt-image-2.6-flare-ext` / `gpt-image-2.6-sunburst-ext`：`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`5:4`、`4:5`、`16:9`、`9:16`、`21:9`；

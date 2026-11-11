@@ -72,8 +72,8 @@ type apimartImageModelSpec struct {
 
 // apimartImageSizes15 gpt-image-2 / gpt-image-2-ext 支持的画幅比例。
 //
-// 刻意不开放上游的 auto：比例由上游根据画面内容决定，调用方拿不到确定的
-// 输出尺寸，后续按尺寸做的排版、裁切和计费也会变得不可预测。
+// 是否开放上游的 auto 由该模型的 models.param_spec 决定：规格的 ratios
+// 里写了 auto 就放行，没写就由控制器在扣费前拒绝。这里的列表只约束比例取值。
 var apimartImageSizes15 = []string{
 	"1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5",
 	"16:9", "9:16", "2:1", "1:2", "3:1", "1:3", "21:9", "9:21",
@@ -89,9 +89,9 @@ var apimartImageSizes10 = []string{
 var apimartImageResolutions = []string{"1K", "2K", "4K"}
 
 // apimartSeedreamSizes Seedream 5.5 支持的画幅比例。
-// 上游还接受「1K / 1.5K / 2K」档位、auto 和精确像素写法，平台只开放比例：
-// 档位写法会让上游自行决定比例，输出尺寸不可预期；像素写法的档位计费无法
-// 在扣费前准确计算（上游按实际像素分档）。
+// 上游还接受「1K / 1.5K / 2K」档位、auto 和精确像素写法：
+// 档位写法和像素写法不开放（输出尺寸不可预期、计费无法在扣费前准确计算）；
+// auto 是否开放由该模型的 models.param_spec 决定。
 var apimartSeedreamSizes = []string{
 	"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "2:1", "1:2",
 }

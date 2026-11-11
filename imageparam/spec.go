@@ -71,9 +71,11 @@ type Param struct {
 	Max  *float64 `json:"max,omitempty"`
 	Step *float64 `json:"step,omitempty"`
 
-	Modes  []string    `json:"modes,omitempty"`
-	Ratios []string    `json:"ratios,omitempty"`
-	Pixel  *PixelRule  `json:"pixel,omitempty"`
+	Modes []string `json:"modes,omitempty"`
+	// Ratios 是 ratio_size 允许的尺寸取值：比例，或特殊值 auto。
+	// auto 是否开放完全由规格决定，代码层不按模型硬编码。
+	Ratios []string   `json:"ratios,omitempty"`
+	Pixel  *PixelRule `json:"pixel,omitempty"`
 
 	Presets     []Preset `json:"presets,omitempty"`
 	AllowCustom *bool    `json:"allow_custom,omitempty"`
@@ -182,6 +184,10 @@ var (
 	ratioPattern = regexp.MustCompile(`^([1-9]\d{0,3}):([1-9]\d{0,3})$`)
 	pixelPattern = regexp.MustCompile(`^([1-9]\d{0,3})[xX]([1-9]\d{0,3})$`)
 )
+
+// sizeAuto 是 ratios 中允许出现的特殊取值：输出尺寸由上游按画面内容决定。
+// 它不是比例，不参与 ratioPattern 校验；是否开放完全取决于规格配置。
+const sizeAuto = "auto"
 
 // ParseSpec 解析并执行元校验。raw 为空或 null 时返回 ErrSpecMissing。
 func ParseSpec(raw string) (*Spec, error) {
@@ -439,11 +445,12 @@ func validateRatioSize(p *Param, def string, hasDefault bool) error {
 
 	seen := make(map[string]bool, len(p.Ratios))
 	for _, r := range p.Ratios {
-		if !ratioPattern.MatchString(r) {
+		// auto 是特殊取值，不做比例格式校验；其余取值仍必须是合法比例。
+		if r != sizeAuto && !ratioPattern.MatchString(r) {
 			return fmt.Errorf("比例 %q 格式不合法", r)
 		}
 		if seen[r] {
-			return fmt.Errorf("比例 %q 重复", r)
+			return fmt.Errorf("尺寸取值 %q 重复", r)
 		}
 		seen[r] = true
 	}

@@ -42,7 +42,7 @@
 | 2.6 能力 | 规格表达 | 服务端仍需完成 |
 |---|---|---|
 | `output_format` | `segmented` 或 `select`，合法值由 `options` 表达 | 请求字段、上游映射 |
-| `size=auto` | 暂不开放（后续） | 开放 GIF 前必须补齐 auto 尺寸与结果渲染 |
+| `size=auto` | `ratios` 中的字面量 `auto`，由各模型按需配置 | 已支持；供应商层直接放行，`param_spec` 是唯一开关 |
 | `size` 比例 | `ratio_size` + `ratios` | 无新增，沿用现有适配 |
 | `resolution` | Ext 为 `segmented`（1K/2K/4K）；按 token 计费的 2.6 正式版仅 1K 时可用 `hidden` + `default=1K` | 无新增 |
 | `quality` | `segmented`（6 个选项；更多时用 `select`） | 请求字段、上游映射；不影响计费 |
@@ -59,6 +59,6 @@
 | 多结果（后续） | 本期不声明，正式版接入时另行设计 | 任务结果数组、API 响应、客户端渲染器 |
 | 计费联动 | 规格不承载价格 | 扩展计费条件与倍数 |
 
-本次 2.6 Ext 只接静态图片格式（png/jpeg/webp）；GIF/SVG 与 `auto` 尺寸依赖未完成的结果渲染与 auto 支持，暂不进入规格。`output_format`、`quality`、`complexity` 已按上表接入：三者都是普通 `segmented` 参数，由 `param_spec` 表达合法值，服务端在扣费前校验并映射到上游请求体。
+本次 2.6 Ext 只接静态图片格式（png/jpeg/webp）；GIF/SVG 依赖未完成的结果渲染，暂不进入规格。`auto` 尺寸已按 `ratios` 配置支持，不再依赖结果渲染改造。`output_format`、`quality`、`complexity` 已按上表接入：三者都是普通 `segmented` 参数，由 `param_spec` 表达合法值，服务端在扣费前校验并映射到上游请求体。
 
 两个平台模型名的问题：2.6 Ext 的 `flare` 与 `sunburst` 已拆成两个平台模型名，与 2.5 的命名保持一致。理由是计费条件只支持 `model` 等字段，`version` 不是计费维度，客户端也不需要额外的版本选择器。若选择单模型 + `version` 参数，则计费模块必须支持按 `version` 定价。

@@ -41,7 +41,7 @@
 |---|---|---|---|
 | size | `PARAM_SIZE_FORMAT` | 400 | 既不是比例也不是像素格式 |
 | size | `PARAM_SIZE_MODE_UNSUPPORTED` | 400 | 当前 `modes` 不接受该写法 |
-| size | `PARAM_SIZE_RATIO_UNSUPPORTED` | 400 | 比例不在 `ratios` 内 |
+| size | `PARAM_SIZE_RATIO_UNSUPPORTED` | 400 | 取值（比例或 `auto`）不在 `ratios` 内 |
 | size | `PARAM_SIZE_PIXEL_STEP` | 400 | 宽高不是 `step` 的倍数 |
 | size | `PARAM_SIZE_PIXEL_MIN_SIDE` | 400 | 任意一边小于 `min_side` |
 | size | `PARAM_SIZE_PIXEL_MAX_SIDE` | 400 | 任意一边大于 `max_side` |

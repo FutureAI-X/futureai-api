@@ -68,7 +68,7 @@
 | `max` | number | `number` | 最大值 |
 | `step` | number | `number` | 步长 |
 | `modes` | string[] | `ratio_size` | 服务端接受的尺寸格式，默认 `["ratio"]`；mixed 模型写 `["ratio","pixel"]` |
-| `ratios` | string[] | `ratio_size` | 允许的比例集合 |
+| `ratios` | string[] | `ratio_size` | 允许的尺寸取值：比例，或特殊值 `auto`（由上游决定输出尺寸） |
 | `pixel` | object | `ratio_size`、`pixel_size` | 像素约束，见对应组件 |
 | `presets` | object[] | `pixel_size` | 比例快捷尺寸，见 [pixel-size.md](components/pixel-size.md) |
 | `allow_custom` | boolean | `pixel_size` | 是否允许手动修改像素值，默认 `true` |
@@ -187,4 +187,4 @@
 
 `ratio_size` 的前端只渲染比例按钮；`pixel_size` 的前端复用同款比例按钮，并附宽、高两个数字输入。两者都不在服务端做比例与像素换算。
 
-`auto` 尺寸暂不开放。
+`ratio_size` 的 `ratios` 可以包含字面量 `auto`，表示输出尺寸由上游按画面内容决定。是否开放完全由模型规格配置：配置了就能用，没配置由服务端在扣费前拒绝。前端把 `auto` 和 `1:1` 一起显示在「基础」组，文案为「自动」，提交值仍是 `auto`。供应商层不做「哪些模型支持 auto」的硬编码名单。

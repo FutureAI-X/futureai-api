@@ -42,6 +42,10 @@ func TestSizeRuleValidate(t *testing.T) {
 		{"像素规则未配置时接受任意合法像素", anyPixels, "1232x1232", false},
 		{"两种都接受：比例", both, "1:1", false},
 		{"两种都接受：像素", both, "1024x1024", false},
+		// auto 是 param_spec 决定是否开放的特殊取值，供应商层不做硬编码限制。
+		{"auto 不受比例集合限制", ratioOnly, "auto", false},
+		{"auto 不受像素规则限制", pixelsOnly, "auto", false},
+		{"auto 大小写敏感", ratioOnly, "AUTO", true},
 		{"空 size", both, "  ", true},
 		{"非法格式", both, "16by9", true},
 		{"比例中带空格", ratioOnly, "16 : 9", true},

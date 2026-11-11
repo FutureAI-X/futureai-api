@@ -281,6 +281,74 @@ func TestHasPathUsesRequestPath(t *testing.T) {
 	}
 }
 
+// auto 是 ratios 里允许的特殊取值：配置了就可用，没配置就按普通非法值拒绝。
+func TestAutoSize(t *testing.T) {
+	spec, err := ParseSpec(`{"params":[
+		{"key":"size","widget":"ratio_size","default":"auto","ratios":["1:1","auto"]}
+	]}`)
+	if err != nil {
+		t.Fatalf("ParseSpec: %v", err)
+	}
+
+	values := Values{}
+	if err := spec.ApplyDefaults(values); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	if values["size"] != "auto" {
+		t.Fatalf("size default = %v, want auto", values["size"])
+	}
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate auto: %v", err)
+	}
+
+	values["size"] = "1:1"
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate 1:1: %v", err)
+	}
+
+	values["size"] = "16:9"
+	err = spec.Validate(values)
+	if err == nil || err.Code != "PARAM_SIZE_RATIO_UNSUPPORTED" {
+		t.Fatalf("Validate 16:9 = %v, want PARAM_SIZE_RATIO_UNSUPPORTED", err)
+	}
+}
+
+func TestAutoSizeRequiresConfig(t *testing.T) {
+	spec, err := ParseSpec(`{"params":[
+		{"key":"size","widget":"ratio_size","default":"1:1","ratios":["1:1"]}
+	]}`)
+	if err != nil {
+		t.Fatalf("ParseSpec: %v", err)
+	}
+	err = spec.Validate(Values{"size": "auto"})
+	if err == nil || err.Code != "PARAM_SIZE_RATIO_UNSUPPORTED" {
+		t.Fatalf("Validate unconfigured auto = %v, want PARAM_SIZE_RATIO_UNSUPPORTED", err)
+	}
+}
+
+func TestAutoSizeSpecRules(t *testing.T) {
+	// 只有 auto 也可以：ratios 非空、default 在集合内。
+	if _, err := ParseSpec(`{"params":[
+		{"key":"size","widget":"ratio_size","default":"auto","ratios":["auto"]}
+	]}`); err != nil {
+		t.Fatalf("ParseSpec auto-only: %v", err)
+	}
+
+	// 重复配置明确报错。
+	if _, err := ParseSpec(`{"params":[
+		{"key":"size","widget":"ratio_size","ratios":["auto","auto"]}
+	]}`); err == nil {
+		t.Fatal("ParseSpec 应拒绝重复的 auto")
+	}
+
+	// default=auto 但 ratios 没配置 auto 时规格非法。
+	if _, err := ParseSpec(`{"params":[
+		{"key":"size","widget":"ratio_size","default":"auto","ratios":["1:1"]}
+	]}`); err == nil {
+		t.Fatal("ParseSpec 应拒绝未配置在 ratios 中的 auto 默认值")
+	}
+}
+
 func TestParseSpecRejectsUnsupported(t *testing.T) {
 	cases := []string{
 		`{"params":[{"key":"prompt","widget":"file"}]}`,

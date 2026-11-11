@@ -38,12 +38,20 @@ type SizeRule struct {
 	AllowPixels bool
 
 	// Ratios 允许的比例集合，仅在 AllowRatio 为 true 时生效。
+	// 特殊取值 auto 不受本字段限制：是否开放由 models.param_spec 决定，
+	// 控制器在进入供应商校验前已经按规格拦截。
 	Ratios []string
 
 	// Pixels 像素约束，仅在 AllowPixels 为 true 时生效。
 	// 为 nil 时表示接受任意合法的「宽x高」。
 	Pixels *PixelRule
 }
+
+// sizeAuto 是平台允许的特殊尺寸取值，表示由上游决定输出尺寸。
+//
+// 刻意不在供应商层维护「哪些模型支持 auto」的白名单：auto 的开放与否
+// 由该模型的 param_spec 决定，这里只负责放行合法请求。
+const sizeAuto = "auto"
 
 // sizeRatioPattern 匹配「宽:高」。
 //
@@ -59,6 +67,10 @@ func (r SizeRule) Validate(raw string) error {
 	size := strings.TrimSpace(raw)
 	if size == "" {
 		return fmt.Errorf("size 不能为空")
+	}
+
+	if size == sizeAuto {
+		return nil
 	}
 
 	if sizeRatioPattern.MatchString(size) {

@@ -197,12 +197,19 @@ func validateRatioSizeValue(p *Param, cur any) *Error {
 		return newError("PARAM_TYPE", p.Key, "%s 必须是字符串", displayName(p))
 	}
 	raw = strings.TrimSpace(raw)
+	// auto 不是比例也不是像素，是否可用只看规格里的 ratios 是否配置了它。
+	if raw == sizeAuto {
+		if !contains(p.Ratios, sizeAuto) {
+			return newError("PARAM_SIZE_RATIO_UNSUPPORTED", p.Key, "size 只支持 %s", strings.Join(p.Ratios, "、"))
+		}
+		return nil
+	}
 	if w, h, ok := parseRatio(raw); ok {
 		if !contains(p.Modes, "ratio") {
 			return newError("PARAM_SIZE_MODE_UNSUPPORTED", p.Key, "该模型的 size 只支持像素尺寸")
 		}
 		if !contains(p.Ratios, raw) {
-			return newError("PARAM_SIZE_RATIO_UNSUPPORTED", p.Key, "size 比例只支持 %s", strings.Join(p.Ratios, "、"))
+			return newError("PARAM_SIZE_RATIO_UNSUPPORTED", p.Key, "size 只支持 %s", strings.Join(p.Ratios, "、"))
 		}
 		_ = w
 		_ = h
