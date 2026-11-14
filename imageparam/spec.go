@@ -25,6 +25,8 @@ const (
 	MaxOptions = 100
 	// MaxRatios 比例集合的数量上限。
 	MaxRatios = 50
+	// MaxResolutions pixel_size 的分辨率档位数量上限。
+	MaxResolutions = 10
 	// MaxRefImages 计费侧的参考图张数封顶。
 	MaxRefImages = 100
 	// MaxUploadBytes 上传接口的全局单文件上限（30MB）。
@@ -85,6 +87,11 @@ type Param struct {
 	MaxTotalBytes    int64    `json:"max_total_bytes,omitempty"`
 	AllowedMimeTypes []string `json:"allowed_mime_types,omitempty"`
 
+	// Resolutions 是 pixel_size 的可选分辨率档位。
+	// 它只是客户端的自动填充辅助：根据比例与目标面积算出宽高，
+	// 最终只会把 size 像素值发给后端，不会产生 resolution 请求字段。
+	Resolutions []ResolutionTier `json:"resolutions,omitempty"`
+
 	// 命名校验器当前不支持。
 	Validators []string `json:"validators,omitempty"`
 }
@@ -142,6 +149,15 @@ type AspectRule struct {
 type Preset struct {
 	Ratio  string `json:"ratio"`
 	Pixels string `json:"pixels"`
+}
+
+// ResolutionTier 是 pixel_size 的分辨率快捷档位。
+//
+// Area 是该档位的目标总像素（如 2K = 2048×2048）；客户端用
+// 比例 × Area 算出宽高并填入输入框，用户仍可手动调整。
+type ResolutionTier struct {
+	Value string `json:"value"`
+	Area  int64  `json:"area"`
 }
 
 var (
@@ -250,6 +266,9 @@ func (s *Spec) ValidateSpec() error {
 
 		if !allowedWidgets[p.Widget] {
 			return fmt.Errorf("参数 %s 的 widget %q 暂不支持", p.Key, p.Widget)
+		}
+		if len(p.Resolutions) > 0 && p.Widget != "pixel_size" {
+			return fmt.Errorf("参数 %s: resolutions 只支持 pixel_size 控件", p.Key)
 		}
 		if p.Group == "" {
 			p.Group = "basic"
@@ -475,6 +494,9 @@ func validatePixelSize(p *Param, def string, hasDefault bool) error {
 	if err := validatePixelRule(p.Pixel); err != nil {
 		return err
 	}
+	if err := validateResolutions(p); err != nil {
+		return err
+	}
 
 	seenPixels := make(map[string]bool, len(p.Presets))
 	seenRatios := make(map[string]bool, len(p.Presets))
@@ -521,6 +543,47 @@ func validatePixelSize(p *Param, def string, hasDefault bool) error {
 	if hasDefault {
 		if err := validatePixelValue(p.Pixel, def); err != nil {
 			return fmt.Errorf("default %q: %w", def, err)
+		}
+	}
+	return nil
+}
+
+// validateResolutions 校验 pixel_size 的分辨率档位。
+func validateResolutions(p *Param) error {
+	if len(p.Resolutions) == 0 {
+		return nil
+	}
+	if len(p.Resolutions) > MaxResolutions {
+		return fmt.Errorf("resolutions 不能超过 %d 个", MaxResolutions)
+	}
+	if len(p.Presets) == 0 {
+		return errors.New("配置 resolutions 时 presets 不能为空（需要比例按钮）")
+	}
+
+	seen := make(map[string]bool, len(p.Resolutions))
+	for _, tier := range p.Resolutions {
+		value := strings.TrimSpace(tier.Value)
+		if value == "" {
+			return errors.New("resolutions 的 value 不能为空")
+		}
+		if len([]rune(value)) > 16 {
+			return fmt.Errorf("resolutions 的 value %q 过长", value)
+		}
+		if seen[value] {
+			return fmt.Errorf("resolutions 的 value %q 重复", value)
+		}
+		seen[value] = true
+
+		if tier.Area <= 0 {
+			return fmt.Errorf("resolutions %q 的 area 必须大于 0", value)
+		}
+		if p.Pixel != nil {
+			if p.Pixel.MinPixels > 0 && tier.Area < int64(p.Pixel.MinPixels) {
+				return fmt.Errorf("resolutions %q 的 area 不能小于 %d", value, p.Pixel.MinPixels)
+			}
+			if p.Pixel.MaxPixels > 0 && tier.Area > int64(p.Pixel.MaxPixels) {
+				return fmt.Errorf("resolutions %q 的 area 不能大于 %d", value, p.Pixel.MaxPixels)
+			}
 		}
 	}
 	return nil

@@ -42,13 +42,14 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | 写法 | 示例 | 配合字段 | 当前模型 |
 |---|---|---|---|
 | 比例 | `16:9`、`1:1` | `resolution` | `gpt-image-2.5-*`、`gpt-image-2.6-*`、`gpt-image-2` / `gpt-image-2-ext`、`seedream-5-5` |
-| 像素尺寸 | `1024x1024` | 无 | MOSS 模型、`gpt-image-2` / `gpt-image-2-ext` |
+| 像素尺寸 | `1024x1024` | 无 | MOSS 模型、`gpt-image-2` / `gpt-image-2-ext`、`MiniMax-H3-Image` / `MiniMax-H3-Image-Highspeed` |
 
 - `gpt-image-2.5-flare-ext` / `gpt-image-2.5-sunburst-ext`：只接受比例；
 - `gpt-image-2.6-flare-ext` / `gpt-image-2.6-sunburst-ext`：只接受比例，且新增 `quality` / `output_format` / `complexity`；
 - `seedream-5-5`：只接受比例，不支持像素、`2K` 这类档位写法与 `auto`；
 - `gpt-image-2` / `gpt-image-2-ext`：比例或像素均可；
-- MOSS 模型：只接受像素。
+- MOSS 模型：只接受像素；
+- `MiniMax-H3-Image` / `MiniMax-H3-Image-Highspeed`：只接受像素，`resolution` 不生效。
 
 APIMart 模型的可用比例随模型不同；`auto` 是否可用取决于该模型的参数规格是否在 `ratios` 中配置了它：
 
@@ -182,6 +183,8 @@ MOSS 采用后台提交，提交请求总是先返回 `taskId`。上游失败体
 
 `file_id` 的扩展名跟随实际图片格式。`gpt-image-2.6-*` 的 `output_format` 为 `jpeg` / `webp` 时，`file_id` 分别带 `.jpg` / `.webp` 扩展名，下载时请按实际扩展名保存。
 
+`MiniMax-H3-Image` / `MiniMax-H3-Image-Highspeed` 的成图不转存平台对象存储：`file_id` 为空，`data.url` 直接是上游原始地址，有效期 24 小时；该地址同时也是 `url_vendor`，不会返回 `url_expires_at`。
+
 任务状态与退款规则见 [任务查询](../tasks/get-task.md#2-任务状态)。
 
 ## 7 幂等与请求体限制
@@ -224,5 +227,6 @@ curl -X POST https://futureaiapi.com/v1/images/generations \
 | `gpt-image-2.6-flare-ext` | 支持，最多 16 张 | 比例 + resolution + quality/output_format/complexity | [gpt-image-2.6-flare-ext.md](gpt-image-2.6-flare-ext.md) |
 | `gpt-image-2.6-sunburst-ext` | 支持，最多 16 张 | 比例 + resolution + quality/output_format/complexity | [gpt-image-2.6-sunburst-ext.md](gpt-image-2.6-sunburst-ext.md) |
 | `seedream-5-5` | 支持，最多 10 张 | 比例 + resolution（1K/1.5K/2K） | [seedream-5-5.md](seedream-5-5.md) |
+| `MiniMax-H3-Image` / `MiniMax-H3-Image-Highspeed` | 支持，最多 16 张 | 像素尺寸（不支持 resolution） | [minimax-h3-image.md](minimax-h3-image.md) |
 
 模型以管理端实际配置为准。

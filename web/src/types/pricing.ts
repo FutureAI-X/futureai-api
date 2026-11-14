@@ -18,6 +18,12 @@ export interface CreditRule {
   description?: string
   /** 每张参考图消耗的积分，0 = 不计费 */
   ref_image_credits?: number
+  /** per_token：文本输入每百万 token 的积分 */
+  input_text_credits_per_mtok?: number
+  /** per_token：图片输入每百万 token 的积分 */
+  image_input_credits_per_mtok?: number
+  /** per_token：图片输出每百万 token 的积分 */
+  image_output_credits_per_mtok?: number
   items?: CreditRuleItem[]
 }
 

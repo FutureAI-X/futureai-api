@@ -443,8 +443,9 @@ func AdjustUserCredits(id int, mode string, value float64) error {
 			actual = value
 			newCredits = user.Credits + value
 		case "subtract":
-			// 与原来的 GREATEST(credits - ?, 0) 等价：余额不会被扣成负数
-			actual = math.Min(value, user.Credits)
+			// 可扣基数夹到非负：余额已经是负数时，「减少」不该反而把余额推向 0，
+			// 更不能写出方向相反的日志（那样 sum(credit_logs) 与余额变化会对不上）。
+			actual = math.Min(value, math.Max(user.Credits, 0))
 			newCredits = user.Credits - actual
 		case "override":
 			actual = value - user.Credits

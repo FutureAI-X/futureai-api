@@ -69,11 +69,26 @@ type Task struct {
 	ErrorCode    string `json:"error_code,omitempty" gorm:"size:64;not null;default:''"`
 	ErrorMessage string `json:"error_message,omitempty" gorm:"size:512;not null;default:''"`
 
-	Credits         float64 `json:"credits" gorm:"type:numeric(20,10);default:0"` // 消耗的积分数量
-	CreditsRefunded bool    `json:"credits_refunded" gorm:"default:false"`        // 积分是否已退还
+	Credits         float64 `json:"credits" gorm:"type:numeric(20,10);default:0"` // 当前净扣积分；生成中为预扣，结算后为实扣
+	CreditsRefunded bool    `json:"credits_refunded" gorm:"default:false"`        // 失败任务是否已全额退还
 	VendorResponse  string  `json:"vendor_response" gorm:"type:text"`             // 供应商任务提交响应 JSON
 	QueryResponse   string  `json:"query_response" gorm:"type:text"`              // 供应商任务查询响应 JSON
 	RequestBody     string  `json:"request_body" gorm:"type:text"`                // 调用方原始请求体 JSON（超长会截断），用于问题回溯
+
+	// ── Token 三段计费 ──
+	//
+	// PreauthCredits 是提交时的预扣金额，用来与结算金额对比；
+	// SettledCredits 是按实际 usage 算出的应扣金额；
+	// CreditsSettled 防止对账重试重复结算。
+	// usage_* 三列把上游 usage 归一化落库，便于按模型、按天统计 token 成本。
+	// 这些列对 per_request 模型保持默认值，不影响原有语义。
+	PreauthCredits         float64  `json:"preauth_credits,omitempty" gorm:"type:numeric(20,10);default:0"`
+	SettledCredits         float64  `json:"settled_credits,omitempty" gorm:"type:numeric(20,10);default:0"`
+	CreditsSettled         bool     `json:"credits_settled,omitempty" gorm:"default:false"`
+	UsageTextTokens        int      `json:"usage_text_tokens,omitempty" gorm:"default:0"`
+	UsageImageInputTokens  int      `json:"usage_image_input_tokens,omitempty" gorm:"default:0"`
+	UsageImageOutputTokens int      `json:"usage_image_output_tokens,omitempty" gorm:"default:0"`
+	BillingSnapshot        JSONText `json:"billing_snapshot,omitempty" gorm:"type:jsonb"`
 
 	// FileID 成图在 files 表中的文件 ID。
 	// 转存失败时为空（尽力而为），原始上游 URL 仍保存在 QueryResponse 的 data.url 中。
@@ -157,6 +172,7 @@ func CreateTaskAndDeduct(task *Task, amount float64, remark string) error {
 	}
 	amount = normalized
 	task.Credits = amount
+	task.PreauthCredits = amount
 
 	return DB.Transaction(func(tx *gorm.DB) error {
 		// 先创建任务

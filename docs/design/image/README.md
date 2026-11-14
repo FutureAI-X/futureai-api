@@ -63,6 +63,24 @@
 
 `resolveCredits` 的签名包含 `refImagesSupported` 参数，调用方必须把供应商能力传进来，否则会出现「忽略参考图但仍收费」。
 
+### 5.1 按 token 计费（per_token）
+
+`rule_type=per_token` 的模型改为三段 token 计费，没有固定附加积分：
+
+```text
+本次积分 = 文本输入 token × 文本单价 / 1,000,000
+         + 图片输入 token × 图片输入单价 / 1,000,000
+         + 图片输出 token × 图片输出单价 / 1,000,000
+```
+
+- 提交时按 `TokenUsageEstimator`（供应商实现）或通用估算参数计算预扣，写入 `tasks.preauth_credits`；
+- 完成后按上游实际 `usage` 结算，差额追加 `refund` 或 `deduct`，原预扣日志不改写；
+- 结算补扣允许余额变负，下一次提交会被预扣校验拦住；
+- `tasks.billing_snapshot` 保存提交时的单价与估算，避免中途改价影响在途任务；
+- 参考图成本已包含在图片输入 token 中，`ref_image_credits` 与参数组合在 `per_token` 下忽略。
+
+实现位于 `model/token_billing.go`，H3 是第一个使用该模式的模型。
+
 ## 6 任务状态机
 
 任务只有三个状态。`processing` 覆盖提交、生成和结果确认；失败原因由 `error_code` 表达。
@@ -123,6 +141,7 @@
 | `gpt-image-2.6-flare-ext` | [gpt-image-2.6-flare-ext.md](gpt-image-2.6-flare-ext.md) |
 | `gpt-image-2.6-sunburst-ext` | [gpt-image-2.6-sunburst-ext.md](gpt-image-2.6-sunburst-ext.md) |
 | `seedream-5-5` | [seedream-5-5.md](seedream-5-5.md) |
+| `MiniMax-H3-Image` / `MiniMax-H3-Image-Highspeed` | [minimax-h3-image.md](minimax-h3-image.md) |
 
 参数规格的字段定义、校验顺序与两端复用方式见 [params/README.md](params/README.md)。该目录描述的是待实现的设计，当前代码仍使用供应商适配层与客户端常量中的硬编码约束。
 

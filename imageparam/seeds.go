@@ -25,6 +25,8 @@ func SeedSpecs() map[string]string {
 		"moss-image-base-1.0":         "seeds/moss-image.json",
 		"moss-image-sft-1.0":          "seeds/moss-image.json",
 		"seedream-5-5":                "seeds/seedream-5-5.json",
+		"MiniMax-H3-Image":            "seeds/minimax-h3-image.json",
+		"MiniMax-H3-Image-Highspeed":  "seeds/minimax-h3-image.json",
 	}
 
 	out := make(map[string]string, len(files))

@@ -30,6 +30,7 @@ function ModelCard({
 }) {
   const tags = parseTags(model.tags)
   const creditRule = model.credit_rule
+  const perToken = creditRule?.rule_type === 'per_token'
 
   // 卡片上标「起」，所以这里必须是真实下限：某个参数组合可能比基础积分更便宜，
   // 直接拿 base_credits 加「起」会说谎。items 为空时 Math.min 只有 base 一项。
@@ -115,14 +116,21 @@ function ModelCard({
       {creditRule && (
         <div className='px-4 pb-3 sm:px-5 sm:pb-4'>
           <div className='flex items-center justify-between'>
-            <div className='flex items-baseline gap-1'>
-              <span className='text-xl font-bold tracking-tight sm:text-2xl'>
-                {formatCredits(minCredits)}
-              </span>
-              <span className='text-muted-foreground text-xs'>积分起</span>
-            </div>
+            {perToken ? (
+              <div className='flex items-baseline gap-1'>
+                <span className='text-lg font-bold tracking-tight sm:text-xl'>按 Token</span>
+                <span className='text-muted-foreground text-xs'>三段计费</span>
+              </div>
+            ) : (
+              <div className='flex items-baseline gap-1'>
+                <span className='text-xl font-bold tracking-tight sm:text-2xl'>
+                  {formatCredits(minCredits)}
+                </span>
+                <span className='text-muted-foreground text-xs'>积分起</span>
+              </div>
+            )}
             <span className='bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-[11px] font-medium'>
-              按次计费
+              {perToken ? '按 Token 计费' : '按次计费'}
             </span>
           </div>
         </div>
@@ -558,10 +566,14 @@ export function Pricing() {
                           </td>
                           <td className='px-4 py-3 text-sm'>
                             {model.credit_rule ? (
-                              <>
-                                <span className='font-medium'>{formatCredits(model.credit_rule.base_credits)}</span>
-                                <span className='text-muted-foreground text-xs'> 积分/次</span>
-                              </>
+                              model.credit_rule.rule_type === 'per_token' ? (
+                                <span className='font-medium'>按 Token 计费</span>
+                              ) : (
+                                <>
+                                  <span className='font-medium'>{formatCredits(model.credit_rule.base_credits)}</span>
+                                  <span className='text-muted-foreground text-xs'> 积分/次</span>
+                                </>
+                              )
                             ) : (
                               // 无计费规则的模型也要占位，否则这一列会错位
                               <span className='text-muted-foreground'>-</span>

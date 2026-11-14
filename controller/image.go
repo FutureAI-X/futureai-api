@@ -250,7 +250,7 @@ func ImageGenerate(c *gin.Context) {
 
 	// 10. 计算积分消耗。条件按标准字段匹配：差异化计费规则可能以 model 作为条件，
 	// 此处匹配的是调用方传入的模型名，供应商侧模型 ID 不作为计费条件。
-	credits, err := resolveCredits(m.ID, m.Type, req, endpoint.Path, refsSupported)
+	credits, err := resolveCredits(m.ID, m.Type, req, endpoint.Path, refsSupported, s)
 	if err != nil {
 		common.SysErrorf("[ImageGenerate] 计费规则解析失败: model=%s, err=%v", modelName, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费规则，暂不可用"})
@@ -259,6 +259,24 @@ func ImageGenerate(c *gin.Context) {
 	if credits.RefImageCount > 0 {
 		common.SysLogf("[ImageGenerate] 含参考图附加计费: model=%s, 参考图=%d张, 基础=%.2f, 合计=%.2f",
 			modelName, credits.RefImageCount, credits.Base, credits.Total)
+	}
+
+	// per_token 的计费快照必须随任务落库：结算按快照计算，管理员在生成期间
+	// 改价不应影响已经受理的请求。per_request 任务标记为已结算（不走结算流程）。
+	creditsSettled := credits.RuleType != model.CreditRuleTypePerToken
+	settledCredits := 0.0
+	if creditsSettled {
+		settledCredits = credits.Total
+	}
+	var billingSnapshot model.JSONText
+	if credits.RuleType == model.CreditRuleTypePerToken && credits.Snapshot != nil {
+		snapshot, err := credits.Snapshot.MarshalJSONText()
+		if err != nil {
+			common.SysErrorf("[ImageGenerate] 计费快照序列化失败: model=%s, err=%v", modelName, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "计费配置无效，暂不可用"})
+			return
+		}
+		billingSnapshot = snapshot
 	}
 
 	// 11. 幂等键。带了这个头的请求在窗口内重复提交只会扣一次费：
@@ -325,10 +343,14 @@ func ImageGenerate(c *gin.Context) {
 		VendorID:       vendor.ID,
 		ModelID:        m.ID,
 		EndpointID:     endpoint.ID,
-		Status:         model.StatusProcessing,
-		SubmitDeadline: &submitDeadline,
-		DeadlineAt:     &deadlineAt,
-		Credits:        credits.Total,
+		Status:          model.StatusProcessing,
+		SubmitDeadline:  &submitDeadline,
+		DeadlineAt:      &deadlineAt,
+		Credits:         credits.Total,
+		PreauthCredits:  credits.Total,
+		SettledCredits:  settledCredits,
+		CreditsSettled:  creditsSettled,
+		BillingSnapshot: billingSnapshot,
 		// 落库的是调用方原始请求快照：供应商侧模型 ID 被 json:"-" 排除，
 		// 快照在 file_id 解析前取好，保留调用方原始字段而不是签名 URL。
 		// 默认值由 param_spec 在运行时补齐，不写回快照。
@@ -801,7 +823,7 @@ func isRefImageModel(t model.ModelType) bool {
 
 // creditResolution 一次请求的计费结果
 type creditResolution struct {
-	// Total 本次应扣的总积分
+	// Total 本次应扣的总积分；per_token 下为预扣金额
 	Total float64
 
 	// Base 其中的基础部分（基础积分或命中的参数组合积分），不含参考图
@@ -809,6 +831,12 @@ type creditResolution struct {
 
 	// RefImageCount 计入的参考图张数
 	RefImageCount int
+
+	// RuleType 本次命中的计费类型；per_token 时 Snapshot 非空
+	RuleType model.CreditRuleType
+
+	// Snapshot per_token 的计费快照，结算时按它计算，避免中途改价
+	Snapshot *model.TokenBillingSnapshot
 }
 
 // Remark 生成扣费备注。CreditLog.Remark 是 varchar(255)，超长在 Postgres 上是
@@ -817,6 +845,9 @@ type creditResolution struct {
 // 基础积分按最短形式输出（1 → "1"，0.001 → "0.001"）：位数写死会与实际扣费对不上，
 // 而这是给人看的审计备注，写了多少就该扣了多少。
 func (r creditResolution) Remark() string {
+	if r.RuleType == model.CreditRuleTypePerToken {
+		return "图像生成任务(Token预扣)"
+	}
 	if r.RefImageCount <= 0 {
 		return "图像生成任务"
 	}
@@ -852,10 +883,41 @@ func creditParamValuesEqual(name, actual, expected string) bool {
 
 // 计费口径只认标准字段：调用方发的非标准字段进不了 req，因此既不会命中条件，
 // 也不会被算成参考图——价格永远对得上实际发往上游的请求。
-func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGenerateRequest, endpointPath string, refImagesSupported bool) (creditResolution, error) {
+func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGenerateRequest, endpointPath string, refImagesSupported bool, s supplier.Supplier) (creditResolution, error) {
 	creditRule, err := model.GetCreditRuleByModelID(modelID)
 	if err != nil || creditRule == nil {
 		return creditResolution{}, errors.New("模型未配置计费规则")
+	}
+
+	// per_token：提交时先按保守估算预扣，完成后按实际 usage 结算。
+	// 该模式忽略参数组合与参考图单价：文本/图片输入/图片输出三段 token
+	// 已经覆盖了参考图成本，再按张加价会重复收费。
+	if creditRule.RuleType == model.CreditRuleTypePerToken {
+		cfg, err := model.ParseTokenBillingConfig(creditRule.TokenConfig)
+		if err != nil {
+			return creditResolution{}, err
+		}
+		usage := estimateTokenUsage(s, req, cfg)
+		snapshot := model.TokenBillingSnapshot{
+			InputTextCreditsPerMTok:   creditRule.InputTextCreditsPerMTok,
+			ImageInputCreditsPerMTok:  creditRule.ImageInputCreditsPerMTok,
+			ImageOutputCreditsPerMTok: creditRule.ImageOutputCreditsPerMTok,
+			EstimatedUsage:            usage,
+		}
+		estimated := snapshot.CreditsFor(usage)
+		preauth := model.RoundCredits(estimated * cfg.PreauthMargin)
+		if preauth < estimated {
+			preauth = estimated
+		}
+		snapshot.PreauthCredits = preauth
+		common.SysLogf("[TokenPreauth] modelID=%d size=%q text=%d img_in=%d img_out=%d margin=%.2f estimated=%.3f preauth=%.3f",
+			modelID, req.Size, usage.TextInputTokens, usage.ImageInputTokens, usage.ImageOutputTokens,
+			cfg.PreauthMargin, estimated, preauth)
+		return creditResolution{
+			Total:    preauth,
+			RuleType: model.CreditRuleTypePerToken,
+			Snapshot: &snapshot,
+		}, nil
 	}
 
 	creditsAmount := creditRule.BaseCredits
@@ -915,7 +977,31 @@ func resolveCredits(modelID int, modelType model.ModelType, req supplier.ImageGe
 		Total:         model.RoundCredits(creditsAmount),
 		Base:          model.RoundCredits(baseAmount),
 		RefImageCount: refImageCount,
+		RuleType:      model.CreditRuleTypePerRequest,
 	}, nil
+}
+
+// estimateTokenUsage 生成提交时的预扣估算。
+//
+// 优先用供应商自己的估算实现（它最清楚是否走编辑接口、Prompt 是否增强），
+// 没有实现时回落到规则里的通用估算参数。预扣必须偏保守：实际 usage 高于
+// 估算时结算会把余额补扣，甚至扣成负数。
+func estimateTokenUsage(s supplier.Supplier, req supplier.ImageGenerateRequest, cfg model.TokenBillingConfig) model.BillingUsage {
+	if estimator, ok := s.(supplier.TokenUsageEstimator); ok {
+		u := estimator.EstimateImageUsage(req)
+		return model.BillingUsage{
+			TextInputTokens:   u.TextInputTokens,
+			ImageInputTokens:  u.ImageInputTokens,
+			ImageOutputTokens: u.ImageOutputTokens,
+		}
+	}
+
+	refCount := req.ReferenceCount()
+	return model.BillingUsage{
+		TextInputTokens:   cfg.TextTokensFor(req.Prompt, refCount > 0),
+		ImageInputTokens:  refCount * cfg.RefImageTokens,
+		ImageOutputTokens: cfg.OutputTokensFor(req.Size, req.Resolution),
+	}
 }
 
 // countRefImages 统计参考图张数。
@@ -1458,8 +1544,9 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 		// 图片结果转存是尽力而为：失败只记日志，任务照常完成。
 		// 原始上游 URL 仍在 data.url 中，用户不会因为存储侧故障拿不到图。
 		// 视频结果不转存，直接使用上游的限时下载地址。
+		// SkipResultPersist 的供应商（MiniMax H3）同样直接返回上游 URL。
 		fileID := ""
-		if result.Kind != supplier.ResultKindVideo {
+		if result.Kind != supplier.ResultKindVideo && !result.SkipResultPersist {
 			var persistErr error
 			fileID, persistErr = persistCompletedImage(task.TaskID, task.UserID, result.Data)
 			// 要求结果资产必须可下载的供应商（MOSS）先重试两次：
@@ -1486,10 +1573,47 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 			}
 		}
 
-		if err := model.UpdateTaskCompleted(task.TaskID, string(dataJSON), fileID); err != nil {
-			common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
-		} else {
-			common.SysLogf("[Reconcile] 任务完成: taskID=%s, fileID=%s", task.TaskID, fileID)
+		// per_token 任务按实际 usage 结算；per_request 走原有完成路径。
+		snapshot, hasSnapshot, snapErr := model.ParseTokenBillingSnapshot(task.BillingSnapshot)
+		switch {
+		case snapErr != nil:
+			// 快照损坏属于内部异常：不能按 0 结算（那会把预扣全退），
+			// 保留预扣完成并打人工对账标记。
+			common.SysErrorf("[Reconcile] [MANUAL_RECONCILE] 计费快照无效，保留预扣完成: taskID=%s, err=%v", task.TaskID, snapErr)
+			if err := model.CompleteTaskWithPreauth(task.TaskID, string(dataJSON), fileID); err != nil {
+				common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
+			}
+		case hasSnapshot:
+			if result.Usage == nil || result.Usage.IsZero() {
+				// 上游成功但没有 usage：保留预扣，避免把整笔预扣退掉。
+				common.SysErrorf("[Reconcile] [TOKEN_USAGE_MISSING] 上游未返回 usage，保留预扣完成: taskID=%s", task.TaskID)
+				if err := model.CompleteTaskWithPreauth(task.TaskID, string(dataJSON), fileID); err != nil {
+					common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
+				}
+				break
+			}
+			usage := model.BillingUsage{
+				TextInputTokens:   result.Usage.TextInputTokens,
+				ImageInputTokens:  result.Usage.ImageInputTokens,
+				ImageOutputTokens: result.Usage.ImageOutputTokens,
+			}
+			common.SysLogf("[TokenSettle] taskID=%s estimated(text=%d,in=%d,out=%d) actual(text=%d,in=%d,out=%d) preauth=%.3f actual_credits=%.3f",
+				task.TaskID,
+				snapshot.EstimatedUsage.TextInputTokens, snapshot.EstimatedUsage.ImageInputTokens, snapshot.EstimatedUsage.ImageOutputTokens,
+				usage.TextInputTokens, usage.ImageInputTokens, usage.ImageOutputTokens,
+				snapshot.PreauthCredits, snapshot.CreditsFor(usage))
+			if err := model.CompleteTaskWithTokenSettlement(task.TaskID, string(dataJSON), fileID, usage, snapshot); err != nil {
+				common.SysErrorf("[Reconcile] Token 结算失败，下轮重试: taskID=%s, err=%v", task.TaskID, err)
+			} else {
+				common.SysLogf("[Reconcile] 任务完成并按实际 token 结算: taskID=%s, fileID=%s, credits=%.3f",
+					task.TaskID, fileID, snapshot.CreditsFor(usage))
+			}
+		default:
+			if err := model.UpdateTaskCompleted(task.TaskID, string(dataJSON), fileID); err != nil {
+				common.SysErrorf("[Reconcile] 更新任务状态失败: taskID=%s, err=%v", task.TaskID, err)
+			} else {
+				common.SysLogf("[Reconcile] 任务完成: taskID=%s, fileID=%s", task.TaskID, fileID)
+			}
 		}
 
 	case upstreamStatusFailed, upstreamStatusCancelled:

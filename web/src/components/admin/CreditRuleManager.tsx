@@ -21,11 +21,25 @@ import { CreditAmountInput } from './CreditAmountInput'
 
 const RULE_TYPE_OPTIONS = [
   { value: 'per_request', label: '按次计费' },
+  { value: 'per_token', label: '按 Token 计费' },
 ]
 
 // 可参与参数组合计费的标准请求字段，与后端 supplier.CreditParamNames() 保持一致。
 // 之外的名字永远匹配不上（计费只认标准字段），后端保存时也会拒绝。
 const CREDIT_PARAM_NAMES = ['model', 'prompt', 'size', 'resolution']
+
+// 后端 model.DefaultTokenBillingConfig 的默认值，供管理端一键填入。
+// H3 的供应商适配器会自己估算 token，这里通常只需要保留默认值；
+// 想调预扣保守程度时，改 preauth_margin 即可。
+const DEFAULT_TOKEN_CONFIG = {
+  output_pixels_per_token: 1024,
+  resolution_pixels: { '1K': 1048576, '2K': 4194304, '4K': 16777216 },
+  text_chars_per_token: 1,
+  text_token_overhead: 200,
+  text_enhancement_multiplier: 3,
+  ref_image_tokens: 6000,
+  preauth_margin: 1.2,
+}
 
 // 表单项接口（credits 用字符串处理输入）
 interface FormCreditCondition {
@@ -56,6 +70,11 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
   const [formBaseCredits, setFormBaseCredits] = useState('')
   const [formDesc, setFormDesc] = useState('')
   const [formRefImageCredits, setFormRefImageCredits] = useState('')
+  // per_token 三段单价与预扣估算参数（JSON 文本）
+  const [formInputTextCredits, setFormInputTextCredits] = useState('')
+  const [formImageInputCredits, setFormImageInputCredits] = useState('')
+  const [formImageOutputCredits, setFormImageOutputCredits] = useState('')
+  const [formTokenConfig, setFormTokenConfig] = useState('')
   const [formItems, setFormItems] = useState<FormCreditItem[]>([])
   const [formError, setFormError] = useState('')
   const [formSaving, setFormSaving] = useState(false)
@@ -69,6 +88,10 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
     setFormBaseCredits('')
     setFormDesc('')
     setFormRefImageCredits('')
+    setFormInputTextCredits('')
+    setFormImageInputCredits('')
+    setFormImageOutputCredits('')
+    setFormTokenConfig('')
     setFormItems([])
   }, [])
 
@@ -83,6 +106,12 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
         setFormDesc(res.data.description || '')
         // 老规则没有这个字段，用 ?? 兜底避免 formatCredits(undefined) 崩溃
         setFormRefImageCredits(formatCredits(res.data.ref_image_credits ?? 0))
+        setFormInputTextCredits(formatCredits(res.data.input_text_credits_per_mtok ?? 0))
+        setFormImageInputCredits(formatCredits(res.data.image_input_credits_per_mtok ?? 0))
+        setFormImageOutputCredits(formatCredits(res.data.image_output_credits_per_mtok ?? 0))
+        setFormTokenConfig(res.data.token_config
+          ? JSON.stringify(res.data.token_config, null, 2)
+          : '')
         // 将后端数据转换为表单格式
         setFormItems((res.data.items || []).map(item => ({
           credits: formatCredits(item.credits),
@@ -107,11 +136,11 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
 
   // 有「填了但位数不对」的输入时禁用保存，与调整对话框一致：不等点击再报错。
   // 空值不算（基础积分必填、参考图积分留空表示不计费，两者都在提交时统一判断）。
-  const hasMalformedInput = hasMalformedCreditInput([
-    formBaseCredits,
-    formRefImageCredits,
-    ...formItems.map((i) => i.credits),
-  ])
+  const hasMalformedInput = hasMalformedCreditInput(
+    formRuleType === 'per_token'
+      ? [formInputTextCredits, formImageInputCredits, formImageOutputCredits]
+      : [formBaseCredits, formRefImageCredits, ...formItems.map((i) => i.credits)],
+  )
 
   // 添加一个参数组合映射项（默认带一个空条件）
   const addItem = () => {
@@ -160,58 +189,112 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
   }
 
   const handleSave = async () => {
-    const baseCredits = parseFloat(formBaseCredits)
-    if (formBaseCredits.trim() === '' || isNaN(baseCredits) || baseCredits < 0) {
-      setFormError('基础积分必须为 0 或正数')
-      return
-    }
+    const perToken = formRuleType === 'per_token'
 
-    if (!validCreditInput(formBaseCredits)) {
-      setFormError(`基础积分最多支持${CREDIT_DECIMALS}位小数`)
-      return
-    }
-
-    // 参考图积分允许为 0（表示不计费），空值按 0 处理
-    const refImageCredits = formRefImageCredits.trim() === '' ? 0 : parseFloat(formRefImageCredits)
-    if (isNaN(refImageCredits) || refImageCredits < 0) {
-      setFormError('每张参考图积分不能为负数')
-      return
-    }
-    if (!validCreditInput(formRefImageCredits.trim() === '' ? '0' : formRefImageCredits)) {
-      setFormError(`每张参考图积分最多支持${CREDIT_DECIMALS}位小数`)
-      return
-    }
-
-    // 验证参数组合映射
-    for (let i = 0; i < formItems.length; i++) {
-      const item = formItems[i]
-      const credits = parseFloat(item.credits)
-      if (isNaN(credits) || credits <= 0) {
-        setFormError(`第 ${i + 1} 项的积分必须大于 0`)
+    // per_token 只按 token 计费，基础积分字段在界面上不展示，提交时固定为 0。
+    let baseCredits = 0
+    if (!perToken) {
+      baseCredits = parseFloat(formBaseCredits)
+      if (formBaseCredits.trim() === '' || isNaN(baseCredits) || baseCredits < 0) {
+        setFormError('基础积分必须为 0 或正数')
         return
       }
-      if (!validCreditInput(item.credits)) {
-        setFormError(`第 ${i + 1} 项的积分最多支持${CREDIT_DECIMALS}位小数`)
+      if (!validCreditInput(formBaseCredits)) {
+        setFormError(`基础积分最多支持${CREDIT_DECIMALS}位小数`)
         return
       }
-      if (item.conditions.length === 0) {
-        setFormError(`第 ${i + 1} 项至少需要 1 个参数条件`)
-        return
+    }
+
+    let refImageCredits = 0
+    let inputTextCredits = 0
+    let imageInputCredits = 0
+    let imageOutputCredits = 0
+    let tokenConfig: Record<string, unknown> | undefined
+    let itemsPayload: Array<{ credits: number; conditions: Array<{ param_path: string; param_value: string }> }> | undefined
+
+    const parsePrice = (raw: string, label: string): number | null => {
+      const text = raw.trim() === '' ? '0' : raw.trim()
+      if (!validCreditInput(text)) {
+        setFormError(`${label}最多支持${CREDIT_DECIMALS}位小数`)
+        return null
       }
-      for (let j = 0; j < item.conditions.length; j++) {
-        const paramPath = item.conditions[j].param_path.trim()
-        if (!paramPath || !item.conditions[j].param_value.trim()) {
-          setFormError(`第 ${i + 1} 项的第 ${j + 1} 个条件参数路径和参数值不能为空`)
+      const value = parseFloat(text)
+      if (isNaN(value) || value < 0) {
+        setFormError(`${label}必须为 0 或正数`)
+        return null
+      }
+      return value
+    }
+
+    if (perToken) {
+      const textPrice = parsePrice(formInputTextCredits, '文本输入单价')
+      if (textPrice === null) return
+      const imageInPrice = parsePrice(formImageInputCredits, '图片输入单价')
+      if (imageInPrice === null) return
+      const imageOutPrice = parsePrice(formImageOutputCredits, '图片输出单价')
+      if (imageOutPrice === null) return
+      inputTextCredits = textPrice
+      imageInputCredits = imageInPrice
+      imageOutputCredits = imageOutPrice
+
+      if (formTokenConfig.trim()) {
+        try {
+          tokenConfig = JSON.parse(formTokenConfig) as Record<string, unknown>
+        } catch {
+          setFormError('Token 估算参数必须是合法 JSON')
           return
         }
-        // 提前拦一道，省一次往返；后端也会校验（前端可绕过）
-        if (!CREDIT_PARAM_NAMES.includes(paramPath)) {
-          setFormError(
-            `第 ${i + 1} 项的第 ${j + 1} 个条件的参数路径「${paramPath}」不是标准请求字段，可选：${CREDIT_PARAM_NAMES.join('、')}`
-          )
+      }
+    } else {
+      // 参考图积分允许为 0（表示不计费），空值按 0 处理
+      refImageCredits = formRefImageCredits.trim() === '' ? 0 : parseFloat(formRefImageCredits)
+      if (isNaN(refImageCredits) || refImageCredits < 0) {
+        setFormError('每张参考图积分不能为负数')
+        return
+      }
+      if (!validCreditInput(formRefImageCredits.trim() === '' ? '0' : formRefImageCredits)) {
+        setFormError(`每张参考图积分最多支持${CREDIT_DECIMALS}位小数`)
+        return
+      }
+
+      // 验证参数组合映射
+      for (let i = 0; i < formItems.length; i++) {
+        const item = formItems[i]
+        const credits = parseFloat(item.credits)
+        if (isNaN(credits) || credits <= 0) {
+          setFormError(`第 ${i + 1} 项的积分必须大于 0`)
           return
         }
+        if (!validCreditInput(item.credits)) {
+          setFormError(`第 ${i + 1} 项的积分最多支持${CREDIT_DECIMALS}位小数`)
+          return
+        }
+        if (item.conditions.length === 0) {
+          setFormError(`第 ${i + 1} 项至少需要 1 个参数条件`)
+          return
+        }
+        for (let j = 0; j < item.conditions.length; j++) {
+          const paramPath = item.conditions[j].param_path.trim()
+          if (!paramPath || !item.conditions[j].param_value.trim()) {
+            setFormError(`第 ${i + 1} 项的第 ${j + 1} 个条件参数路径和参数值不能为空`)
+            return
+          }
+          // 提前拦一道，省一次往返；后端也会校验（前端可绕过）
+          if (!CREDIT_PARAM_NAMES.includes(paramPath)) {
+            setFormError(
+              `第 ${i + 1} 项的第 ${j + 1} 个条件的参数路径「${paramPath}」不是标准请求字段，可选：${CREDIT_PARAM_NAMES.join('、')}`
+            )
+            return
+          }
+        }
       }
+      itemsPayload = formItems.length > 0 ? formItems.map(item => ({
+        credits: parseFloat(item.credits),
+        conditions: item.conditions.map(c => ({
+          param_path: c.param_path.trim(),
+          param_value: c.param_value.trim(),
+        })),
+      })) : undefined
     }
 
     setFormSaving(true)
@@ -219,16 +302,18 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
     try {
       const res = await saveCreditRule(modelId, {
         rule_type: formRuleType,
-        base_credits: parseFloat(formBaseCredits),
+        base_credits: baseCredits,
         description: formDesc || undefined,
-        ref_image_credits: refImageCredits,
-        items: formItems.length > 0 ? formItems.map(item => ({
-          credits: parseFloat(item.credits),
-          conditions: item.conditions.map(c => ({
-            param_path: c.param_path.trim(),
-            param_value: c.param_value.trim(),
-          })),
-        })) : undefined,
+        ...(perToken ? {
+          input_text_credits_per_mtok: inputTextCredits,
+          image_input_credits_per_mtok: imageInputCredits,
+          image_output_credits_per_mtok: imageOutputCredits,
+          token_config: tokenConfig ?? {},
+          ref_image_credits: 0,
+        } : {
+          ref_image_credits: refImageCredits,
+          items: itemsPayload,
+        }),
       })
       if (!res.success) {
         setFormError(res.message || '保存失败')
@@ -302,22 +387,28 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                         <option key={t.value} value={t.value}>{t.label}</option>
                       ))}
                     </select>
-                    <p className='text-muted-foreground text-xs'>目前仅支持按次计费</p>
+                    <p className='text-muted-foreground text-xs'>
+                      {formRuleType === 'per_token'
+                        ? '先按估算预扣，完成后按上游实际 token 多退少补'
+                        : '每次请求按固定积分扣除'}
+                    </p>
                   </div>
 
-                  <div className='space-y-2'>
-                    <label className='text-sm font-medium'>基础积分</label>
-                    <div className='flex items-start gap-2'>
-                      <CreditAmountInput
-                        value={formBaseCredits}
-                        onChange={setFormBaseCredits}
-                        placeholder='例如: 10'
-                        className='flex-1'
-                      />
-                      <span className='text-muted-foreground pt-2 text-sm whitespace-nowrap'>积分/次</span>
+                  {formRuleType !== 'per_token' && (
+                    <div className='space-y-2'>
+                      <label className='text-sm font-medium'>基础积分</label>
+                      <div className='flex items-start gap-2'>
+                        <CreditAmountInput
+                          value={formBaseCredits}
+                          onChange={setFormBaseCredits}
+                          placeholder='例如: 10'
+                          className='flex-1'
+                        />
+                        <span className='text-muted-foreground pt-2 text-sm whitespace-nowrap'>积分/次</span>
+                      </div>
+                      <p className='text-muted-foreground text-xs'>每次 API 调用扣除的基础积分数量</p>
                     </div>
-                    <p className='text-muted-foreground text-xs'>每次 API 调用扣除的基础积分数量</p>
-                  </div>
+                  )}
                 </div>
 
                 <div className='mt-5 space-y-2'>
@@ -332,6 +423,100 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                 </div>
               </div>
 
+              {/* Token 三段单价 */}
+              {formRuleType === 'per_token' && (
+                <div className='rounded-lg border border-border/60 p-5'>
+                  <div className='mb-4 flex items-center gap-2'>
+                    <Coins className='size-4 text-muted-foreground' />
+                    <h3 className='text-sm font-medium'>Token 三段单价</h3>
+                  </div>
+                  <p className='text-muted-foreground mb-4 text-xs'>
+                    单位为「积分 / 百万 token」。提交时按估算预扣，任务完成后按上游返回的实际
+                    usage 结算，多退少补；参考图成本已包含在图片输入 token 中。
+                  </p>
+
+                  <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
+                    <div className='space-y-2'>
+                      <label className='text-sm font-medium'>文本输入</label>
+                      <div className='flex items-start gap-2'>
+                        <CreditAmountInput
+                          value={formInputTextCredits}
+                          onChange={setFormInputTextCredits}
+                          placeholder='0'
+                          className='flex-1'
+                        />
+                        <span className='text-muted-foreground pt-2 text-xs whitespace-nowrap'>积分/百万 tokens</span>
+                      </div>
+                    </div>
+                    <div className='space-y-2'>
+                      <label className='text-sm font-medium'>图片输入</label>
+                      <div className='flex items-start gap-2'>
+                        <CreditAmountInput
+                          value={formImageInputCredits}
+                          onChange={setFormImageInputCredits}
+                          placeholder='0'
+                          className='flex-1'
+                        />
+                        <span className='text-muted-foreground pt-2 text-xs whitespace-nowrap'>积分/百万 tokens</span>
+                      </div>
+                    </div>
+                    <div className='space-y-2'>
+                      <label className='text-sm font-medium'>图片输出</label>
+                      <div className='flex items-start gap-2'>
+                        <CreditAmountInput
+                          value={formImageOutputCredits}
+                          onChange={setFormImageOutputCredits}
+                          placeholder='0'
+                          className='flex-1'
+                        />
+                        <span className='text-muted-foreground pt-2 text-xs whitespace-nowrap'>积分/百万 tokens</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className='mt-5 space-y-2'>
+                    <div className='flex items-center justify-between gap-3'>
+                      <label className='text-sm font-medium'>
+                        预扣估算参数 <span className='text-muted-foreground font-normal'>（JSON，可选）</span>
+                      </label>
+                      <button
+                        type='button'
+                        onClick={() => setFormTokenConfig(JSON.stringify(DEFAULT_TOKEN_CONFIG, null, 2))}
+                        className='text-primary hover:bg-primary/10 inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-medium transition-colors'
+                      >
+                        填入默认值
+                      </button>
+                    </div>
+                    <textarea
+                      value={formTokenConfig}
+                      onChange={(e) => setFormTokenConfig(e.target.value)}
+                      rows={7}
+                      placeholder='留空即使用默认值，通常不需要填写'
+                      className='border-border/60 bg-background focus-visible:ring-ring flex w-full rounded-lg border px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:outline-none'
+                    />
+                    <div className='text-muted-foreground bg-muted/40 space-y-2 rounded-md px-3 py-2 text-xs leading-relaxed'>
+                      <p>
+                        <strong className='text-foreground font-medium'>留空即可。</strong>
+                        MiniMax-H3-Image 的 token 由供应商适配器自行估算，这里通常不需要填写；
+                        对 H3 只有 <code>preauth_margin</code> 会生效，想调整预扣保守程度时填{' '}
+                        <code>{'{"preauth_margin": 1.2}'}</code> 即可。
+                      </p>
+                      <ul className='list-disc space-y-0.5 pl-5'>
+                        <li><code>output_pixels_per_token</code>：多少像素折算 1 个输出 token，默认 1024。</li>
+                        <li><code>resolution_pixels</code>：比例尺寸时各分辨率档位的目标面积；像素尺寸模型不需要。</li>
+                        <li><code>text_chars_per_token</code>：文本字符到 token 的粗略系数，默认 1。</li>
+                        <li><code>text_token_overhead</code>：每次请求固定文本 token 开销，默认 200。</li>
+                        <li><code>text_enhancement_multiplier</code>：开启 Prompt 增强时的放大系数，默认 3。</li>
+                        <li><code>ref_image_tokens</code>：每张参考图的保守 token 估算，默认 6000。</li>
+                        <li><code>preauth_margin</code>：预扣安全系数，必须不小于 1，默认 1.2。</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {formRuleType !== 'per_token' && (
+                <>
               {/* 参数组合积分映射 */}
               <div className='rounded-lg border border-border/60 p-5'>
                 <div className='mb-4 flex items-center justify-between'>
@@ -472,6 +657,8 @@ export function CreditRuleManager({ open, onOpenChange, modelId, modelName }: Cr
                   </p>
                 </div>
               </div>
+                </>
+              )}
 
               {/* 错误提示 */}
               {formError && (

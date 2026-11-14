@@ -42,8 +42,17 @@ function floorCredits(value: number): number {
   const scale = 10 ** CREDIT_DECIMALS
   const scaled = Math.round(value * scale)
   const rounded = scaled / scale
-  if (rounded - value <= Math.abs(value) * NOISE_RATIO) return rounded
-  return (scaled - 1) / scale
+  const noise = Math.abs(value) * NOISE_RATIO
+
+  // 正数向下取，保证「显示出来的每个数都花得起」。
+  if (value >= 0) {
+    if (rounded - value <= noise) return rounded
+    return (scaled - 1) / scale
+  }
+
+  // 负数向 0 截断：欠款显示不能比实际更多。
+  if (rounded - value >= -noise) return rounded
+  return (scaled + 1) / scale
 }
 
 /**
@@ -57,7 +66,11 @@ export function formatCredits(value: number): string {
 
   const floor = floorCredits(value)
   if (floor === 0) {
-    return value === 0 ? creditFormatter.format(0) : `<${MIN_VISIBLE.toFixed(CREDIT_DECIMALS)}`
+    if (value === 0) return creditFormatter.format(0)
+    // 正数极小值显示 <0.001；负数极小值显示 >-0.001（更接近 0，不能反着说）。
+    return value > 0
+      ? `<${MIN_VISIBLE.toFixed(CREDIT_DECIMALS)}`
+      : `>-${MIN_VISIBLE.toFixed(CREDIT_DECIMALS)}`
   }
   return creditFormatter.format(floor)
 }

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -54,6 +55,41 @@ func deductCreditsTx(tx *gorm.DB, userID int, taskID string, amount float64, rem
 	}
 
 	// 记录积分日志
+	log := CreditLog{
+		UserID:  userID,
+		TaskID:  taskID,
+		Credits: amount,
+		Type:    CreditLogTypeDeduct,
+		Remark:  remark,
+	}
+	return tx.Create(&log).Error
+}
+
+// deductCreditsAllowNegativeTx 在给定事务中扣除积分，允许余额变负。
+//
+// 只允许 token 结算路径调用：上游成本已经发生，差额必须如实记账。
+// 普通请求的预扣仍然走 deductCreditsTx，负余额用户会被 402 拦住。
+func deductCreditsAllowNegativeTx(tx *gorm.DB, userID int, taskID string, amount float64, remark string) error {
+	amount, err := NormalizeDeductAmount(amount)
+	if err != nil {
+		return err
+	}
+	if amount == 0 {
+		return nil
+	}
+
+	result := tx.Model(&User{}).Where("id = ?", userID).
+		Updates(map[string]interface{}{
+			"credits":      gorm.Expr("credits - ?", amount),
+			"used_credits": gorm.Expr("used_credits + ?", amount),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("用户不存在")
+	}
+
 	log := CreditLog{
 		UserID:  userID,
 		TaskID:  taskID,

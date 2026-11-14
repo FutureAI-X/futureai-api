@@ -1,0 +1,63 @@
+{
+  "params": [
+    {
+      "key": "prompt",
+      "widget": "textarea",
+      "label": "提示词",
+      "group": "basic",
+      "required": true,
+      "min_length": 1,
+      "max_length": 4000,
+      "count_mode": "codepoint"
+    },
+    {
+      "key": "size",
+      "widget": "pixel_size",
+      "label": "尺寸",
+      "group": "basic",
+      "required": true,
+      "pixel": {
+        "min_pixels": 655360,
+        "max_pixels": 20000000,
+        "aspect": { "min": "1:3", "max": "3:1" }
+      },
+      "presets": [
+        { "ratio": "16:9", "pixels": "1360x765" },
+        { "ratio": "9:16", "pixels": "765x1360" },
+        { "ratio": "1:1", "pixels": "1024x1024" },
+        { "ratio": "4:3", "pixels": "1184x888" },
+        { "ratio": "3:4", "pixels": "888x1184" },
+        { "ratio": "3:2", "pixels": "1248x832" },
+        { "ratio": "2:3", "pixels": "832x1248" },
+        { "ratio": "5:4", "pixels": "1140x912" },
+        { "ratio": "4:5", "pixels": "912x1140" },
+        { "ratio": "21:9", "pixels": "1568x672" }
+      ],
+      "resolutions": [
+        { "value": "1K", "area": 1048576 },
+        { "value": "2K", "area": 4194304 },
+        { "value": "4K", "area": 16777216 }
+      ],
+      "allow_custom": true
+    },
+    {
+      "key": "output_format",
+      "widget": "segmented",
+      "label": "输出格式",
+      "group": "advanced",
+      "default": "jpeg",
+      "options": ["png", "jpeg", "webp"]
+    },
+    {
+      "key": "images",
+      "path": "image_ids",
+      "widget": "ref_images",
+      "label": "参考图",
+      "group": "reference",
+      "max_count": 16,
+      "max_file_bytes": 31457280,
+      "max_total_bytes": 314572800,
+      "allowed_mime_types": ["image/png", "image/jpeg", "image/webp"]
+    }
+  ]
+}

@@ -52,6 +52,26 @@ const (
 	DefaultSize       = "16:9"
 )
 
+// ReferenceCount 返回本次请求实际生效的参考图张数（去重后）。
+//
+// 与控制器「image_ids 非空时只认它，否则看 image_urls」的规则一致。
+// 计费与预扣估算都必须在 file_id 解析成签名 URL 之前调用，因此这里不能
+// 只看 ImageURLs——正常客户端走的正是 image_ids。
+func (r ImageGenerateRequest) ReferenceCount() int {
+	list := r.ImageURLs
+	if len(r.ImageIDs) > 0 {
+		list = r.ImageIDs
+	}
+	seen := make(map[string]struct{}, len(list))
+	for _, item := range list {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			seen[item] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
 // ApplyDefaults 补齐调用方省略的标准字段，并把分辨率统一成大写。
 //
 // 必须在计费之前调用。计费条件匹配的是补齐后的值，若拖到供应商侧再补，
@@ -207,6 +227,22 @@ const (
 	FailureUnknown = "unknown"
 )
 
+// TokenUsage 归一化后的 token 用量，供 per_token 结算使用。
+//
+// 只有支持按 token 计费的供应商会填充；per_request 供应商保持 nil。
+type TokenUsage struct {
+	TextInputTokens   int `json:"text_input_tokens"`
+	ImageInputTokens  int `json:"image_input_tokens"`
+	ImageOutputTokens int `json:"image_output_tokens"`
+	TotalTokens       int `json:"total_tokens,omitempty"`
+}
+
+// IsZero 判断是否没有任何 token 用量。上游成功但 usage 缺失时用它兜底：
+// 不能把缺失当成 0 去结算，否则会把整笔预扣退给用户。
+func (u TokenUsage) IsZero() bool {
+	return u.TextInputTokens == 0 && u.ImageInputTokens == 0 && u.ImageOutputTokens == 0
+}
+
 // ImageGenerateResponse 图像生成规范化响应（所有供应商统一返回）
 // 成功时 Data 为供应商返回的业务数据（不同供应商内容可能不同）
 // 失败时 Data 为 nil，且 FailureKind 说明失败性质
@@ -216,6 +252,18 @@ type ImageGenerateResponse struct {
 
 	// FailureKind 仅 Code == "fail" 时有意义，取值见 FailureRejected / FailureUnknown
 	FailureKind string `json:"failure_kind,omitempty"`
+
+	// Usage 为上游返回的 token 用量；per_token 结算依赖它。
+	// 成功但缺失 usage 时保持 nil，控制器会保留预扣并告警。
+	Usage *TokenUsage `json:"usage,omitempty"`
+}
+
+// TokenUsageEstimator 由支持 per_token 计费的供应商实现，用于提交时的预扣估算。
+//
+// 预扣必须偏保守：上游返回的 usage 可能明显高于按 prompt 长度估算的值
+// （图片编辑的 Prompt 增强就是典型例子）。实现方应给出偏上限的估算。
+type TokenUsageEstimator interface {
+	EstimateImageUsage(req ImageGenerateRequest) TokenUsage
 }
 
 // TaskQueryResponse 任务查询规范化响应（所有供应商统一返回）
@@ -240,6 +288,14 @@ type TaskQueryResponse struct {
 	// MOSS 的结果 URL 可能指向不存在的资产（文档中的 404）；此时任务应失败
 	// 并退款，而不是带着一个取不到图的地址进入 completed。
 	RequireResultFetch bool `json:"require_result_fetch,omitempty"`
+
+	// SkipResultPersist 为 true 时，控制器不下载、不转存结果资产，
+	// 直接把上游 URL 作为最终结果返回。适用于上游提供长期有效地址、
+	// 且不需要占用平台对象存储的供应商（当前为 MiniMax-H3-Image）。
+	SkipResultPersist bool `json:"skip_result_persist,omitempty"`
+
+	// Usage 为上游返回的 token 用量；per_token 结算依赖它。
+	Usage *TokenUsage `json:"usage,omitempty"`
 }
 
 // 供应商归一化的任务失败原因。
@@ -334,6 +390,8 @@ func NewSupplier(vendorName string, cfg Config) Supplier {
 		return newAPIMart(cfg)
 	case "moss":
 		return newMoss(cfg)
+	case "minimax":
+		return newMinimax(cfg)
 	default:
 		return nil
 	}
@@ -359,6 +417,8 @@ func NewTaskQuerier(vendorName string, cfg Config) TaskQuerier {
 		return newMetaso(cfg)
 	case "moss":
 		return newMoss(cfg)
+	case "minimax":
+		return newMinimax(cfg)
 	default:
 		return nil
 	}

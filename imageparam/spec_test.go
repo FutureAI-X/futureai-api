@@ -233,6 +233,65 @@ func TestMossPixelSize(t *testing.T) {
 	}
 }
 
+func TestMinimaxH3PixelSpec(t *testing.T) {
+	spec := mustSpec(t, "MiniMax-H3-Image")
+
+	if spec.HasKey("resolution") {
+		t.Fatal("H3 不应包含 resolution：尺寸只通过像素 size 提交")
+	}
+	if spec.RefImagesRule() == nil {
+		t.Fatal("H3 应包含参考图规则（编辑接口）")
+	}
+	if spec.RefImagesRule().MaxCount != 16 {
+		t.Errorf("参考图上限 = %d, want 16", spec.RefImagesRule().MaxCount)
+	}
+
+	sizeParam := spec.Params[0]
+	for _, p := range spec.Params {
+		if p.Key == "size" {
+			sizeParam = p
+			break
+		}
+	}
+	if len(sizeParam.Resolutions) != 3 {
+		t.Fatalf("resolutions = %d, want 3", len(sizeParam.Resolutions))
+	}
+	if sizeParam.Resolutions[0].Value != "1K" || sizeParam.Resolutions[0].Area != 1048576 {
+		t.Errorf("第一档 = %#v", sizeParam.Resolutions[0])
+	}
+	if sizeParam.Resolutions[2].Value != "4K" || sizeParam.Resolutions[2].Area != 16777216 {
+		t.Errorf("第三档 = %#v", sizeParam.Resolutions[2])
+	}
+
+	values := Values{"prompt": "a cat", "size": "2720x1536"}
+	if err := spec.ApplyDefaults(values); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	if err := spec.Validate(values); err != nil {
+		t.Fatalf("Validate 2720x1536: %v", err)
+	}
+
+	values["size"] = "16:9"
+	if err := spec.Validate(values); err == nil || err.Code != "PARAM_SIZE_FORMAT" {
+		t.Fatalf("Validate 比例 = %v, want PARAM_SIZE_FORMAT", err)
+	}
+
+	values["size"] = "800x800"
+	if err := spec.Validate(values); err == nil || err.Code != "PARAM_SIZE_PIXEL_MIN_PIXELS" {
+		t.Fatalf("Validate 800x800 = %v, want PARAM_SIZE_PIXEL_MIN_PIXELS", err)
+	}
+
+	values["size"] = "4000x1000"
+	if err := spec.Validate(values); err == nil || err.Code != "PARAM_SIZE_PIXEL_ASPECT" {
+		t.Fatalf("Validate 4000x1000 = %v, want PARAM_SIZE_PIXEL_ASPECT", err)
+	}
+
+	values["size"] = ""
+	if err := spec.ApplyDefaults(values); err == nil || err.Code != "PARAM_REQUIRED" {
+		t.Fatalf("ApplyDefaults 空 size = %v, want PARAM_REQUIRED", err)
+	}
+}
+
 func TestRefImageCount(t *testing.T) {
 	spec := mustSpec(t, "gpt-image-2")
 	ids := make([]string, 16)

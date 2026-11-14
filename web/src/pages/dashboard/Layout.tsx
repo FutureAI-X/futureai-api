@@ -28,9 +28,9 @@ export function DashboardLayout() {
         items: [
           { title: '个人资料', href: '/dashboard/profile', icon: User },
           { title: '积分', href: '/dashboard/wallet', icon: Coins },
-          { title: '积分日志', href: '/dashboard/credit-logs', icon: History },
           { title: 'API Keys', href: '/dashboard/api-keys', icon: Key },
           { title: '任务日志', href: '/dashboard/task-logs', icon: FileText },
+          { title: '积分日志', href: '/dashboard/credit-logs', icon: History },
         ],
       },
     ]
@@ -55,8 +55,8 @@ export function DashboardLayout() {
       nav.push({
         group: '运维',
         items: [
-          { title: '积分日志', href: '/dashboard/admin/credit-logs', icon: History },
           { title: '任务日志', href: '/dashboard/admin/task-logs', icon: FileText },
+          { title: '积分日志', href: '/dashboard/admin/credit-logs', icon: History },
         ],
       })
     }

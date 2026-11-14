@@ -61,14 +61,20 @@ export function CreditDialog({
 
   // 位数与后端对齐：格式错误的输入由 CreditAmountInput 即时标红，
   // 这里只是提交闸门。覆盖模式允许填 0（表示清零），添加/减少必须为正。
-  const canConfirm = validCreditInput(amount) && (mode === 'override' || amountValue > 0)
+  // 负余额时「减少」没有可扣的基数：后端不会改变余额，这里直接禁用。
+  const subtractBlocked = currentCredits < 0
+  const canConfirm = validCreditInput(amount)
+    && (mode === 'override' || amountValue > 0)
+    && !(mode === 'subtract' && subtractBlocked)
 
   const getPreview = () => {
     switch (mode) {
       case 'add':
         return `当前积分: ${formatCredits(currentCredits)}  + ${formatCredits(amountValue)} = ${formatCredits(currentCredits + amountValue)}`
       case 'subtract':
-        return `当前积分: ${formatCredits(currentCredits)}  - ${formatCredits(amountValue)} = ${formatCredits(Math.max(0, currentCredits - amountValue))}`
+        return subtractBlocked
+          ? `当前积分: ${formatCredits(currentCredits)}（负余额，无需再减少）`
+          : `当前积分: ${formatCredits(currentCredits)}  - ${formatCredits(amountValue)} = ${formatCredits(Math.max(0, currentCredits - amountValue))}`
       case 'override':
         return `当前积分: ${formatCredits(currentCredits)} → ${formatCredits(amountValue)}`
     }
@@ -105,21 +111,26 @@ export function CreditDialog({
         <div className='mt-4 space-y-2'>
           <label className='text-sm font-medium'>调整模式</label>
           <div className='flex gap-2'>
-            {MODES.map((m) => (
-              <button
-                key={m.key}
-                type='button'
-                onClick={() => { setMode(m.key); setAmount('') }}
-                className={cn(
-                  'inline-flex h-8 items-center justify-center rounded-lg border px-3 text-sm font-medium transition-colors',
-                  mode === m.key
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'border-border/60 hover:bg-muted'
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
+            {MODES.map((m) => {
+              const disabled = m.key === 'subtract' && subtractBlocked
+              return (
+                <button
+                  key={m.key}
+                  type='button'
+                  onClick={() => { setMode(m.key); setAmount('') }}
+                  disabled={disabled}
+                  className={cn(
+                    'inline-flex h-8 items-center justify-center rounded-lg border px-3 text-sm font-medium transition-colors',
+                    disabled && 'cursor-not-allowed opacity-50',
+                    mode === m.key
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'border-border/60 hover:bg-muted'
+                  )}
+                >
+                  {m.label}
+                </button>
+              )
+            })}
           </div>
         </div>
 

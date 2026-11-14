@@ -149,6 +149,14 @@ export interface CreditRule {
   status: number
   /** 每张参考图消耗的积分，0 = 不计费。叠加在基础积分之上 */
   ref_image_credits?: number
+  /** per_token：文本输入每百万 token 的积分 */
+  input_text_credits_per_mtok?: number
+  /** per_token：图片输入每百万 token 的积分 */
+  image_input_credits_per_mtok?: number
+  /** per_token：图片输出每百万 token 的积分 */
+  image_output_credits_per_mtok?: number
+  /** per_token：预扣估算参数 */
+  token_config?: Record<string, unknown> | null
   created_at: string
   updated_at: string
   items?: CreditRuleItem[]
@@ -163,6 +171,10 @@ export function saveCreditRule(modelId: number, data: {
   base_credits: number
   description?: string
   ref_image_credits?: number
+  input_text_credits_per_mtok?: number
+  image_input_credits_per_mtok?: number
+  image_output_credits_per_mtok?: number
+  token_config?: Record<string, unknown> | null
   items?: CreditRuleItem[]
 }) {
   return request<{ success: boolean; message: string }>(`${BASE}/models/${modelId}/credit-rule`, {

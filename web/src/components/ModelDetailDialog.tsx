@@ -7,10 +7,11 @@ import { OwnerAvatar } from './OwnerAvatar'
 import { formatCredits } from '../lib/credits'
 import { OWNER_UNKNOWN_LABEL } from '../lib/owner'
 
-// 规则类型标签。目前后端只有 per_request 一个值，回落到原始字符串以免新增类型时显示空白。
+// 规则类型标签。回落到原始字符串，以免新增类型时显示空白。
 // 用常量映射而非 enum：tsconfig 开了 erasableSyntaxOnly。
 const RULE_TYPE_LABELS: Record<string, string> = {
   per_request: '按次计费',
+  per_token: '按 Token 计费',
 }
 
 interface ModelDetailDialogProps {
@@ -73,6 +74,7 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
   if (!model) return null
 
   const rule = model.credit_rule
+  const perToken = rule?.rule_type === 'per_token'
   const refCredits = rule?.ref_image_credits ?? 0
   // 加价要求模型类型是「图像生成」（后端同时还要端点命中白名单）。
   // 只看 ref_image_credits > 0 的话，会给一个文本模型描述一笔永远不会发生的扣费。
@@ -151,7 +153,39 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
 
             {rule ? (
               <>
+                {/* per_token 三段单价 */}
+                {perToken && (
+                  <div className='rounded-lg border border-border/60 p-4'>
+                    <div className='flex items-center justify-between gap-3'>
+                      <div className='flex items-center gap-2'>
+                        <Coins className='text-muted-foreground size-4' />
+                        <span className='text-sm font-medium'>Token 三段单价</span>
+                      </div>
+                      <span className='bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-[11px] font-medium'>
+                        {RULE_TYPE_LABELS[rule.rule_type] || rule.rule_type}
+                      </span>
+                    </div>
+                    <div className='mt-3 grid grid-cols-3 gap-3'>
+                      {[
+                        { label: '文本输入', value: rule.input_text_credits_per_mtok },
+                        { label: '图片输入', value: rule.image_input_credits_per_mtok },
+                        { label: '图片输出', value: rule.image_output_credits_per_mtok },
+                      ].map(item => (
+                        <div key={item.label}>
+                          <p className='text-muted-foreground text-[11px]'>{item.label}</p>
+                          <p className='mt-1 text-base font-bold tracking-tight'>{formatCredits(item.value ?? 0)}</p>
+                          <p className='text-muted-foreground text-[11px]'>积分 / 百万 tokens</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p className='text-muted-foreground mt-3 text-xs leading-relaxed'>
+                      提交时按估算预扣，完成后按上游实际 token 多退少补。
+                    </p>
+                  </div>
+                )}
+
                 {/* 基础积分 */}
+                {!perToken && (
                 <div className='rounded-lg border border-border/60 p-4'>
                   <div className='flex items-center justify-between gap-3'>
                     <div className='flex items-center gap-2'>
@@ -170,9 +204,10 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
                     每次 API 调用扣除的基础积分。命中下方参数组合时，改用该组合的积分。
                   </p>
                 </div>
+                )}
 
                 {/* 参考图附加计费 */}
-                {hasRefPricing && (
+                {hasRefPricing && !perToken && (
                   <div className='rounded-lg border border-border/60 p-4'>
                     <div className='flex items-center justify-between gap-3'>
                       <div className='flex items-center gap-2'>
@@ -192,7 +227,7 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
                 )}
 
                 {/* 参数组合积分映射 */}
-                {items.length > 0 && (
+                {items.length > 0 && !perToken && (
                   <div className='rounded-lg border border-border/60 p-4'>
                     <h3 className='text-sm font-medium'>参数组合积分映射</h3>
                     <p className='text-muted-foreground mt-1 text-xs'>
@@ -226,12 +261,25 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
                 {/* 计费说明 */}
                 <div className='rounded-lg border border-border/60 bg-muted/20 p-4'>
                   <h3 className='text-sm font-medium'>计费说明</h3>
+                  {perToken ? (
+                    <div className='text-muted-foreground mt-2 font-mono text-xs leading-relaxed'>
+                      本次扣费 = 文本输入 token × 文本单价 / 100 万
+                      <br />
+                      <span className='pl-[5.5rem]'>+ 图片输入 token × 图片输入单价 / 100 万</span>
+                      <br />
+                      <span className='pl-[5.5rem]'>+ 图片输出 token × 图片输出单价 / 100 万</span>
+                      <p className='mt-2 font-sans'>
+                        提交时按估算预扣，完成后按上游实际 usage 多退少补。
+                      </p>
+                    </div>
+                  ) : (
                   <div className='text-muted-foreground mt-2 font-mono text-xs leading-relaxed'>
                     本次扣费 = 命中组合的积分（全部未命中则取基础积分）
                     <br />
                     <span className='pl-[5.5rem]'>+ 参考图张数 × 每张参考图积分</span>
                   </div>
-                  {hasRefPricing && (
+                  )}
+                  {hasRefPricing && !perToken && (
                     <p className='text-muted-foreground mt-3 text-xs leading-relaxed'>
                       举例：基础 {formatCredits(rule.base_credits)}，图片生成时携带 2 张参考图 →{' '}
                       {formatCredits(rule.base_credits)} + 2 × {formatCredits(refCredits)} ={' '}

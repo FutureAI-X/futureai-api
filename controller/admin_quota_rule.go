@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/FutureAI-X/futureai-api/supplier"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // creditPrecisionHint 「最多支持 N 位小数」的提示文案。
@@ -44,6 +46,14 @@ type AdminSaveCreditRuleRequest struct {
 	// 白名单式全量写入，若用值类型，任何省略该字段的请求（旧缓存前端、curl、
 	// 其它 API 客户端）都会把已配置的单价静默清零。
 	RefImageCredits *float64 `json:"ref_image_credits"`
+
+	// per_token 三段单价（积分 / 百万 token）。同样用指针，省略表示不修改。
+	InputTextCreditsPerMTok   *float64 `json:"input_text_credits_per_mtok"`
+	ImageInputCreditsPerMTok  *float64 `json:"image_input_credits_per_mtok"`
+	ImageOutputCreditsPerMTok *float64 `json:"image_output_credits_per_mtok"`
+
+	// TokenConfig 预扣估算参数，原样落库；省略表示不修改。
+	TokenConfig json.RawMessage `json:"token_config"`
 }
 
 // CreditRuleItemRequest 参数组合映射项请求（一组 AND 条件 → 积分）
@@ -73,9 +83,20 @@ func AdminSaveCreditRule(c *gin.Context) {
 	}
 
 	// 验证规则类型
-	validTypes := map[string]bool{"per_request": true}
+	validTypes := map[string]bool{
+		string(model.CreditRuleTypePerRequest): true,
+		string(model.CreditRuleTypePerToken):   true,
+	}
 	if !validTypes[req.RuleType] {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "规则类型无效，目前仅支持 per_request"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "规则类型无效，仅支持 per_request 或 per_token"})
+		return
+	}
+	perToken := req.RuleType == string(model.CreditRuleTypePerToken)
+
+	// per_token 只按三段 token 计费，没有固定附加积分。
+	// 显式拒绝非 0 值，避免管理端或 API 客户端误以为它会生效。
+	if perToken && req.BaseCredits != 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "per_token 只按 token 计费，不支持基础积分，请填 0"})
 		return
 	}
 
@@ -102,6 +123,46 @@ func AdminSaveCreditRule(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "每张参考图积分最多支持" + creditPrecisionHint + "位小数"})
 			return
 		}
+		if perToken && *req.RefImageCredits > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "per_token 已按图片输入 token 计费，每张参考图积分必须为 0"})
+			return
+		}
+	}
+
+	// per_token 三段单价校验。
+	for _, item := range []struct {
+		name  string
+		value *float64
+	}{
+		{"文本输入单价", req.InputTextCreditsPerMTok},
+		{"图片输入单价", req.ImageInputCreditsPerMTok},
+		{"图片输出单价", req.ImageOutputCreditsPerMTok},
+	} {
+		if item.value == nil {
+			continue
+		}
+		if *item.value < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": item.name + "不能为负数"})
+			return
+		}
+		if !model.ValidCreditPrecision(*item.value) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": item.name + "最多支持" + creditPrecisionHint + "位小数"})
+			return
+		}
+	}
+
+	// per_token 的估算参数：空值表示使用默认值。
+	if len(req.TokenConfig) > 0 && strings.TrimSpace(string(req.TokenConfig)) != "null" {
+		if _, err := model.ParseTokenBillingConfig(model.JSONText(req.TokenConfig)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+	}
+
+	// per_token 忽略参数组合；显式拒绝，避免管理员配了却永远不生效。
+	if perToken && len(req.Items) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "per_token 不支持参数组合计费，请清空参数组合映射"})
+		return
 	}
 
 	// 验证模型是否存在
@@ -146,14 +207,31 @@ func AdminSaveCreditRule(c *gin.Context) {
 
 	if existingRule != nil {
 		// 更新现有规则
+		baseCredits := req.BaseCredits
+		if perToken {
+			// 从 per_request 切换过来时清掉历史固定积分。
+			baseCredits = 0
+		}
 		updates := map[string]interface{}{
-			"rule_type":     req.RuleType,
-			"base_credits":  req.BaseCredits,
-			"description":   req.Description,
+			"rule_type":    req.RuleType,
+			"base_credits": baseCredits,
+			"description":  req.Description,
 		}
 		// 仅在请求显式携带时才覆盖：省略字段的调用方不应把已配置的值清零
 		if req.RefImageCredits != nil {
 			updates["ref_image_credits"] = *req.RefImageCredits
+		}
+		if req.InputTextCreditsPerMTok != nil {
+			updates["input_text_credits_per_mtok"] = *req.InputTextCreditsPerMTok
+		}
+		if req.ImageInputCreditsPerMTok != nil {
+			updates["image_input_credits_per_mtok"] = *req.ImageInputCreditsPerMTok
+		}
+		if req.ImageOutputCreditsPerMTok != nil {
+			updates["image_output_credits_per_mtok"] = *req.ImageOutputCreditsPerMTok
+		}
+		if len(req.TokenConfig) > 0 && strings.TrimSpace(string(req.TokenConfig)) != "null" {
+			updates["token_config"] = gorm.Expr("?::jsonb", string(req.TokenConfig))
 		}
 		if err := model.UpdateCreditRule(existingRule.ID, updates); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "更新积分规则失败"})
@@ -177,8 +255,23 @@ func AdminSaveCreditRule(c *gin.Context) {
 			Description: req.Description,
 			Status:      1,
 		}
+		if perToken {
+			rule.BaseCredits = 0
+		}
 		if req.RefImageCredits != nil {
 			rule.RefImageCredits = *req.RefImageCredits
+		}
+		if req.InputTextCreditsPerMTok != nil {
+			rule.InputTextCreditsPerMTok = *req.InputTextCreditsPerMTok
+		}
+		if req.ImageInputCreditsPerMTok != nil {
+			rule.ImageInputCreditsPerMTok = *req.ImageInputCreditsPerMTok
+		}
+		if req.ImageOutputCreditsPerMTok != nil {
+			rule.ImageOutputCreditsPerMTok = *req.ImageOutputCreditsPerMTok
+		}
+		if len(req.TokenConfig) > 0 && strings.TrimSpace(string(req.TokenConfig)) != "null" {
+			rule.TokenConfig = model.JSONText(req.TokenConfig)
 		}
 
 		// 构建参数组合映射

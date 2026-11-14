@@ -462,9 +462,14 @@ var creditScaleColumns = []struct{ table, column string }{
 	{"users", "credits"},
 	{"users", "used_credits"},
 	{"tasks", "credits"},
+	{"tasks", "preauth_credits"},
+	{"tasks", "settled_credits"},
 	{"credit_logs", "credits"},
 	{"credit_rules", "base_credits"},
 	{"credit_rules", "ref_image_credits"},
+	{"credit_rules", "input_text_credits_per_mtok"},
+	{"credit_rules", "image_input_credits_per_mtok"},
+	{"credit_rules", "image_output_credits_per_mtok"},
 	{"credit_rule_items", "credits"},
 }
 
@@ -578,11 +583,15 @@ func addTableComments() error {
 		`COMMENT ON TABLE credit_rules IS '积分扣除规则表，存储模型的积分扣除算法'`,
 		`COMMENT ON COLUMN credit_rules.id IS '规则唯一标识，自增主键'`,
 		`COMMENT ON COLUMN credit_rules.model_id IS '关联的模型ID，关联 models 表，唯一'`,
-		`COMMENT ON COLUMN credit_rules.rule_type IS '规则类型：per_request=按次计费'`,
-		`COMMENT ON COLUMN credit_rules.base_credits IS '基础积分（每次请求扣除的积分数量）'`,
+		`COMMENT ON COLUMN credit_rules.rule_type IS '规则类型：per_request=按次计费, per_token=按 token 三段计费'`,
+		`COMMENT ON COLUMN credit_rules.base_credits IS '基础积分（per_request 每次请求扣除；per_token 不使用，固定为 0）'`,
 		`COMMENT ON COLUMN credit_rules.description IS '规则描述'`,
 		`COMMENT ON COLUMN credit_rules.status IS '规则状态：1=启用, 2=禁用'`,
 		`COMMENT ON COLUMN credit_rules.ref_image_credits IS '每张参考图消耗的积分，0=不计费'`,
+		`COMMENT ON COLUMN credit_rules.input_text_credits_per_mtok IS 'per_token：文本输入每百万 token 的积分'`,
+		`COMMENT ON COLUMN credit_rules.image_input_credits_per_mtok IS 'per_token：图片输入每百万 token 的积分'`,
+		`COMMENT ON COLUMN credit_rules.image_output_credits_per_mtok IS 'per_token：图片输出每百万 token 的积分'`,
+		`COMMENT ON COLUMN credit_rules.token_config IS 'per_token：预扣估算参数 JSON'`,
 		`COMMENT ON COLUMN credit_rules.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN credit_rules.updated_at IS '记录最后更新时间'`,
 
@@ -640,6 +649,13 @@ func addTableComments() error {
 
 		// tasks 新增列
 		`COMMENT ON COLUMN tasks.file_id IS '成图在 files 表中的文件ID，空表示未落库'`,
+		`COMMENT ON COLUMN tasks.preauth_credits IS 'per_token 提交时预扣积分'`,
+		`COMMENT ON COLUMN tasks.settled_credits IS 'per_token 按实际 usage 结算的积分'`,
+		`COMMENT ON COLUMN tasks.credits_settled IS 'per_token 是否已完成结算'`,
+		`COMMENT ON COLUMN tasks.usage_text_tokens IS '实际文本输入 token'`,
+		`COMMENT ON COLUMN tasks.usage_image_input_tokens IS '实际图片输入 token'`,
+		`COMMENT ON COLUMN tasks.usage_image_output_tokens IS '实际图片输出 token'`,
+		`COMMENT ON COLUMN tasks.billing_snapshot IS 'per_token 提交时的计费快照 JSON'`,
 
 		// apps 表注释
 		`COMMENT ON TABLE apps IS '客户端应用表，供升级检查接口按标识定位应用'`,

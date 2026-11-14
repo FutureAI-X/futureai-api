@@ -12,6 +12,8 @@ type CreditRuleType string
 const (
 	// CreditRuleTypePerRequest 按次计费
 	CreditRuleTypePerRequest CreditRuleType = "per_request"
+	// CreditRuleTypePerToken 按 token 三段计费（文本输入 / 图片输入 / 图片输出）
+	CreditRuleTypePerToken CreditRuleType = "per_token"
 )
 
 // CreditRule 积分扣除规则（每个模型一条）
@@ -25,7 +27,8 @@ type CreditRule struct {
 	// 规则类型：per_request=按次计费
 	RuleType CreditRuleType `json:"rule_type" gorm:"size:32;not null;default:'per_request'"`
 
-	// 基础积分（每次请求扣除的积分数量）。0 表示免费模型。
+	// 基础积分（per_request 每次请求扣除的积分数量）。0 表示免费模型。
+	// per_token 不使用该字段，保存时会被强制为 0：token 计费没有固定附加。
 	// 显式指定 numeric(20,10) 而不是让 GORM 按 float64 推出无约束的 decimal：
 	// 上界可预期，且与其余积分列口径一致（业务精度见 CreditPrecision）。
 	BaseCredits float64 `json:"base_credits" gorm:"type:numeric(20,10);not null;default:0"`
@@ -44,7 +47,19 @@ type CreditRule struct {
 
 	// 参考图附加计费：每张参考图消耗的积分，0=不计费。
 	// 叠加在基础积分（或命中的参数组合积分）之上，不取代它们。
+	// per_token 规则忽略该字段：图片输入按实际 token 计费，避免重复收费。
 	RefImageCredits float64 `json:"ref_image_credits" gorm:"type:numeric(20,10);not null;default:0"`
+
+	// ── per_token 三段单价（单位：积分 / 百万 token） ──
+	//
+	// 只有 rule_type=per_token 时生效。只按三段 token 计费，
+	// BaseCredits（固定附加）、RefImageCredits 与 Items 在该模式下都不使用。
+	InputTextCreditsPerMTok   float64 `json:"input_text_credits_per_mtok" gorm:"type:numeric(20,10);not null;default:0"`
+	ImageInputCreditsPerMTok  float64 `json:"image_input_credits_per_mtok" gorm:"type:numeric(20,10);not null;default:0"`
+	ImageOutputCreditsPerMTok float64 `json:"image_output_credits_per_mtok" gorm:"type:numeric(20,10);not null;default:0"`
+
+	// TokenConfig 是预扣估算参数（JSON）。为空时使用包内默认值。
+	TokenConfig JSONText `json:"token_config,omitempty" gorm:"type:jsonb"`
 
 	// 注意：数据库里还有一列 credit_rules.ref_image_params（历史遗留），
 	// 自请求标准落地后已不再被读取。参考图统一按标准字段 image_urls 计数，
