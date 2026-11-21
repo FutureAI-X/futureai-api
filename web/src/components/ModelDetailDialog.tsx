@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { X, Image as ImageIcon, Coins } from 'lucide-react'
-import type { PricingModel } from '../types/pricing'
+import type { PricingModel, VideoCreditRule } from '../types/pricing'
 import { modelTypeLabel } from '../lib/model-type'
 import { CopyButton } from './CopyButton'
 import { OwnerAvatar } from './OwnerAvatar'
@@ -25,6 +25,122 @@ interface ModelDetailDialogProps {
 function formatConditions(conditions?: { param_path: string; param_value: string }[]): string {
   const parts = (conditions || []).map((c) => `${c.param_path}=${c.param_value}`)
   return parts.length > 0 ? parts.join(' & ') : '无'
+}
+
+// 视频计费详情：按张/个/秒的费率与分辨率价目表。
+function VideoBillingDetail({ rule }: { rule: VideoCreditRule }) {
+  const rates = rule.rates ?? []
+
+  return (
+    <>
+      <div className='rounded-lg border border-border/60 p-4'>
+        <div className='flex items-center justify-between gap-3'>
+          <div className='flex items-center gap-2'>
+            <Coins className='text-muted-foreground size-4' />
+            <h3 className='text-sm font-medium'>图片与音频计费</h3>
+          </div>
+          <span className='bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-[11px] font-medium'>
+            按张 / 按个
+          </span>
+        </div>
+
+        <div className='mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2'>
+          <div>
+            <p className='text-muted-foreground text-[11px]'>参考图片</p>
+            <p className='mt-1 flex flex-wrap items-baseline gap-x-1'>
+              <span className='text-base font-bold tracking-tight'>
+                {formatCredits(rule.image_credits_per_item)}
+              </span>
+              <span className='text-muted-foreground text-[11px]'>积分/张</span>
+              {rule.image_free_items > 0 && (
+                <span className='text-muted-foreground text-[11px]'>
+                  · 每请求前 {rule.image_free_items} 张免费
+                </span>
+              )}
+            </p>
+          </div>
+          <div>
+            <p className='text-muted-foreground text-[11px]'>参考音频</p>
+            <p className='mt-1 flex items-baseline gap-1'>
+              <span className='text-base font-bold tracking-tight'>
+                {formatCredits(rule.audio_credits_per_item)}
+              </span>
+              <span className='text-muted-foreground text-[11px]'>积分/个</span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className='rounded-lg border border-border/60 p-4'>
+        <div className='flex items-center justify-between gap-3'>
+          <div className='flex items-center gap-2'>
+            <Coins className='text-muted-foreground size-4' />
+            <h3 className='text-sm font-medium'>视频计费</h3>
+          </div>
+          <span className='bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-[11px] font-medium'>
+            按秒
+          </span>
+        </div>
+        <p className='text-muted-foreground mt-1 text-xs'>
+          参考视频与输出视频都按秒计费。输出视频费率按是否包含参考视频选择；参考视频秒数按每个文件向上取整到整秒。
+        </p>
+
+        {rates.length > 0 ? (
+          <div className='mt-3 overflow-x-auto rounded-lg border border-border/40'>
+            <table className='w-full'>
+              <thead>
+                <tr className='bg-muted/30 border-b border-border/40'>
+                  <th className='px-3 py-2 text-left text-xs font-medium'>分辨率</th>
+                  <th className='px-3 py-2 text-right text-xs font-medium'>参考视频</th>
+                  <th className='px-3 py-2 text-right text-xs font-medium'>输出视频（无参考视频）</th>
+                  <th className='px-3 py-2 text-right text-xs font-medium'>输出视频（含参考视频）</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rates.map((rate) => (
+                  <tr key={rate.id ?? rate.resolution} className='border-b border-border/20 last:border-b-0'>
+                    <td className='px-3 py-2 font-mono text-xs font-medium'>{rate.resolution}</td>
+                    <td className='px-3 py-2 text-right text-xs'>
+                      {formatCredits(rate.input_video_credits_per_second)}
+                      <span className='text-muted-foreground'> 积分/秒</span>
+                    </td>
+                    <td className='px-3 py-2 text-right text-xs'>
+                      {formatCredits(rate.output_credits_per_second_no_ref)}
+                      <span className='text-muted-foreground'> 积分/秒</span>
+                    </td>
+                    <td className='px-3 py-2 text-right text-xs'>
+                      {formatCredits(rate.output_credits_per_second_with_ref)}
+                      <span className='text-muted-foreground'> 积分/秒</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className='text-muted-foreground mt-3 text-xs'>尚未配置分辨率档位。</p>
+        )}
+      </div>
+
+      <div className='rounded-lg border border-border/60 bg-muted/20 p-4'>
+        <h3 className='text-sm font-medium'>计费说明</h3>
+        <ul className='text-muted-foreground mt-2 space-y-1.5 text-xs leading-relaxed'>
+          <li>
+            参考图片按张计费
+            {rule.image_free_items > 0 ? `，每个请求前 ${rule.image_free_items} 张免费，超出部分才收费` : ''}
+            。
+          </li>
+          <li>参考音频按个计费。</li>
+          <li>参考视频按秒计费，不同输出分辨率的费率不同。</li>
+          <li>输出视频按秒计费；带参考视频和不带参考视频的费率不同。</li>
+          <li>总积分是以上四项相加。参考视频的时长按每个文件向上取整到整秒。</li>
+        </ul>
+        <p className='text-muted-foreground mt-3 text-xs leading-relaxed'>
+          任务失败或取消时，提交时扣除的积分会全额退还。
+        </p>
+      </div>
+    </>
+  )
 }
 
 export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
@@ -74,6 +190,7 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
   if (!model) return null
 
   const rule = model.credit_rule
+  const videoRule = model.video_credit_rule
   const perToken = rule?.rule_type === 'per_token'
   const refCredits = rule?.ref_image_credits ?? 0
   // 加价要求模型类型是「图像生成」（后端同时还要端点命中白名单）。
@@ -99,7 +216,7 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
         role='dialog'
         aria-modal='true'
         aria-labelledby='model-detail-title'
-        className='bg-background border-border/60 relative z-10 flex max-h-[85dvh] w-full max-w-2xl flex-col rounded-xl border shadow-lg focus:outline-none'
+        className='bg-background border-border/60 relative z-10 flex max-h-[85dvh] w-full max-w-4xl flex-col rounded-xl border shadow-lg focus:outline-none'
       >
         {/* 头部 */}
         <div className='flex items-start justify-between gap-3 border-b border-border/40 px-5 py-4 sm:px-6'>
@@ -151,7 +268,9 @@ export function ModelDetailDialog({ model, onClose }: ModelDetailDialogProps) {
               </div>
             )}
 
-            {rule ? (
+            {videoRule ? (
+              <VideoBillingDetail rule={videoRule} />
+            ) : rule ? (
               <>
                 {/* per_token 三段单价 */}
                 {perToken && (

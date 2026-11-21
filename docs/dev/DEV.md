@@ -182,9 +182,9 @@ go run main.go
 cd web && npm run dev
 ```
 
-启动后访问 http://localhost:5173。该方式下 `/api`、`/v1`、`/health` 由 Vite 代理至 :3001，配置见 [web/vite.config.ts](../../web/vite.config.ts)。
+启动后访问 http://127.0.0.1:8080。该方式下 `/api`、`/v1`、`/health` 由 Vite 代理至 :3001，配置见 [web/vite.config.ts](../../web/vite.config.ts)。
 
-> **注意**：方式 B 仅作用于 :5173，:3001 上的页面不会随之更新，因该端口提供的是上一次 `npm run build` 的产物。若需 :3001 使用最新前端，应重新执行 1.4 节的构建步骤。
+> **注意**：方式 B 仅作用于 :8080，:3001 上的页面不会随之更新，因该端口提供的是上一次 `npm run build` 的产物。若需 :3001 使用最新前端，应重新执行 1.4 节的构建步骤。
 
 ### 2.2 测试与静态检查
 

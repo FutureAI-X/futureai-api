@@ -27,6 +27,39 @@ export interface CreditRule {
   items?: CreditRuleItem[]
 }
 
+/** 视频计费的单个分辨率档位 */
+export interface VideoCreditRate {
+  id?: number
+  rule_id?: number
+  /** 输出分辨率档位，统一大写 */
+  resolution: string
+  /** 每个参考视频秒消耗的积分 */
+  input_video_credits_per_second: number
+  /** 不含参考视频时每秒输出消耗的积分 */
+  output_credits_per_second_no_ref: number
+  /** 含参考视频时每秒输出消耗的积分 */
+  output_credits_per_second_with_ref: number
+  created_at?: string
+  updated_at?: string
+}
+
+/** 视频模型计费规则 */
+export interface VideoCreditRule {
+  id: number
+  model_id: number
+  description?: string
+  status: number
+  /** 每张参考图积分 */
+  image_credits_per_item: number
+  /** 每请求免费的前 N 张参考图 */
+  image_free_items: number
+  /** 每个参考音频积分 */
+  audio_credits_per_item: number
+  rates?: VideoCreditRate[]
+  created_at?: string
+  updated_at?: string
+}
+
 export interface PricingModel {
   id: number
   name: string
@@ -37,6 +70,8 @@ export interface PricingModel {
   /** 模型类型：image / video / text / music / other。老接口可能没有，故可选 */
   type?: string
   credit_rule?: CreditRule
+  /** 视频模型的独立计费规则 */
+  video_credit_rule?: VideoCreditRule
 }
 
 export interface PricingData {

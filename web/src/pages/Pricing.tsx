@@ -30,6 +30,7 @@ function ModelCard({
 }) {
   const tags = parseTags(model.tags)
   const creditRule = model.credit_rule
+  const videoRule = model.video_credit_rule
   const perToken = creditRule?.rule_type === 'per_token'
 
   // 卡片上标「起」，所以这里必须是真实下限：某个参数组合可能比基础积分更便宜，
@@ -113,10 +114,15 @@ function ModelCard({
       </div>
 
       {/* 积分消耗：卡片上只给一个「起」价，完整规则点开详情看 */}
-      {creditRule && (
+      {(videoRule || creditRule) && (
         <div className='px-4 pb-3 sm:px-5 sm:pb-4'>
           <div className='flex items-center justify-between'>
-            {perToken ? (
+            {videoRule ? (
+              <div className='flex items-baseline gap-1'>
+                <span className='text-lg font-bold tracking-tight sm:text-xl'>按秒</span>
+                <span className='text-muted-foreground text-xs'>视频计费</span>
+              </div>
+            ) : perToken ? (
               <div className='flex items-baseline gap-1'>
                 <span className='text-lg font-bold tracking-tight sm:text-xl'>按 Token</span>
                 <span className='text-muted-foreground text-xs'>三段计费</span>
@@ -130,7 +136,7 @@ function ModelCard({
               </div>
             )}
             <span className='bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-[11px] font-medium'>
-              {perToken ? '按 Token 计费' : '按次计费'}
+              {videoRule ? '按秒计费' : perToken ? '按 Token 计费' : '按次计费'}
             </span>
           </div>
         </div>
@@ -528,7 +534,7 @@ export function Pricing() {
                         <th className='px-4 py-3 text-left text-xs font-medium'>类型</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>开发者</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>描述</th>
-                        <th className='px-4 py-3 text-left text-xs font-medium'>基础积分</th>
+                        <th className='px-4 py-3 text-left text-xs font-medium'>计费方式</th>
                         <th className='px-4 py-3 text-left text-xs font-medium'>标签</th>
                         <th className='px-4 py-3 text-right text-xs font-medium'>操作</th>
                       </tr>
@@ -565,7 +571,9 @@ export function Pricing() {
                             {model.description || '-'}
                           </td>
                           <td className='px-4 py-3 text-sm'>
-                            {model.credit_rule ? (
+                            {model.video_credit_rule ? (
+                              <span className='font-medium'>按秒计费</span>
+                            ) : model.credit_rule ? (
                               model.credit_rule.rule_type === 'per_token' ? (
                                 <span className='font-medium'>按 Token 计费</span>
                               ) : (
