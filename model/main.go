@@ -289,6 +289,12 @@ func migrateDB() error {
 		return err
 	}
 
+	// 修正 per_token 单价列的历史命名。必须在 AutoMigrate 之前：
+	// 否则模型声明的新列会先被建出来，旧列里的数据就留在旧名字下。
+	if err := migratePerMTokColumnNames(); err != nil {
+		return err
+	}
+
 	err := DB.AutoMigrate(
 		&User{},
 		&Token{},
@@ -422,6 +428,43 @@ func backfillAPIKeyLength() error {
 	}
 	if result.RowsAffected > 0 {
 		common.SysLogf("[迁移] 补充 api_keys.key_length，共 %d 行", result.RowsAffected)
+	}
+	return nil
+}
+
+// migratePerMTokColumnNames 修正 per_token 单价列的历史命名。
+//
+// GORM 的命名策略会把 MTok 拆成 m_tok：InputTextCreditsPerMTok 实际建出来的是
+// input_text_credits_per_m_tok，而表注释与 ensureCreditColumnScale 使用的是
+// input_text_credits_per_mtok。早期库因此出现了列不存在、注释失败、标度检查被
+// 静默跳过的问题。这里在 AutoMigrate 之前把旧列重命名为统一口径，既保留数据，
+// 也让模型字段（已显式 column 标签）与 SQL 侧一致。
+func migratePerMTokColumnNames() error {
+	if !DB.Migrator().HasTable("credit_rules") {
+		return nil
+	}
+
+	pairs := []struct{ old, new string }{
+		{"input_text_credits_per_m_tok", "input_text_credits_per_mtok"},
+		{"image_input_credits_per_m_tok", "image_input_credits_per_mtok"},
+		{"image_output_credits_per_m_tok", "image_output_credits_per_mtok"},
+	}
+	for _, p := range pairs {
+		if !columnExists("credit_rules", p.old) {
+			continue
+		}
+		if columnExists("credit_rules", p.new) {
+			// 两列同时存在通常意味着迁移中途失败过。不擅自合并，留给人工处理。
+			common.SysErrorf("[迁移] credit_rules 同时存在 %s 与 %s，跳过重命名，请人工确认数据归属",
+				p.old, p.new)
+			continue
+		}
+		// 表名与列名都是编译期常量，不来自外部输入。
+		stmt := fmt.Sprintf("ALTER TABLE credit_rules RENAME COLUMN %s TO %s", p.old, p.new)
+		if err := DB.Exec(stmt).Error; err != nil {
+			return fmt.Errorf("重命名 credit_rules.%s 失败: %w", p.old, err)
+		}
+		common.SysLogf("[迁移] credit_rules.%s 已重命名为 %s", p.old, p.new)
 	}
 	return nil
 }

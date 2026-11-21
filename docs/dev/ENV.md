@@ -126,11 +126,12 @@ chmod 600 .env
 ### `SQL_DSN`
 
 - **作用**：PostgreSQL 连接字符串。
-- **默认**：`postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}?sslmode=disable`
+- **默认**：`postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:15432/${POSTGRES_DB}?sslmode=disable`
 - **说明**：
   - 格式 `postgres://用户名:密码@主机:端口/数据库名?sslmode=disable`。
   - 用户名、密码、库名分别引用上面的三项，改其中任一项都只需改一处。
-  - 本机直跑填 `localhost:5432`；容器内由 compose 覆盖为服务名 `postgres`。
+  - 本机直跑填 `localhost:15432`（compose 把宿主机 15432 映射到容器 5432）；
+    容器内由 compose 覆盖为服务名 `postgres`。
 - **注意**：
   - 变量名只认 `[A-Z0-9_]`：写成 `${postgres_password}` 不会被展开，也不报错，只会得到空密码。
   - 指向的库若不是 compose 建的那个，要么把它的账号密码设成上面三项，要么把这条改回明文写死。

@@ -33,7 +33,12 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      # 宿主机侧用 15432，不用 5432：Windows 上 Hyper-V/WinNAT 会动态保留
+      # 5358–5457 等端口段，5432 常落在其中，Docker 绑定时报
+      # "An attempt was made to access a socket in a way forbidden by its
+      #  access permissions"（WSAEACCES），端口映射建不起来。
+      # 容器内 PostgreSQL 仍然监听 5432，容器间互访不受影响。
+      - "127.0.0.1:15432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-futureai_api} -d ${POSTGRES_DB:-futureai_api}"]
       interval: 10s
@@ -44,7 +49,7 @@ services:
   # 应用容器。
   #
   # 它和上面的 postgres 用同一个默认网络，因此 SQL_DSN 里写服务名 postgres 即可——
-  # 容器之间不走宿主机的那条 127.0.0.1:5432 映射。
+  # 容器之间不走宿主机的那条 127.0.0.1:15432 映射。
   #
   # 本地开发有两条路，按需要选一条：
   #   1) 容器跑：docker compose up -d          -> 页面在 http://localhost:8080

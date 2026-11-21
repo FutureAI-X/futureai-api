@@ -54,9 +54,12 @@ type CreditRule struct {
 	//
 	// 只有 rule_type=per_token 时生效。只按三段 token 计费，
 	// BaseCredits（固定附加）、RefImageCredits 与 Items 在该模式下都不使用。
-	InputTextCreditsPerMTok   float64 `json:"input_text_credits_per_mtok" gorm:"type:numeric(20,10);not null;default:0"`
-	ImageInputCreditsPerMTok  float64 `json:"image_input_credits_per_mtok" gorm:"type:numeric(20,10);not null;default:0"`
-	ImageOutputCreditsPerMTok float64 `json:"image_output_credits_per_mtok" gorm:"type:numeric(20,10);not null;default:0"`
+	// 显式指定列名：GORM 的命名策略会把 MTok 拆成 m_tok
+	// （input_text_credits_per_m_tok），与注释、标度检查使用的 mtok 不一致。
+	// 列名必须与 model/main.go 中的 creditScaleColumns 和表注释保持一致。
+	InputTextCreditsPerMTok   float64 `json:"input_text_credits_per_mtok" gorm:"column:input_text_credits_per_mtok;type:numeric(20,10);not null;default:0"`
+	ImageInputCreditsPerMTok  float64 `json:"image_input_credits_per_mtok" gorm:"column:image_input_credits_per_mtok;type:numeric(20,10);not null;default:0"`
+	ImageOutputCreditsPerMTok float64 `json:"image_output_credits_per_mtok" gorm:"column:image_output_credits_per_mtok;type:numeric(20,10);not null;default:0"`
 
 	// TokenConfig 是预扣估算参数（JSON）。为空时使用包内默认值。
 	TokenConfig JSONText `json:"token_config,omitempty" gorm:"type:jsonb"`
