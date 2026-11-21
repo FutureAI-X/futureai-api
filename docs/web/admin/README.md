@@ -15,7 +15,7 @@
 | 模型 | `/api/admin/models` | [模型管理](models.md) |
 | 模型展示顺序 | `/api/admin/model-order` | [模型管理](models.md#2-保存模型顺序) |
 | 模型与端点绑定 | `/api/admin/models/:id/endpoints` | [模型与端点绑定](model-endpoints.md) |
-| 计费规则 | `/api/admin/models/:id/credit-rule` | [计费规则管理](credit-rules.md) |
+| 计费规则 | `/api/admin/models/:id/credit-rule`、`/api/admin/models/:id/video-credit-rule` | [计费规则管理](credit-rules.md) |
 | 积分流水 | `/api/admin/credit-logs` | [积分流水](credit-logs.md) |
 | 全员任务记录 | `/api/admin/task-logs` | [全员任务记录](task-logs.md) |
 | 客户端应用 | `/api/admin/apps` | [客户端应用管理](apps.md) |

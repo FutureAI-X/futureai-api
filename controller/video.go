@@ -104,6 +104,9 @@ type resolvedVideoReferences struct {
 	ImageURLs []string
 	VideoURLs []string
 	AudioURLs []string
+
+	// InputVideoSeconds 去重后每个参考视频按秒向上取整再求和，用于输入计费。
+	InputVideoSeconds int
 }
 
 // dedupeVideoFileIDs 去重并保持首次出现顺序；空串在 validate 阶段已被拒绝。
@@ -134,42 +137,43 @@ func dedupeVideoFileIDs(ids []string) []string {
 func resolveVideoReferences(ctx context.Context, userID int, req *videoGenerateRequest) (*resolvedVideoReferences, error) {
 	now := time.Now()
 
-	resolve := func(ids []string, mediaType, group string) ([]string, error) {
+	resolve := func(ids []string, mediaType, group string) ([]string, int, error) {
 		ids = dedupeVideoFileIDs(ids)
 		urls := make([]string, 0, len(ids))
+		videoSeconds := 0
 
 		for _, id := range ids {
 			file, err := model.GetFileByFileID(id)
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return nil, &videoReferenceError{http.StatusNotFound, "参考文件不存在或无权使用"}
+					return nil, 0, &videoReferenceError{http.StatusNotFound, "参考文件不存在或无权使用"}
 				}
-				return nil, fmt.Errorf("查询参考文件 %s 失败: %w", id, err)
+				return nil, 0, fmt.Errorf("查询参考文件 %s 失败: %w", id, err)
 			}
 
 			if file.UserID != userID ||
 				(file.Purpose != model.FilePurposeReference && file.Purpose != model.FilePurposeResult) {
-				return nil, &videoReferenceError{http.StatusNotFound, "参考文件不存在或无权使用"}
+				return nil, 0, &videoReferenceError{http.StatusNotFound, "参考文件不存在或无权使用"}
 			}
 			if file.Status != model.FileStatusReady {
-				return nil, &videoReferenceError{http.StatusConflict, "参考文件尚未完成处理"}
+				return nil, 0, &videoReferenceError{http.StatusConflict, "参考文件尚未完成处理"}
 			}
 			if file.MediaType != mediaType {
-				return nil, &videoReferenceError{http.StatusBadRequest,
+				return nil, 0, &videoReferenceError{http.StatusBadRequest,
 					fmt.Sprintf("%s 中存在类型不匹配的参考文件", group)}
 			}
 			if mediaType == model.FileMediaTypeVideo && file.DurationMS <= 0 {
-				return nil, &videoReferenceError{http.StatusBadRequest, "参考视频缺少时长信息"}
+				return nil, 0, &videoReferenceError{http.StatusBadRequest, "参考视频缺少时长信息"}
 			}
 			if strings.TrimSpace(file.FileKey) == "" {
-				return nil, &videoReferenceError{http.StatusServiceUnavailable, "参考文件存储信息不完整"}
+				return nil, 0, &videoReferenceError{http.StatusServiceUnavailable, "参考文件存储信息不完整"}
 			}
 
 			ttl := videoReferenceSignTTL
 			if file.ExpiresAt != nil && !file.ExpiresAt.IsZero() {
 				remaining := file.ExpiresAt.Sub(now)
 				if remaining < videoReferenceMinRemaining {
-					return nil, &videoReferenceError{http.StatusGone, "参考文件已过期或即将过期，请重新上传"}
+					return nil, 0, &videoReferenceError{http.StatusGone, "参考文件已过期或即将过期，请重新上传"}
 				}
 				if remaining < ttl {
 					// 留 1 分钟余量，避免签名地址比对象存活更久。
@@ -177,48 +181,60 @@ func resolveVideoReferences(ctx context.Context, userID int, req *videoGenerateR
 				}
 			}
 			if ttl <= 0 {
-				return nil, &videoReferenceError{http.StatusGone, "参考文件即将过期，请重新上传"}
+				return nil, 0, &videoReferenceError{http.StatusGone, "参考文件即将过期，请重新上传"}
 			}
 
 			store, err := storage.MediaFrom(file.ServiceType, file.ServiceAddress)
 			if err != nil {
 				common.SysErrorf("[VideoGenerate] 参考文件存储不可用: fileID=%s, err=%v", id, err)
-				return nil, &videoReferenceError{http.StatusServiceUnavailable, "参考文件存储暂不可用"}
+				return nil, 0, &videoReferenceError{http.StatusServiceUnavailable, "参考文件存储暂不可用"}
 			}
 			signed, err := store.PresignGet(ctx, file.FileKey, ttl)
 			if err != nil {
 				common.SysErrorf("[VideoGenerate] 参考文件签名失败: fileID=%s, err=%v", id, err)
-				return nil, &videoReferenceError{http.StatusServiceUnavailable, "参考文件存储暂不可用"}
+				return nil, 0, &videoReferenceError{http.StatusServiceUnavailable, "参考文件存储暂不可用"}
 			}
 			urls = append(urls, signed)
+
+			// 计费按去重后的每个视频文件独立向上取整到整秒。
+			if mediaType == model.FileMediaTypeVideo {
+				videoSeconds += ceilVideoSeconds(file.DurationMS)
+			}
 		}
 
-		return urls, nil
+		return urls, videoSeconds, nil
 	}
 
-	images, err := resolve(req.ImageIDs, model.FileMediaTypeImage, "image_ids")
+	images, _, err := resolve(req.ImageIDs, model.FileMediaTypeImage, "image_ids")
 	if err != nil {
 		return nil, err
 	}
-	videos, err := resolve(req.VideoIDs, model.FileMediaTypeVideo, "video_ids")
+	videos, videoSeconds, err := resolve(req.VideoIDs, model.FileMediaTypeVideo, "video_ids")
 	if err != nil {
 		return nil, err
 	}
-	audios, err := resolve(req.AudioIDs, model.FileMediaTypeAudio, "audio_ids")
+	audios, _, err := resolve(req.AudioIDs, model.FileMediaTypeAudio, "audio_ids")
 	if err != nil {
 		return nil, err
 	}
 
-	return &resolvedVideoReferences{ImageURLs: images, VideoURLs: videos, AudioURLs: audios}, nil
+	return &resolvedVideoReferences{
+		ImageURLs:         images,
+		VideoURLs:         videos,
+		AudioURLs:         audios,
+		InputVideoSeconds: videoSeconds,
+	}, nil
 }
 
 // VideoGenerate 视频生成端点
 // POST /v1/videos/generations
 //
 // 流转逻辑与图像生成一致：校验 → 端点/模型/供应商路由 → 解析参考文件 →
-// 建任务 → 提交上游 → 记录供应商响应 → 对账循环轮询。差异：
+// 计算积分 → 建任务并原子扣费 → 提交上游 → 记录供应商响应 → 对账循环轮询。差异：
 //   - 参考素材只接受平台 file_id，服务端解析成短期签名 URL 后交给上游；
-//   - 视频计费尚未启用，任务按 0 积分创建；
+//   - 计费走独立的视频规则：图片按张（含免费张数）、音频按个、参考视频按秒，
+//     输出按请求时长；费率随输出分辨率分档；
+//   - 所有数量在提交时已知，预扣即终值，完成后不做二次结算；
 //   - 结果不转存到对象存储，任务完成时直接把上游 URL 返回给调用方。
 func VideoGenerate(c *gin.Context) {
 	var req videoGenerateRequest
@@ -321,11 +337,7 @@ func VideoGenerate(c *gin.Context) {
 		return
 	}
 
-	// 7. 视频计费尚未启用：任务按 0 积分创建，不查计费规则、不扣费。
-	common.SysLogf("[VideoGenerate] 视频计费尚未启用，本次任务按 0 积分创建: userID=%d, model=%s",
-		userID, modelName)
-
-	// 8. 幂等键。语义与图像生成一致：窗口内重复提交复用已有任务。
+	// 7. 幂等键。语义与图像生成一致：窗口内重复提交复用已有任务。
 	// 必须在解析 file_id 之前：参考文件过期后重试仍应返回原任务，而不是 410。
 	idemKey, ok := parseIdempotencyKey(c)
 	if !ok {
@@ -338,6 +350,33 @@ func VideoGenerate(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"code": "success", "taskId": existing.TaskID})
 			return
 		}
+	}
+
+	// 8. 解析计费配置。分辨率统一大写后查价目档位；查不到即拒绝——
+	// 0 费率是显式免费，缺档位是配置/请求错误，两者不能混为一谈。
+	// 放在幂等键之后：同一幂等键的重试即使档位后来被下架，也应返回原任务。
+	resolution := model.NormalizeVideoResolution(req.Resolution)
+	billingRule, err := model.GetVideoCreditRuleByModelID(m.ID)
+	if err != nil {
+		common.SysErrorf("[VideoGenerate] 视频计费规则缺少或不可用: model=%s, err=%v", modelName, err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费规则，暂不可用"})
+		return
+	}
+	if len(billingRule.Rates) == 0 {
+		common.SysErrorf("[VideoGenerate] 视频计费规则未配置分辨率档位: model=%s, ruleID=%d", modelName, billingRule.ID)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "fail", "message": "该模型未配置计费档位，暂不可用"})
+		return
+	}
+	billingRate := model.FindVideoCreditRate(billingRule, resolution)
+	if billingRate == nil {
+		supported := model.SupportedVideoResolutions(billingRule)
+		common.SysErrorf("[VideoGenerate] 不支持的输出分辨率: model=%s, resolution=%s, supported=%v",
+			modelName, resolution, supported)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    "fail",
+			"message": fmt.Sprintf("不支持的输出分辨率：%s，支持：%s", resolution, strings.Join(supported, "、")),
+		})
+		return
 	}
 
 	// 9. 解析参考文件：校验归属/用途/状态/有效期/媒体类型，并生成短期签名 URL。
@@ -355,14 +394,43 @@ func VideoGenerate(c *gin.Context) {
 		return
 	}
 
-	// 10. 组装供应商适配层所需的平台内部请求（这里装的是签名 URL）。
+	// 10. 计算积分：图片按张（每请求前 N 张免费）、音频按个、参考视频按秒、
+	// 输出按请求时长；参考视频秒数已按文件逐个向上取整。
+	billing, err := computeVideoBilling(billingRule, *billingRate, videoBillingInput{
+		Resolution:        resolution,
+		ImageCount:        len(refs.ImageURLs),
+		AudioCount:        len(refs.AudioURLs),
+		InputVideoSeconds: refs.InputVideoSeconds,
+		OutputSeconds:     req.Duration,
+		HasReferenceVideo: len(refs.VideoURLs) > 0,
+	})
+	if err != nil {
+		common.SysErrorf("[VideoGenerate] 视频计费计算失败: model=%s, err=%v", modelName, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "计费配置无效，暂不可用"})
+		return
+	}
+	billingJSON, err := json.Marshal(billing.Snapshot)
+	if err != nil {
+		common.SysErrorf("[VideoGenerate] 计费快照序列化失败: model=%s, err=%v", modelName, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "计费配置无效，暂不可用"})
+		return
+	}
+	common.SysLogf("[VideoGenerate] 计费: model=%s, userID=%d, resolution=%s, hasRefVideo=%v, "+
+		"图=%d(计费%d), 音频=%d, 视频=%d秒, 输出=%d秒, 合计=%.3f",
+		modelName, userID, resolution, billing.Snapshot.HasReferenceVideo,
+		billing.Snapshot.Units.ImageCount, billing.Snapshot.Units.BillableImageCount,
+		billing.Snapshot.Units.AudioCount, billing.Snapshot.Units.InputVideoSeconds,
+		billing.Snapshot.Units.OutputSeconds, billing.Total)
+
+	// 11. 组装供应商适配层所需的平台内部请求（这里装的是签名 URL）。
+	// 分辨率用归一化后的大写形式；供应商侧的特殊写法由适配层转换。
 	internalReq := supplier.VideoGenerateRequest{
 		Model:         modelName,
 		Prompt:        req.Prompt,
 		ImageURLs:     refs.ImageURLs,
 		VideoURLs:     refs.VideoURLs,
 		AudioURLs:     refs.AudioURLs,
-		Resolution:    req.Resolution,
+		Resolution:    resolution,
 		Duration:      req.Duration,
 		Ratio:         req.Ratio,
 		VendorModelID: vendorModel.VendorModelID,
@@ -373,7 +441,7 @@ func VideoGenerate(c *gin.Context) {
 		return
 	}
 
-	// 11. 创建任务。没有扣费，因此不需要事务；幂等键冲突的处理与图像生成一致。
+	// 12. 创建任务并原子扣费；任一步失败整体回滚，不会留下未付款的任务。
 	// 快照落库的是公开请求（file_id），不是带签名 URL 的内部请求。
 	now := time.Now()
 	submitDeadline := now.Add(videoSubmitConfirmWindow)
@@ -387,12 +455,15 @@ func VideoGenerate(c *gin.Context) {
 		Status:         model.StatusProcessing,
 		SubmitDeadline: &submitDeadline,
 		DeadlineAt:     &deadlineAt,
-		Credits:        0, // 计费尚未启用
+		// 视频的数量在提交时全部已知，预扣即终值，因此直接标记为已结算。
+		CreditsSettled: true,
+		SettledCredits: billing.Total,
+		VideoBilling:   model.JSONText(billingJSON),
 		RequestBody:    marshalRequestBodyFor("VideoGenerate", req),
 		IdempotencyKey: idemKey,
 	}
 
-	if err := model.CreateTask(&task); err != nil {
+	if err := model.CreateTaskAndDeduct(&task, billing.Total, videoBillingRemark(billing.Snapshot)); err != nil {
 		if idemKey != nil && model.IsDuplicateKeyError(err) {
 			if existing, lookupErr := model.GetTaskByUserAndIdempotencyKey(userID, *idemKey); lookupErr == nil {
 				common.SysLogf("[VideoGenerate] 幂等键并发冲突，复用已有任务: userID=%d, taskID=%s", userID, existing.TaskID)
@@ -401,12 +472,18 @@ func VideoGenerate(c *gin.Context) {
 			}
 		}
 
+		if errors.Is(err, model.ErrInsufficientCredits) {
+			common.SysErrorf("[VideoGenerate] 积分不足: userID=%d, amount=%.6f", userID, billing.Total)
+			c.JSON(http.StatusPaymentRequired, gin.H{"code": "fail", "message": "积分不足"})
+			return
+		}
+
 		common.SysErrorf("[VideoGenerate] 任务创建失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "fail", "message": "任务创建失败"})
 		return
 	}
 
-	// 12. 构造供应商客户端
+	// 13. 构造供应商客户端
 	s := supplier.NewVideoSupplier(vendor.Name, supplier.Config{
 		BaseURL: vendor.BaseURL,
 		APIKey:  apiKey,
@@ -425,7 +502,7 @@ func VideoGenerate(c *gin.Context) {
 
 	result := s.VideoGenerate(submitCtx, internalReq)
 
-	// 13. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 转终态
+	// 14. 上游明确拒绝受理（4xx、业务失败码、请求没发出去）→ 转终态并退款
 	if result.Code != "success" && result.FailureKind != supplier.FailureUnknown {
 		common.SysErrorf("[VideoGenerate] 供应商明确拒绝: vendor=%s, model=%s, kind=%s",
 			vendor.Name, modelName, result.FailureKind)
@@ -436,7 +513,7 @@ func VideoGenerate(c *gin.Context) {
 		return
 	}
 
-	// 14. 结果不确定（超时、连接中断、响应读不完整）。
+	// 15. 结果不确定（超时、连接中断、响应读不完整）。
 	// 任务保持 processing，由 submit_deadline 兜底；调用方拿到 taskId 后继续轮询。
 	if result.FailureKind == supplier.FailureUnknown {
 		common.SysErrorf("[VideoGenerate] [SUBMIT_UNKNOWN] 提交结果不确定，进入提交确认窗口: taskID=%s, userID=%d, vendor=%s, model=%s",
@@ -449,7 +526,7 @@ func VideoGenerate(c *gin.Context) {
 		return
 	}
 
-	// 15. 提交成功：记录供应商响应并交给对账循环轮询。
+	// 16. 提交成功：记录供应商响应并交给对账循环轮询。
 	// vendor_response 是重启后找回上游任务的唯一线索，写失败要重试并在日志里标出来。
 	vendorRespJSON, err := json.Marshal(result.Data)
 	if err != nil {
@@ -462,10 +539,10 @@ func VideoGenerate(c *gin.Context) {
 
 	common.SysLogf("[VideoGenerate] 任务创建成功: taskId=%s, vendor=%s, model=%s", task.TaskID, vendor.Name, modelName)
 
-	// 16. 立即安排一次轮询；抢不到并发位也无妨，下一轮对账循环会接手。
+	// 17. 立即安排一次轮询；抢不到并发位也无妨，下一轮对账循环会接手。
 	ScheduleTaskPoll(task.TaskID)
 
-	// 17. 返回系统 taskId
+	// 18. 返回系统 taskId
 	c.JSON(http.StatusOK, gin.H{
 		"code":   "success",
 		"taskId": task.TaskID,

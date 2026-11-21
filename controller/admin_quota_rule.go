@@ -166,9 +166,15 @@ func AdminSaveCreditRule(c *gin.Context) {
 	}
 
 	// 验证模型是否存在
-	_, err = model.GetModelByID(modelID)
+	m, err := model.GetModelByID(modelID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "模型不存在"})
+		return
+	}
+	// 视频模型使用独立的 video-credit-rule 接口。允许在这里保存图片规则不会生效，
+	// 只会让管理员误以为已经配置了计费，因此显式拒绝。
+	if m.Type == model.ModelTypeVideo {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "视频模型请使用视频计费规则接口"})
 		return
 	}
 

@@ -201,3 +201,67 @@ export function deleteModelCreditRule(modelId: number) {
     method: 'DELETE',
   })
 }
+
+/** 视频计费的单个分辨率档位 */
+export interface VideoCreditRate {
+  id?: number
+  rule_id?: number
+  /** 输出分辨率档位，统一大写 */
+  resolution: string
+  /** 每个参考视频秒消耗的积分 */
+  input_video_credits_per_second: number
+  /** 不含参考视频时每秒输出消耗的积分 */
+  output_credits_per_second_no_ref: number
+  /** 含参考视频时每秒输出消耗的积分 */
+  output_credits_per_second_with_ref: number
+  created_at?: string
+  updated_at?: string
+}
+
+/** 视频模型计费规则 */
+export interface VideoCreditRule {
+  id: number
+  model_id: number
+  description?: string
+  status: number
+  /** 每张参考图积分 */
+  image_credits_per_item: number
+  /** 每请求免费的前 N 张参考图 */
+  image_free_items: number
+  /** 每个参考音频积分 */
+  audio_credits_per_item: number
+  rates?: VideoCreditRate[]
+  created_at: string
+  updated_at: string
+}
+
+export function getVideoCreditRule(modelId: number) {
+  return request<{ success: boolean; data: VideoCreditRule | null }>(
+    `${BASE}/models/${modelId}/video-credit-rule`,
+  )
+}
+
+export function saveVideoCreditRule(
+  modelId: number,
+  data: {
+    description?: string
+    status?: number
+    image_credits_per_item: number
+    image_free_items: number
+    audio_credits_per_item: number
+    rates: Array<{
+      resolution: string
+      input_video_credits_per_second: number
+      output_credits_per_second_no_ref: number
+      output_credits_per_second_with_ref: number
+    }>
+  },
+) {
+  return request<{ success: boolean; message: string }>(
+    `${BASE}/models/${modelId}/video-credit-rule`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    },
+  )
+}

@@ -81,7 +81,7 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 
 ## 9 失败性质与退款
 
-视频任务按 0 积分创建，退款流程不会产生积分流水。状态机与图像任务一致：只有 `processing` / `completed` / `failed` 三种状态。
+视频任务在提交时按[视频计费设计](billing.md)扣费，失败或取消时全额退还。状态机与图像任务一致：只有 `processing` / `completed` / `failed` 三种状态。
 
 ## 10 配置
 
@@ -94,6 +94,7 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 | 供应商模型 ID | `MiniMax-H3` |
 | 模型类型 | `video` |
 | 端点 | `/v1/videos/generations` |
+| 视频计费规则 | 至少包含一个与上游一致的分辨率档位，见 [视频计费设计](billing.md) |
 
 ## 11 代码与测试
 
@@ -104,4 +105,6 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 | 供应商实现 | `supplier/metaso.go` |
 | 供应商单元测试 | `supplier/metaso_test.go` |
 | 控制器与参考文件解析 | `controller/video.go` |
+| 计费计算 | `controller/video_billing.go` |
+| 计费规则与价目 | `model/video_credit_rule.go` |
 | 任务状态与对账 | `model/task.go`、`controller/image.go` |

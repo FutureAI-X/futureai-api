@@ -142,6 +142,9 @@ func SetRouter(server *gin.Engine) {
 		adminRouter.POST("/models/:id/credit-rule", controller.AdminSaveCreditRule)
 		adminRouter.DELETE("/models/:id/credit-rule", controller.AdminDeleteModelCreditRule)
 
+		adminRouter.GET("/models/:id/video-credit-rule", controller.AdminGetVideoCreditRule)
+		adminRouter.PUT("/models/:id/video-credit-rule", controller.AdminSaveVideoCreditRule)
+
 		adminRouter.PUT("/credit-rules/:id/status", controller.AdminUpdateCreditRuleStatus)
 		adminRouter.DELETE("/credit-rules/:id", controller.AdminDeleteCreditRule)
 

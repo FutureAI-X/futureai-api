@@ -170,7 +170,8 @@ func modelTypeKeys() []string {
 // 计费是 fail-closed 的：未配置规则的模型会返回「暂不可用」，
 // 因此这里必须提前把清单打出来，避免上线后才发现模型不可用。
 //
-// 视频模型当前不走计费规则（任务按 0 积分创建），不参与本检查。
+// 图像模型看 credit_rules，视频模型看 video_credit_rules；两者互斥。
+// 视频规则还要求至少配置一个分辨率档位，否则任何请求都会在匹配费率时失败。
 func warnModelsWithoutCreditRule() {
 	var models []Model
 	if err := DB.Where("status = ?", 1).Find(&models).Error; err != nil {
@@ -181,12 +182,21 @@ func warnModelsWithoutCreditRule() {
 	missing := []string{}
 	checked := 0
 	for _, m := range models {
-		// 视频生成当前按 0 积分创建，不经过计费规则；把它算作漏配会让
-		// 每次启动都误报「调用将被拒绝」。接入视频计费时去掉这个跳过。
+		checked++
+
 		if m.Type == ModelTypeVideo {
+			var count int64
+			if err := DB.Model(&VideoCreditRate{}).
+				Joins("JOIN video_credit_rules ON video_credit_rules.id = video_credit_rates.rule_id").
+				Where("video_credit_rules.model_id = ? AND video_credit_rules.status = ?", m.ID, 1).
+				Count(&count).Error; err != nil {
+				continue
+			}
+			if count == 0 {
+				missing = append(missing, m.Name+"(视频)")
+			}
 			continue
 		}
-		checked++
 
 		var count int64
 		if err := DB.Model(&CreditRule{}).
@@ -200,13 +210,13 @@ func warnModelsWithoutCreditRule() {
 	}
 
 	if len(missing) == 0 {
-		common.SysLogf("[计费] 全部 %d 个启用模型均已配置计费规则（视频模型当前免费，不参与检查）", checked)
+		common.SysLogf("[计费] 全部 %d 个启用模型均已配置计费规则", checked)
 		return
 	}
 
 	common.SysErrorf("[计费] 以下 %d 个启用模型缺少计费规则，调用将被拒绝: %s",
 		len(missing), strings.Join(missing, ", "))
-	common.SysErrorf("[计费] 请在管理后台为上述模型配置计费规则；如需免费，请显式配置一条 0 积分的规则")
+	common.SysErrorf("[计费] 请在管理后台为上述模型配置计费规则；如需免费，请显式配置一条 0 积分的规则（视频模型至少需要一个分辨率档位）")
 }
 
 // uniqueIndexPrechecks 需要在建立唯一索引前排查重复数据的表
@@ -221,6 +231,8 @@ var uniqueIndexPrechecks = []struct {
 	{"vendor_models", "vendor_id, model_id", "供应商-模型关联"},
 	{"model_endpoints", "model_id, endpoint_id", "模型-端点关联"},
 	{"credit_rules", "model_id", "模型积分规则"},
+	{"video_credit_rules", "model_id", "模型视频积分规则"},
+	{"video_credit_rates", "rule_id, resolution", "视频计费分辨率档位"},
 	{"files", "file_id", "文件ID"},
 }
 
@@ -289,6 +301,8 @@ func migrateDB() error {
 		&CreditRule{},
 		&CreditRuleItem{},
 		&CreditRuleCondition{},
+		&VideoCreditRule{},
+		&VideoCreditRate{},
 		&CreditLog{},
 		&File{},
 		&App{},
@@ -471,6 +485,11 @@ var creditScaleColumns = []struct{ table, column string }{
 	{"credit_rules", "image_input_credits_per_mtok"},
 	{"credit_rules", "image_output_credits_per_mtok"},
 	{"credit_rule_items", "credits"},
+	{"video_credit_rules", "image_credits_per_item"},
+	{"video_credit_rules", "audio_credits_per_item"},
+	{"video_credit_rates", "input_video_credits_per_second"},
+	{"video_credit_rates", "output_credits_per_second_no_ref"},
+	{"video_credit_rates", "output_credits_per_second_with_ref"},
 }
 
 // ensureCreditColumnScale 把积分列的标度补齐到 CreditStorageScale。
@@ -612,6 +631,29 @@ func addTableComments() error {
 		`COMMENT ON COLUMN credit_rule_conditions.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN credit_rule_conditions.updated_at IS '记录最后更新时间'`,
 
+		// video_credit_rules 表注释
+		`COMMENT ON TABLE video_credit_rules IS '视频生成计费规则表，每个视频模型一条'`,
+		`COMMENT ON COLUMN video_credit_rules.id IS '规则唯一标识，自增主键'`,
+		`COMMENT ON COLUMN video_credit_rules.model_id IS '关联的模型ID，关联 models 表，唯一'`,
+		`COMMENT ON COLUMN video_credit_rules.description IS '规则描述'`,
+		`COMMENT ON COLUMN video_credit_rules.status IS '规则状态：1=启用, 2=禁用'`,
+		`COMMENT ON COLUMN video_credit_rules.image_credits_per_item IS '每张参考图消耗的积分，0=免费'`,
+		`COMMENT ON COLUMN video_credit_rules.image_free_items IS '每次请求免费的前N张参考图，0=不免费'`,
+		`COMMENT ON COLUMN video_credit_rules.audio_credits_per_item IS '每个参考音频消耗的积分，0=免费'`,
+		`COMMENT ON COLUMN video_credit_rules.created_at IS '记录创建时间'`,
+		`COMMENT ON COLUMN video_credit_rules.updated_at IS '记录最后更新时间'`,
+
+		// video_credit_rates 表注释
+		`COMMENT ON TABLE video_credit_rates IS '视频计费价目表，按输出分辨率分档'`,
+		`COMMENT ON COLUMN video_credit_rates.id IS '档位唯一标识，自增主键'`,
+		`COMMENT ON COLUMN video_credit_rates.rule_id IS '关联的视频计费规则ID'`,
+		`COMMENT ON COLUMN video_credit_rates.resolution IS '输出分辨率档位，统一大写'`,
+		`COMMENT ON COLUMN video_credit_rates.input_video_credits_per_second IS '每参考视频秒消耗的积分'`,
+		`COMMENT ON COLUMN video_credit_rates.output_credits_per_second_no_ref IS '不含参考视频时每秒输出消耗的积分'`,
+		`COMMENT ON COLUMN video_credit_rates.output_credits_per_second_with_ref IS '含参考视频时每秒输出消耗的积分'`,
+		`COMMENT ON COLUMN video_credit_rates.created_at IS '记录创建时间'`,
+		`COMMENT ON COLUMN video_credit_rates.updated_at IS '记录最后更新时间'`,
+
 		// credit_logs 表注释
 		`COMMENT ON TABLE credit_logs IS '积分日志表，记录积分扣除和退还'`,
 		`COMMENT ON COLUMN credit_logs.id IS '日志唯一标识，自增主键'`,
@@ -656,6 +698,7 @@ func addTableComments() error {
 		`COMMENT ON COLUMN tasks.usage_image_input_tokens IS '实际图片输入 token'`,
 		`COMMENT ON COLUMN tasks.usage_image_output_tokens IS '实际图片输出 token'`,
 		`COMMENT ON COLUMN tasks.billing_snapshot IS 'per_token 提交时的计费快照 JSON'`,
+		`COMMENT ON COLUMN tasks.video_billing IS '视频任务提交时的计费明细 JSON'`,
 
 		// apps 表注释
 		`COMMENT ON TABLE apps IS '客户端应用表，供升级检查接口按标识定位应用'`,

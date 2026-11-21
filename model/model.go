@@ -142,6 +142,13 @@ func GetPricingModels() ([]map[string]interface{}, error) {
 		ruleMap[rules[i].ModelID] = &rules[i]
 	}
 
+	// 视频模型的价目规则独立于 credit_rules，一并带出供客户端预估价格。
+	videoRules, _ := GetEnabledVideoCreditRules()
+	videoRuleMap := make(map[int]*VideoCreditRule, len(videoRules))
+	for i := range videoRules {
+		videoRuleMap[videoRules[i].ModelID] = &videoRules[i]
+	}
+
 	// 构建返回数据
 	result := make([]map[string]interface{}, len(models))
 	for i, m := range models {
@@ -156,6 +163,9 @@ func GetPricingModels() ([]map[string]interface{}, error) {
 		}
 		if rule, ok := ruleMap[m.ID]; ok {
 			item["credit_rule"] = rule
+		}
+		if rule, ok := videoRuleMap[m.ID]; ok {
+			item["video_credit_rule"] = rule
 		}
 		result[i] = item
 	}

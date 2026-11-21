@@ -29,6 +29,7 @@ import {
 import { ConfirmDialog } from '../../components/admin/ConfirmDialog'
 import { CreditRuleManager } from '../../components/admin/CreditRuleManager'
 import { ModelEndpointManager } from '../../components/admin/ModelEndpointManager'
+import { VideoCreditRuleManager } from '../../components/admin/VideoCreditRuleManager'
 
 const STATUS_CONFIG: Record<number, { label: string; className: string }> = {
   1: { label: '正常', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
@@ -60,6 +61,8 @@ export function AdminModels() {
   const [deleteRow, setDeleteRow] = useState<AdminModel | null>(null)
   const [creditOpen, setCreditOpen] = useState(false)
   const [creditRow, setCreditRow] = useState<AdminModel | null>(null)
+  const [videoCreditOpen, setVideoCreditOpen] = useState(false)
+  const [videoCreditRow, setVideoCreditRow] = useState<AdminModel | null>(null)
   const [endpointOpen, setEndpointOpen] = useState(false)
   const [endpointRow, setEndpointRow] = useState<AdminModel | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
@@ -450,7 +453,17 @@ export function AdminModels() {
                         <button onClick={() => openEdit(m)} className='hover:bg-muted inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors'>
                           <Pencil className='size-3.5' /> 编辑
                         </button>
-                        <button onClick={() => { setCreditRow(m); setCreditOpen(true) }} className='hover:bg-amber-500/10 text-amber-600 dark:text-amber-400 inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors'>
+                        <button
+                          onClick={() => {
+                            if (m.type === 'video') {
+                              setVideoCreditRow(m)
+                              setVideoCreditOpen(true)
+                            } else {
+                              setCreditRow(m)
+                              setCreditOpen(true)
+                            }
+                          }}
+                          className='hover:bg-amber-500/10 text-amber-600 dark:text-amber-400 inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors'>
                           <Coins className='size-3.5' /> 积分
                         </button>
                         <button onClick={() => { setEndpointRow(m); setEndpointOpen(true) }} className='hover:bg-blue-500/10 text-blue-600 dark:text-blue-400 inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors'>
@@ -602,6 +615,15 @@ export function AdminModels() {
           onOpenChange={setCreditOpen}
           modelId={creditRow.id}
           modelName={creditRow.name}
+        />
+      )}
+
+      {videoCreditRow && (
+        <VideoCreditRuleManager
+          open={videoCreditOpen}
+          onOpenChange={setVideoCreditOpen}
+          modelId={videoCreditRow.id}
+          modelName={videoCreditRow.name}
         />
       )}
 

@@ -89,6 +89,10 @@ type Task struct {
 	UsageImageInputTokens  int      `json:"usage_image_input_tokens,omitempty" gorm:"default:0"`
 	UsageImageOutputTokens int      `json:"usage_image_output_tokens,omitempty" gorm:"default:0"`
 	BillingSnapshot        JSONText `json:"billing_snapshot,omitempty" gorm:"type:jsonb"`
+	// VideoBilling 视频任务提交时的计费明细（费率、数量/秒数、各项金额）。
+	// 刻意与 BillingSnapshot 分列：后者是 per_token 的专属形状，对账循环会按
+	// TokenBillingSnapshot 解析，混用会误触发 token 结算分支。
+	VideoBilling JSONText `json:"video_billing,omitempty" gorm:"type:jsonb"`
 
 	// FileID 成图在 files 表中的文件 ID。
 	// 转存失败时为空（尽力而为），原始上游 URL 仍保存在 QueryResponse 的 data.url 中。
