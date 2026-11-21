@@ -50,6 +50,18 @@ const DEFAULT_PARAM_SPEC = {
   ],
 }
 
+// 视频模型的起始模板。参考媒体默认不开放，管理员按需补充 ref_images / ref_audios / ref_videos。
+// 分辨率档位需要与计费价目表保持一致，否则保存任一边时都会被服务端拒绝。
+const DEFAULT_VIDEO_PARAM_SPEC = {
+  version: 1,
+  params: [
+    { key: 'prompt', widget: 'textarea', required: true, max_length: 2000 },
+    { key: 'resolution', widget: 'segmented', required: true, options: ['480P', '768P', '2K'] },
+    { key: 'duration', widget: 'number', required: true, min: 4, max: 15, step: 1, integer: true },
+    { key: 'ratio', widget: 'segmented', required: true, options: ['16:9', '9:16', 'adaptive'] },
+  ],
+}
+
 export function AdminModels() {
   const [models, setModels] = useState<AdminModel[]>([])
   const [loading, setLoading] = useState(true)
@@ -218,7 +230,8 @@ export function AdminModels() {
 
   const openParam = (m: AdminModel) => {
     setParamRow(m)
-    setParamText(JSON.stringify(m.param_spec ?? DEFAULT_PARAM_SPEC, null, 2))
+    const fallback = m.type === 'video' ? DEFAULT_VIDEO_PARAM_SPEC : DEFAULT_PARAM_SPEC
+    setParamText(JSON.stringify(m.param_spec ?? fallback, null, 2))
     setParamError('')
     setParamOpen(true)
   }
@@ -469,7 +482,7 @@ export function AdminModels() {
                         <button onClick={() => { setEndpointRow(m); setEndpointOpen(true) }} className='hover:bg-blue-500/10 text-blue-600 dark:text-blue-400 inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors'>
                           <Link2 className='size-3.5' /> 端点
                         </button>
-                        {m.type === 'image' && (
+                        {(m.type === 'image' || m.type === 'video') && (
                           <button onClick={() => openParam(m)}
                             className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
                               m.param_spec_valid === false
@@ -579,7 +592,7 @@ export function AdminModels() {
             <div className='min-h-0 flex-1 space-y-3 overflow-auto p-6'>
               {paramError && <div className='bg-destructive/10 text-destructive rounded-lg px-4 py-3 text-sm'>{paramError}</div>}
               <p className='text-muted-foreground text-xs'>
-                保存前服务端会校验 JSON 结构。当前支持 textarea、segmented、ratio_size、pixel_size、ref_images。
+                保存前服务端会校验 JSON 结构。图像模型支持 textarea、segmented、ratio_size、pixel_size、ref_images；视频模型支持 textarea、segmented、number、ref_images、ref_audios、ref_videos。
               </p>
               <textarea
                 value={paramText}

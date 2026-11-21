@@ -14,6 +14,7 @@ import (
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/model"
 	"github.com/FutureAI-X/futureai-api/storage"
+	"github.com/FutureAI-X/futureai-api/videoparam"
 	"github.com/gin-gonic/gin"
 )
 
@@ -24,21 +25,22 @@ const (
 	mediaTTL        = 6 * time.Hour
 	mediaQuotaBytes = int64(10) << 30 // 10 GiB / 用户
 
-	maxImageBytes = int64(30) << 20
-	maxAudioBytes = int64(15) << 20
-	maxVideoBytes = int64(200) << 20
+	// 全局硬上限与 videoparam 共用同一组常量：模型规格只能是它的子集。
+	// 改动这里会同时影响上传门槛与规格元校验，避免两边口径漂移。
+	maxImageBytes = videoparam.MaxImageBytes
+	maxAudioBytes = videoparam.MaxAudioBytes
+	maxVideoBytes = videoparam.MaxVideoBytes
 
-	mediaMinDimension = 300
-	mediaMaxDimension = 5500
-	mediaMinAspect    = 0.4
-	mediaMaxAspect    = 2.5
+	mediaMinDimension = videoparam.MinDimension
+	mediaMaxDimension = videoparam.MaxDimension
+	mediaMinAspect    = videoparam.MinAspect
+	mediaMaxAspect    = videoparam.MaxAspect
 
-	mediaMinDurationMS = int64(2) * 1000
-	mediaMaxDurationMS = int64(30) * 1000
+	mediaMinDurationMS = int64(videoparam.MinDurationSeconds) * 1000
+	mediaMaxDurationMS = int64(videoparam.MaxDurationSeconds) * 1000
 
-	// 23.976 是常见电影帧率，按 23.9 作为下界兼容它。
-	mediaMinFPS = 23.9
-	mediaMaxFPS = 60.0
+	mediaMinFPS = videoparam.MinFPS
+	mediaMaxFPS = videoparam.MaxFPS
 
 	mediaStagingPrefix = "staging/"
 	referenceKeyPrefix = "reference/"
@@ -446,6 +448,12 @@ func FileUploadComplete(c *gin.Context) {
 }
 
 func fileUploadResponse(f *model.File) gin.H {
+	// probe 把服务端探测结果原样下发，客户端不必内置 ffprobe 就能做
+	// 宽高比、时长、帧率与编码校验。字段均为非敏感元数据。
+	var meta uploadedMediaMeta
+	if strings.TrimSpace(f.MediaMeta) != "" {
+		_ = json.Unmarshal([]byte(f.MediaMeta), &meta)
+	}
 	return gin.H{
 		"file_id":      f.FileID,
 		"media_type":   f.MediaType,
@@ -455,6 +463,14 @@ func fileUploadResponse(f *model.File) gin.H {
 		"width":        f.Width,
 		"height":       f.Height,
 		"expires_at":   f.ExpiresAt,
+		"probe": gin.H{
+			"fps":          meta.FPS,
+			"video_codecs": meta.VideoCodecs,
+			"audio_codecs": meta.AudioCodecs,
+			"format":       meta.Format,
+			"has_video":    meta.HasVideo,
+			"has_audio":    meta.HasAudio,
+		},
 	}
 }
 
@@ -590,7 +606,8 @@ func validateAudioProbe(p *storage.MediaProbe) error {
 		return errors.New("未检测到音频流")
 	}
 	if p.DurationMS < mediaMinDurationMS || p.DurationMS > mediaMaxDurationMS {
-		return fmt.Errorf("音频时长需在 2-30 秒，当前 %.2f 秒", float64(p.DurationMS)/1000)
+		return fmt.Errorf("音频时长需在 %d-%d 秒，当前 %.2f 秒",
+			videoparam.MinDurationSeconds, videoparam.MaxDurationSeconds, float64(p.DurationMS)/1000)
 	}
 	format := strings.ToLower(strings.TrimSpace(p.Format))
 	if format != "" && !strings.Contains(format, "wav") && !strings.Contains(format, "mp3") {
@@ -612,7 +629,8 @@ func validateVideoProbe(p *storage.MediaProbe) error {
 		return fmt.Errorf("视频宽高比需在 %.1f-%.1f", mediaMinAspect, mediaMaxAspect)
 	}
 	if p.DurationMS < mediaMinDurationMS || p.DurationMS > mediaMaxDurationMS {
-		return fmt.Errorf("视频时长需在 2-30 秒，当前 %.2f 秒", float64(p.DurationMS)/1000)
+		return fmt.Errorf("视频时长需在 %d-%d 秒，当前 %.2f 秒",
+			videoparam.MinDurationSeconds, videoparam.MaxDurationSeconds, float64(p.DurationMS)/1000)
 	}
 	if p.FPS < mediaMinFPS || p.FPS > mediaMaxFPS {
 		return fmt.Errorf("视频帧率需在 %.1f-%.0f 帧/秒，当前 %.2f", mediaMinFPS, mediaMaxFPS, p.FPS)

@@ -25,9 +25,27 @@ Content-Type: application/json
   "duration_ms": 0,
   "width": 1024,
   "height": 1024,
-  "expires_at": "2026-11-02T16:25:00Z"
+  "expires_at": "2026-11-02T16:25:00Z",
+  "probe": {
+    "fps": 0,
+    "video_codecs": null,
+    "audio_codecs": null,
+    "format": "png",
+    "has_video": false,
+    "has_audio": false
+  }
 }
 ```
+
+`probe` 是服务端探测结果的透传，供客户端在提交生成前做本地校验（宽高比、时长、帧率、编码），无需内置 ffprobe：
+
+| 字段 | 说明 |
+|---|---|
+| `fps` | 视频帧率，取 `avg_frame_rate`，缺失时取 `r_frame_rate` |
+| `video_codecs` | 视频流编码列表，如 `["h264"]` |
+| `audio_codecs` | 音频流编码列表，如 `["aac"]` |
+| `format` | 探测到的容器/格式描述 |
+| `has_video` / `has_audio` | 是否检测到视频流/音频流 |
 
 ## 3 处理逻辑
 

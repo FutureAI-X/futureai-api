@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/videoparam"
 )
 
 func validVideoGenerateRequest() videoGenerateRequest {
@@ -37,6 +38,34 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 		{"duration 为 0", func(r *videoGenerateRequest) { r.Duration = 0 }, "duration"},
 		{"duration 为负", func(r *videoGenerateRequest) { r.Duration = -1 }, "duration"},
 		{"缺少 ratio", func(r *videoGenerateRequest) { r.Ratio = "" }, "ratio"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := validVideoGenerateRequest()
+			tc.mutate(&req)
+			err := req.validate()
+			if err == nil {
+				t.Fatalf("应当返回错误，实际通过")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("错误信息 = %q，应包含 %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestVideoGenerateRequestValidateMediaIDs(t *testing.T) {
+	valid := validVideoGenerateRequest()
+	if err := valid.validateMediaIDs(); err != nil {
+		t.Fatalf("合法请求不应报错: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*videoGenerateRequest)
+		want   string
+	}{
 		{"image_ids 空 file_id", func(r *videoGenerateRequest) {
 			r.ImageIDs = []string{"  "}
 		}, "空的 file_id"},
@@ -55,7 +84,7 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := validVideoGenerateRequest()
 			tc.mutate(&req)
-			err := req.validate()
+			err := req.validateMediaIDs()
 			if err == nil {
 				t.Fatalf("应当返回错误，实际通过")
 			}
@@ -75,6 +104,28 @@ func TestVideoGenerateRequestValidateAllowsTextOnly(t *testing.T) {
 
 	if err := req.validate(); err != nil {
 		t.Fatalf("纯文生视频不应报错: %v", err)
+	}
+}
+
+func TestClearUnsupportedVideoMedia(t *testing.T) {
+	zero := 0
+	one := 1
+	spec := &videoparam.Spec{Params: []videoparam.Param{
+		{Key: "images", Path: "image_ids", Widget: "ref_images", MaxCount: &zero},
+		{Key: "videos", Path: "video_ids", Widget: "ref_videos", MaxCount: &one},
+	}}
+
+	req := validVideoGenerateRequest()
+	clearUnsupportedVideoMedia(&req, spec)
+
+	if len(req.ImageIDs) != 0 {
+		t.Errorf("max_count=0 的图片字段应被清空: %v", req.ImageIDs)
+	}
+	if len(req.VideoIDs) != 1 {
+		t.Errorf("支持的视频字段不应被清空: %v", req.VideoIDs)
+	}
+	if len(req.AudioIDs) != 0 {
+		t.Errorf("规格中不存在的音频字段应被清空: %v", req.AudioIDs)
 	}
 }
 

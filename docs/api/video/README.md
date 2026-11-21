@@ -12,6 +12,8 @@
 
 请求体只接受下表字段。其他字段会被忽略。`model`、`prompt`、`resolution`、`duration`、`ratio` 必填，三个媒体数组可以为空。
 
+具体取值范围由模型的 `param_spec` 决定（分辨率枚举、时长范围、比例枚举、prompt 长度等），可通过 `GET /v1/models` 获取。完整结构见 [视频参数规格](../../design/video/params/README.md)。规格缺失或非法时请求返回 503，错误码为 `PARAM_SPEC_MISSING` / `PARAM_SPEC_INVALID`。参数不满足规格时返回 400，响应带 `error_code` 与 `param`，结构与图像生成一致。
+
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `model` | string | 平台模型名 |
@@ -36,6 +38,8 @@
 - 视频参考文件有可用的时长信息。
 
 服务端把 `file_id` 解析成最长 2 小时有效的短期签名 URL 后交给上游。签名 URL 不会返回给客户端，也不会写入任务快照。
+
+模型的 `param_spec` 还会限制参考媒体的数量、MIME、单文件大小、宽高、宽高比、时长、总时长、帧率和编码。模型不支持的媒体类型（`max_count=0` 或规格中没有对应控件）会被静默忽略。
 
 ## 4 请求示例
 

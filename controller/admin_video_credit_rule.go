@@ -2,11 +2,15 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/videoparam"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -110,6 +114,24 @@ func AdminSaveVideoCreditRule(c *gin.Context) {
 		return
 	}
 
+	// 参数规格已经配置时，分辨率集合必须与价目表一致。规格尚未配置则先放行：
+	// 管理员通常先保存规格，再配置价目；规格保存时会反向校验。
+	if raw := strings.TrimSpace(string(m.ParamSpec)); raw != "" && raw != "null" {
+		spec, err := videoparam.ParseSpec(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "模型参数规格无效，请先修复参数配置"})
+			return
+		}
+		rateResolutions := make([]string, len(rule.Rates))
+		for i := range rule.Rates {
+			rateResolutions[i] = rule.Rates[i].Resolution
+		}
+		if err := compareVideoResolutionSets(spec.ResolutionOptions(), rateResolutions); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+	}
+
 	if err := model.SaveVideoCreditRule(rule); err != nil {
 		common.SysErrorf("[AdminSaveVideoCreditRule] 保存失败: modelID=%d, err=%v", modelID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存视频计费规则失败"})
@@ -117,4 +139,59 @@ func AdminSaveVideoCreditRule(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "视频计费规则保存成功", "data": rule})
+}
+
+// ensureVideoResolutionConsistency 校验参数规格与计费价目表是否覆盖同一组分辨率。
+// 规则尚未配置时直接放行。
+func ensureVideoResolutionConsistency(modelID int, specResolutions []string) error {
+	rule, err := model.GetVideoCreditRuleByModelIDForAdmin(modelID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	rateResolutions := make([]string, len(rule.Rates))
+	for i := range rule.Rates {
+		rateResolutions[i] = rule.Rates[i].Resolution
+	}
+	return compareVideoResolutionSets(specResolutions, rateResolutions)
+}
+
+// compareVideoResolutionSets 对比两组分辨率档位（大小写不敏感）。
+func compareVideoResolutionSets(specResolutions, rateResolutions []string) error {
+	specSet := make(map[string]bool, len(specResolutions))
+	for _, r := range specResolutions {
+		specSet[videoparam.NormalizeResolution(r)] = true
+	}
+	rateSet := make(map[string]bool, len(rateResolutions))
+	for _, r := range rateResolutions {
+		rateSet[videoparam.NormalizeResolution(r)] = true
+	}
+
+	var missingRates, missingSpec []string
+	for r := range specSet {
+		if !rateSet[r] {
+			missingRates = append(missingRates, r)
+		}
+	}
+	for r := range rateSet {
+		if !specSet[r] {
+			missingSpec = append(missingSpec, r)
+		}
+	}
+	if len(missingRates) == 0 && len(missingSpec) == 0 {
+		return nil
+	}
+
+	sort.Strings(missingRates)
+	sort.Strings(missingSpec)
+	parts := make([]string, 0, 2)
+	if len(missingRates) > 0 {
+		parts = append(parts, "计费价目缺少档位："+strings.Join(missingRates, "、"))
+	}
+	if len(missingSpec) > 0 {
+		parts = append(parts, "参数规格缺少档位："+strings.Join(missingSpec, "、"))
+	}
+	return fmt.Errorf("分辨率档位不一致（%s）", strings.Join(parts, "；"))
 }

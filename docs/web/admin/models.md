@@ -12,11 +12,11 @@
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `param_spec` | object 或 null | 图像模型的参数规格；未配置为 null |
-| `param_spec_valid` | boolean | 已配置且通过元校验时为 true |
+| `param_spec` | object 或 null | 图像或视频模型的参数规格；未配置为 null |
+| `param_spec_valid` | boolean | 已配置且通过对应类型的元校验时为 true |
 | `sort_order` | integer 或 null | 手动排序值；null 表示未手动排序 |
 
-`param_spec` 的结构见 [参数规格文档](../../design/image/params/README.md)。
+`param_spec` 的结构：图像模型见 [图像参数规格](../../design/image/params/README.md)，视频模型见 [视频参数规格](../../design/video/params/README.md)。
 
 列表按 `sort_order`、开发者、模型名、ID 排序；未手动排序的模型排在已排序模型之后。新建模型会追加到当前顺序的末尾（创建时先固化现有模型的当前顺序）。
 
@@ -64,6 +64,9 @@
 ```
 
 - `param_spec` 为 `null` 时清除配置；
-- 仅图像模型可调用；
+- 仅图像或视频模型可调用；
 - 保存前执行元校验，结构或取值不合法时返回 400，`message` 为具体原因；
-- 当前支持 `textarea`、`segmented`、`ratio_size`、`pixel_size`、`ref_images`。
+- 图像模型支持 `textarea`、`segmented`、`ratio_size`、`pixel_size`、`ref_images`；
+- 视频模型支持 `textarea`、`segmented`、`number`、`ref_images`、`ref_audios`、`ref_videos`。
+
+视频模型的分辨率同时出现在参数规格与计费价目表中。保存任一边时，服务端会要求两边的分辨率集合一致；不一致返回 400 并列出缺少的档位。

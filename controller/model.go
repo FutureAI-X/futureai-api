@@ -33,7 +33,7 @@ func ListModels(c *gin.Context) {
 			"owned_by": m.Owner,
 			"type":     m.Type,
 		}
-		if m.Type == model.ModelTypeImage {
+		if m.Type == model.ModelTypeImage || m.Type == model.ModelTypeVideo {
 			if strings.TrimSpace(string(m.ParamSpec)) == "" {
 				item["param_spec"] = nil
 			} else {

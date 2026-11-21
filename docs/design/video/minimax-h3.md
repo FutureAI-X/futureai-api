@@ -94,6 +94,7 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 | 供应商模型 ID | `MiniMax-H3` |
 | 模型类型 | `video` |
 | 端点 | `/v1/videos/generations` |
+| 参数规格 | 通过管理端 `param-spec` 配置，见 [视频参数规格](params/README.md) |
 | 视频计费规则 | 至少包含一个与上游一致的分辨率档位，见 [视频计费设计](billing.md) |
 
 ## 11 代码与测试
@@ -107,4 +108,5 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 | 控制器与参考文件解析 | `controller/video.go` |
 | 计费计算 | `controller/video_billing.go` |
 | 计费规则与价目 | `model/video_credit_rule.go` |
+| 参数规格解析与校验 | `videoparam/` |
 | 任务状态与对账 | `model/task.go`、`controller/image.go` |

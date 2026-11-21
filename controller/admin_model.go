@@ -9,6 +9,7 @@ import (
 	"github.com/FutureAI-X/futureai-api/common"
 	"github.com/FutureAI-X/futureai-api/imageparam"
 	"github.com/FutureAI-X/futureai-api/model"
+	"github.com/FutureAI-X/futureai-api/videoparam"
 	"github.com/gin-gonic/gin"
 )
 
@@ -36,7 +37,12 @@ func AdminGetModels(c *gin.Context) {
 
 	items := make([]modelResponse, len(models))
 	for i, m := range models {
-		_, specErr := imageparam.ParseSpec(string(m.ParamSpec))
+		var specErr error
+		if m.Type == model.ModelTypeVideo {
+			_, specErr = videoparam.ParseSpec(string(m.ParamSpec))
+		} else {
+			_, specErr = imageparam.ParseSpec(string(m.ParamSpec))
+		}
 		items[i] = modelResponse{
 			ID:             m.ID,
 			Name:           m.Name,
@@ -220,7 +226,7 @@ func AdminUpdateModel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "模型更新成功"})
 }
 
-// AdminUpdateModelParamSpec 更新图像模型的参数规格。
+// AdminUpdateModelParamSpec 更新图像或视频模型的参数规格。
 func AdminUpdateModelParamSpec(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -233,8 +239,8 @@ func AdminUpdateModelParamSpec(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "模型不存在"})
 		return
 	}
-	if m.Type != model.ModelTypeImage {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "仅图像模型支持参数配置"})
+	if m.Type != model.ModelTypeImage && m.Type != model.ModelTypeVideo {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "仅图像或视频模型支持参数配置"})
 		return
 	}
 
@@ -261,9 +267,24 @@ func AdminUpdateModelParamSpec(c *gin.Context) {
 		return
 	}
 
-	if _, err := imageparam.ParseSpec(raw); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
-		return
+	switch m.Type {
+	case model.ModelTypeVideo:
+		spec, err := videoparam.ParseSpec(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		// 分辨率同时出现在参数规格与计费价目表里，两边必须一致，
+		// 否则客户端展示的选项可能提交后被计费拒绝（或反之）。
+		if err := ensureVideoResolutionConsistency(m.ID, spec.ResolutionOptions()); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+	default:
+		if _, err := imageparam.ParseSpec(raw); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	if err := model.UpdateModelParamSpec(m.ID, &raw); err != nil {
 		common.SysErrorf("[AdminUpdateModelParamSpec] 保存规格失败: modelID=%d, err=%v", m.ID, err)
