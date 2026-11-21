@@ -32,14 +32,15 @@ const (
 // videoGenerateRequest 视频生成端点的公开请求。
 //
 // 参考素材只接受平台 file_id：客户端先调 /v1/files/upload/complete 拿到
-// file_id，再填进 images/videos/audios。外部 URL 一律拒绝。
-// 顶层其他字段由 encoding/json 忽略。
+// file_id，再填进 image_ids/video_ids/audio_ids。字段名与图像生成端点的
+// image_ids 保持一致，_ids 后缀明确表示这里是文件标识而不是 URL；
+// 外部 URL 一律拒绝。顶层其他字段由 encoding/json 忽略。
 type videoGenerateRequest struct {
 	Model      string   `json:"model"`
 	Prompt     string   `json:"prompt"`
-	Images     []string `json:"images"`
-	Videos     []string `json:"videos"`
-	Audios     []string `json:"audios"`
+	ImageIDs   []string `json:"image_ids"`
+	VideoIDs   []string `json:"video_ids"`
+	AudioIDs   []string `json:"audio_ids"`
 	Resolution string   `json:"resolution"`
 	Duration   int      `json:"duration"`
 	Ratio      string   `json:"ratio"`
@@ -67,9 +68,9 @@ func (r *videoGenerateRequest) validate() error {
 		name string
 		ids  []string
 	}{
-		{"images", r.Images},
-		{"videos", r.Videos},
-		{"audios", r.Audios},
+		{"image_ids", r.ImageIDs},
+		{"video_ids", r.VideoIDs},
+		{"audio_ids", r.AudioIDs},
 	}
 	for _, group := range groups {
 		for _, id := range group.ids {
@@ -100,9 +101,9 @@ type videoReferenceError struct {
 func (e *videoReferenceError) Error() string { return e.message }
 
 type resolvedVideoReferences struct {
-	Images []string
-	Videos []string
-	Audios []string
+	ImageURLs []string
+	VideoURLs []string
+	AudioURLs []string
 }
 
 // dedupeVideoFileIDs 去重并保持首次出现顺序；空串在 validate 阶段已被拒绝。
@@ -195,20 +196,20 @@ func resolveVideoReferences(ctx context.Context, userID int, req *videoGenerateR
 		return urls, nil
 	}
 
-	images, err := resolve(req.Images, model.FileMediaTypeImage, "images")
+	images, err := resolve(req.ImageIDs, model.FileMediaTypeImage, "image_ids")
 	if err != nil {
 		return nil, err
 	}
-	videos, err := resolve(req.Videos, model.FileMediaTypeVideo, "videos")
+	videos, err := resolve(req.VideoIDs, model.FileMediaTypeVideo, "video_ids")
 	if err != nil {
 		return nil, err
 	}
-	audios, err := resolve(req.Audios, model.FileMediaTypeAudio, "audios")
+	audios, err := resolve(req.AudioIDs, model.FileMediaTypeAudio, "audio_ids")
 	if err != nil {
 		return nil, err
 	}
 
-	return &resolvedVideoReferences{Images: images, Videos: videos, Audios: audios}, nil
+	return &resolvedVideoReferences{ImageURLs: images, VideoURLs: videos, AudioURLs: audios}, nil
 }
 
 // VideoGenerate 视频生成端点
@@ -358,9 +359,9 @@ func VideoGenerate(c *gin.Context) {
 	internalReq := supplier.VideoGenerateRequest{
 		Model:         modelName,
 		Prompt:        req.Prompt,
-		Images:        refs.Images,
-		Videos:        refs.Videos,
-		Audios:        refs.Audios,
+		ImageURLs:     refs.ImageURLs,
+		VideoURLs:     refs.VideoURLs,
+		AudioURLs:     refs.AudioURLs,
 		Resolution:    req.Resolution,
 		Duration:      req.Duration,
 		Ratio:         req.Ratio,

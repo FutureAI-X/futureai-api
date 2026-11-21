@@ -26,7 +26,7 @@ func newMetaso(cfg Config) *metaso {
 }
 
 // Metaso 内容项类型。这是供应商侧的上游格式，只在本适配层使用；
-// 平台公开契约是 prompt + images/videos/audios 三个数组。
+// 平台公开契约是 prompt + image_ids/video_ids/audio_ids 三个数组。
 const (
 	metasoContentTypeText  = "text"
 	metasoContentTypeImage = "image_url"
@@ -65,27 +65,27 @@ type metasoVideoRequest struct {
 // 平台侧是 prompt + 三个 URL 数组；这里按 Metaso 的 content 格式组装：
 // text → images → videos → audios，并按数组类型补默认 role。
 func buildVideoRequest(req VideoGenerateRequest) metasoVideoRequest {
-	content := make([]metasoContentItem, 0, 1+len(req.Images)+len(req.Videos)+len(req.Audios))
+	content := make([]metasoContentItem, 0, 1+len(req.ImageURLs)+len(req.VideoURLs)+len(req.AudioURLs))
 
 	content = append(content, metasoContentItem{
 		Type: metasoContentTypeText,
 		Text: req.Prompt,
 	})
-	for _, u := range req.Images {
+	for _, u := range req.ImageURLs {
 		content = append(content, metasoContentItem{
 			Type:     metasoContentTypeImage,
 			ImageURL: &metasoContentURL{URL: u},
 			Role:     "reference_image",
 		})
 	}
-	for _, u := range req.Videos {
+	for _, u := range req.VideoURLs {
 		content = append(content, metasoContentItem{
 			Type:     metasoContentTypeVideo,
 			VideoURL: &metasoContentURL{URL: u},
 			Role:     "reference_video",
 		})
 	}
-	for _, u := range req.Audios {
+	for _, u := range req.AudioURLs {
 		content = append(content, metasoContentItem{
 			Type:     metasoContentTypeAudio,
 			AudioURL: &metasoContentURL{URL: u},

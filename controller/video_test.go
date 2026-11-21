@@ -11,9 +11,9 @@ func validVideoGenerateRequest() videoGenerateRequest {
 	return videoGenerateRequest{
 		Model:      "MiniMax-H3",
 		Prompt:     "a cat walking",
-		Images:     []string{"file_image1.png"},
-		Videos:     []string{"file_video1.mp4"},
-		Audios:     []string{"file_audio1.mp3"},
+		ImageIDs:   []string{"file_image1.png"},
+		VideoIDs:   []string{"file_video1.mp4"},
+		AudioIDs:   []string{"file_audio1.mp3"},
 		Resolution: "2K",
 		Duration:   5,
 		Ratio:      "adaptive",
@@ -37,17 +37,17 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 		{"duration 为 0", func(r *videoGenerateRequest) { r.Duration = 0 }, "duration"},
 		{"duration 为负", func(r *videoGenerateRequest) { r.Duration = -1 }, "duration"},
 		{"缺少 ratio", func(r *videoGenerateRequest) { r.Ratio = "" }, "ratio"},
-		{"images 空 file_id", func(r *videoGenerateRequest) {
-			r.Images = []string{"  "}
+		{"image_ids 空 file_id", func(r *videoGenerateRequest) {
+			r.ImageIDs = []string{"  "}
 		}, "空的 file_id"},
-		{"videos 传 URL", func(r *videoGenerateRequest) {
-			r.Videos = []string{"https://example.com/a.mp4"}
+		{"video_ids 传 URL", func(r *videoGenerateRequest) {
+			r.VideoIDs = []string{"https://example.com/a.mp4"}
 		}, "不接受 URL"},
-		{"audios 传非 file_id", func(r *videoGenerateRequest) {
-			r.Audios = []string{"abc"}
+		{"audio_ids 传非 file_id", func(r *videoGenerateRequest) {
+			r.AudioIDs = []string{"abc"}
 		}, "无效的 file_id"},
 		{"file_id 过长", func(r *videoGenerateRequest) {
-			r.Images = []string{"file_" + strings.Repeat("a", model.MaxFileIDLen)}
+			r.ImageIDs = []string{"file_" + strings.Repeat("a", model.MaxFileIDLen)}
 		}, "过长"},
 	}
 
@@ -69,9 +69,9 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 // prompt 必填，三个媒体数组可以为空（纯文生视频）。
 func TestVideoGenerateRequestValidateAllowsTextOnly(t *testing.T) {
 	req := validVideoGenerateRequest()
-	req.Images = nil
-	req.Videos = nil
-	req.Audios = nil
+	req.ImageIDs = nil
+	req.VideoIDs = nil
+	req.AudioIDs = nil
 
 	if err := req.validate(); err != nil {
 		t.Fatalf("纯文生视频不应报错: %v", err)

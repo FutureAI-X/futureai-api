@@ -21,9 +21,9 @@ METASO 视频生成模型。通用请求与响应格式见 [视频生成](README
 |---|---|---|
 | `model` | 是 | `MiniMax-H3` |
 | `prompt` | 是 | 提示词 |
-| `images` | 否 | 参考图片 file_id 数组 |
-| `videos` | 否 | 参考视频 file_id 数组 |
-| `audios` | 否 | 参考音频 file_id 数组 |
+| `image_ids` | 否 | 参考图片 file_id 数组 |
+| `video_ids` | 否 | 参考视频 file_id 数组 |
+| `audio_ids` | 否 | 参考音频 file_id 数组 |
 | `resolution` | 是 | `480P`、`1K` 或 `2K` |
 | `duration` | 是 | 输出时长（秒），正整数 |
 | `ratio` | 是 | 画幅，如 `16:9`、`adaptive` |
@@ -36,7 +36,7 @@ METASO 视频生成模型。通用请求与响应格式见 [视频生成](README
 |---|---|
 | `prompt` | 必填 |
 | `duration` | 正整数 |
-| `images` / `videos` / `audios` | 只接受平台 file_id，不接受外部 URL |
+| `image_ids` / `video_ids` / `audio_ids` | 只接受平台 file_id，不接受外部 URL |
 | 参考文件有效期 | 剩余不少于 30 分钟 |
 
 参考文件的校验规则见 [视频生成](README.md#3-参考媒体)。
@@ -47,9 +47,9 @@ METASO 视频生成模型。通用请求与响应格式见 [视频生成](README
 {
   "model": "MiniMax-H3",
   "prompt": "从首帧平滑过渡到尾帧，保持参考图中角色的外观与服装一致。",
-  "images": ["file_..."],
-  "videos": ["file_..."],
-  "audios": ["file_..."],
+  "image_ids": ["file_..."],
+  "video_ids": ["file_..."],
+  "audio_ids": ["file_..."],
   "resolution": "2K",
   "duration": 5,
   "ratio": "adaptive"

@@ -19,9 +19,9 @@ func validVideoRequest() VideoGenerateRequest {
 	return VideoGenerateRequest{
 		Model:         "MiniMax-H3",
 		Prompt:        "a cat walking",
-		Images:        []string{"https://cdn.example.com/ref.png"},
-		Videos:        []string{"https://cdn.example.com/ref.mp4"},
-		Audios:        []string{"https://cdn.example.com/ref.mp3"},
+		ImageURLs:     []string{"https://cdn.example.com/ref.png"},
+		VideoURLs:     []string{"https://cdn.example.com/ref.mp4"},
+		AudioURLs:     []string{"https://cdn.example.com/ref.mp3"},
 		Resolution:    "2K",
 		Duration:      5,
 		Ratio:         "adaptive",
@@ -46,15 +46,15 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 		{"duration 为 0", func(r *VideoGenerateRequest) { r.Duration = 0 }, "duration"},
 		{"duration 为负", func(r *VideoGenerateRequest) { r.Duration = -1 }, "duration"},
 		{"缺少 ratio", func(r *VideoGenerateRequest) { r.Ratio = "" }, "ratio"},
-		{"images 非 http 地址", func(r *VideoGenerateRequest) {
-			r.Images = []string{"file:///etc/passwd"}
-		}, "images"},
-		{"videos 非 http 地址", func(r *VideoGenerateRequest) {
-			r.Videos = []string{"ftp://cdn.example.com/ref.mp4"}
-		}, "videos"},
-		{"audios 非 http 地址", func(r *VideoGenerateRequest) {
-			r.Audios = []string{"not-a-url"}
-		}, "audios"},
+		{"image_urls 非 http 地址", func(r *VideoGenerateRequest) {
+			r.ImageURLs = []string{"file:///etc/passwd"}
+		}, "image_urls"},
+		{"video_urls 非 http 地址", func(r *VideoGenerateRequest) {
+			r.VideoURLs = []string{"ftp://cdn.example.com/ref.mp4"}
+		}, "video_urls"},
+		{"audio_urls 非 http 地址", func(r *VideoGenerateRequest) {
+			r.AudioURLs = []string{"not-a-url"}
+		}, "audio_urls"},
 	}
 
 	for _, tc := range cases {
@@ -75,9 +75,9 @@ func TestVideoGenerateRequestValidate(t *testing.T) {
 // prompt 必填，三个媒体数组可以为空（纯文生视频）。
 func TestVideoGenerateRequestValidateAllowsTextOnly(t *testing.T) {
 	req := validVideoRequest()
-	req.Images = nil
-	req.Videos = nil
-	req.Audios = nil
+	req.ImageURLs = nil
+	req.VideoURLs = nil
+	req.AudioURLs = nil
 
 	if err := req.Validate(); err != nil {
 		t.Fatalf("纯文生视频不应报错: %v", err)
@@ -87,7 +87,7 @@ func TestVideoGenerateRequestValidateAllowsTextOnly(t *testing.T) {
 // URL 的 scheme 大小写不应影响判断。
 func TestVideoGenerateRequestValidateAcceptsUppercaseScheme(t *testing.T) {
 	req := validVideoRequest()
-	req.Images = []string{"HTTPS://cdn.example.com/ref.png"}
+	req.ImageURLs = []string{"HTTPS://cdn.example.com/ref.png"}
 
 	if err := req.Validate(); err != nil {
 		t.Errorf("大写 scheme 应被接受: %v", err)

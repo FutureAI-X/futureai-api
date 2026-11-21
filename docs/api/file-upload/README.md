@@ -25,7 +25,7 @@
 2. 调用 `POST /v1/files/upload/prepare`，取得上传地址 `url`、表单字段 `fields`、`upload_id`。
 3. 以 `multipart/form-data` 把 `fields` 和文件 POST 到 `url`。
 4. 调用 `POST /v1/files/upload/complete`，提交 `upload_id`。
-5. 把响应中的 `file_id` 填进图像生成请求的 `image_ids`，或视频生成请求的 `images` / `videos` / `audios`。
+5. 把响应中的 `file_id` 填进图像生成请求的 `image_ids`，或视频生成请求的 `image_ids` / `video_ids` / `audio_ids`。
 
 上传凭证有效期 30 分钟，服务端上传会话有效期 40 分钟。超过 40 分钟仍未调用 `complete`，必须重新 `prepare`。
 

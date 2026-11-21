@@ -134,18 +134,18 @@ func (r ImageGenerateRequest) CreditParams() map[string]string {
 
 // VideoGenerateRequest 视频生成的平台内部请求。
 //
-// 公开契约在 controller 层：prompt + images/videos/audios 三个 file_id 数组。
+// 公开契约在 controller 层：prompt + image_ids/video_ids/audio_ids 三个 file_id 数组。
 // controller 把 file_id 解析成短期签名 URL 后填充本结构，再交给供应商适配层。
-// 因此这里的 Images/Videos/Audios 是**已解析的 URL**，不是 file_id。
+// 因此这里的 ImageURLs/VideoURLs/AudioURLs 是**已解析的 URL**，不是 file_id。
 //
 // VendorModelID 由 controller 按管理端映射填充；json:"-" 保证它进不了快照，
 // 也保证调用方无法通过请求体顶掉映射。
 type VideoGenerateRequest struct {
 	Model      string   `json:"model"`
 	Prompt     string   `json:"prompt"`
-	Images     []string `json:"images"`
-	Videos     []string `json:"videos"`
-	Audios     []string `json:"audios"`
+	ImageURLs  []string `json:"image_urls"`
+	VideoURLs  []string `json:"video_urls"`
+	AudioURLs  []string `json:"audio_urls"`
 	Resolution string   `json:"resolution"`
 	Duration   int      `json:"duration"`
 	Ratio      string   `json:"ratio"`
@@ -178,9 +178,9 @@ func (r *VideoGenerateRequest) Validate() error {
 		name string
 		urls []string
 	}{
-		{"images", r.Images},
-		{"videos", r.Videos},
-		{"audios", r.Audios},
+		{"image_urls", r.ImageURLs},
+		{"video_urls", r.VideoURLs},
+		{"audio_urls", r.AudioURLs},
 	}
 	for _, group := range groups {
 		for _, u := range group.urls {

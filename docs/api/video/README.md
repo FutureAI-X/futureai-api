@@ -16,16 +16,16 @@
 |---|---|---|
 | `model` | string | 平台模型名 |
 | `prompt` | string | 提示词，必填 |
-| `images` | string[] | 参考图片的 `file_id` 数组，可空 |
-| `videos` | string[] | 参考视频的 `file_id` 数组，可空 |
-| `audios` | string[] | 参考音频的 `file_id` 数组，可空 |
+| `image_ids` | string[] | 参考图片的 `file_id` 数组，可空 |
+| `video_ids` | string[] | 参考视频的 `file_id` 数组，可空 |
+| `audio_ids` | string[] | 参考音频的 `file_id` 数组，可空 |
 | `resolution` | string | 分辨率档位，如 `480P` / `1K` / `2K` |
 | `duration` | integer | 输出时长（秒），必须为正整数 |
 | `ratio` | string | 画幅，如 `16:9` / `adaptive` |
 
 ## 3 参考媒体
 
-`images` / `videos` / `audios` 只接受 `/v1/files/upload/complete` 返回的 `file_id`，不接受外部 URL。数组里出现 URL 返回 400。同一个 `file_id` 在同一个数组里重复出现只处理一次。
+`image_ids` / `video_ids` / `audio_ids` 只接受 `/v1/files/upload/complete` 返回的 `file_id`，不接受外部 URL。数组里出现 URL 返回 400。同一个 `file_id` 在同一个数组里重复出现只处理一次。
 
 每个参考文件必须属于调用方，并满足以下条件：
 
@@ -43,9 +43,9 @@
 {
   "model": "MiniMax-H3",
   "prompt": "从首帧平滑过渡到尾帧，保持参考图中角色的外观与服装一致。",
-  "images": ["file_..."],
-  "videos": ["file_..."],
-  "audios": ["file_..."],
+  "image_ids": ["file_..."],
+  "video_ids": ["file_..."],
+  "audio_ids": ["file_..."],
   "resolution": "2K",
   "duration": 5,
   "ratio": "adaptive"

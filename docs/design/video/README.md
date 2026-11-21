@@ -26,7 +26,7 @@
 2. 查找端点、模型、模型与端点的绑定关系，选择第一个可用供应商。
 3. 解密供应商 API Key，确认调用方身份。
 4. 处理幂等键。命中已有任务时直接返回原任务 ID。
-5. 解析 `images` / `videos` / `audios` 中的 `file_id`，生成短期签名 URL。
+5. 解析 `image_ids` / `video_ids` / `audio_ids` 中的 `file_id`，生成短期签名 URL。
 6. 组装 `VideoGenerateRequest` 并再次校验媒体 URL。
 7. 创建任务。视频计费尚未启用，任务按 0 积分创建。
 8. 调用供应商提交接口，拿到上游 `task_id`。
@@ -50,9 +50,9 @@
 Metaso 的请求体使用 `content` 数组。`buildVideoRequest` 按以下顺序组装：
 
 1. `text`：调用方提示词；
-2. `image_url`：`images` 中的每个 URL，`role=reference_image`；
-3. `video_url`：`videos` 中的每个 URL，`role=reference_video`；
-4. `audio_url`：`audios` 中的每个 URL，`role=reference_audio`。
+2. `image_url`：`image_ids` 解析后的每个签名 URL，`role=reference_image`；
+3. `video_url`：`video_ids` 解析后的每个签名 URL，`role=reference_video`；
+4. `audio_url`：`audio_ids` 解析后的每个签名 URL，`role=reference_audio`。
 
 `fast_mode` 固定为 `false`，不是公开字段。`model` 使用管理端配置的供应商模型 ID。
 

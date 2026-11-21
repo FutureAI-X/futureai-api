@@ -25,9 +25,9 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 |---|---|---|
 | `model` | `Model` | 平台模型名，用于配置路由 |
 | `prompt` | `Prompt` | 提示词 |
-| `images` | `Images` | 解析后的图片签名 URL |
-| `videos` | `Videos` | 解析后的视频签名 URL |
-| `audios` | `Audios` | 解析后的音频签名 URL |
+| `image_ids` | `ImageURLs` | 解析后的图片签名 URL |
+| `video_ids` | `VideoURLs` | 解析后的视频签名 URL |
+| `audio_ids` | `AudioURLs` | 解析后的音频签名 URL |
 | `resolution` | `Resolution` | 上游分辨率档位 |
 | `duration` | `Duration` | 输出时长 |
 | `ratio` | `Ratio` | 画幅 |
@@ -43,9 +43,9 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 `buildVideoRequest` 把内部请求转换为 METASO 的 `content` 数组：
 
 1. `text`：`prompt`；
-2. `image_url`：`Images` 中的每个 URL，`role=reference_image`；
-3. `video_url`：`Videos` 中的每个 URL，`role=reference_video`；
-4. `audio_url`：`Audios` 中的每个 URL，`role=reference_audio`。
+2. `image_url`：`ImageURLs` 中的每个 URL，`role=reference_image`；
+3. `video_url`：`VideoURLs` 中的每个 URL，`role=reference_video`；
+4. `audio_url`：`AudioURLs` 中的每个 URL，`role=reference_audio`。
 
 `resolution`、`duration`、`ratio` 直接写入请求体。`fast_mode` 固定为 `false`，不开放给调用方。
 
