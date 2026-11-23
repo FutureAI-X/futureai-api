@@ -168,12 +168,44 @@ func TestComputeVideoBillingZeroRateIsFree(t *testing.T) {
 	}
 }
 
+func TestComputeVideoBillingBaseCredits(t *testing.T) {
+	rule := sampleVideoBillingRule()
+	rule.BaseCreditsPerRequest = 0.25
+	rule.BaseCreditsDescription = "H3 Context IR"
+	rate := rule.Rates[0]
+
+	result, err := computeVideoBilling(rule, rate, videoBillingInput{
+		Resolution:    "1080P",
+		OutputSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("计算不应报错: %v", err)
+	}
+	// 基础扣费 0.25 + 输出 1 秒 × 0.14 = 0.39
+	if !almostEqual(result.Snapshot.Charges.Base, 0.25) {
+		t.Errorf("base = %.6f, want 0.25", result.Snapshot.Charges.Base)
+	}
+	if !almostEqual(result.Total, 0.39) {
+		t.Errorf("total = %.6f, want 0.39", result.Total)
+	}
+	if !almostEqual(result.Snapshot.Rates.BaseCreditsPerRequest, 0.25) {
+		t.Errorf("快照应记录基础扣费费率")
+	}
+	if result.Snapshot.BaseCreditsDescription != "H3 Context IR" {
+		t.Errorf("快照应记录基础扣费说明")
+	}
+	if result.Snapshot.Version != 2 {
+		t.Errorf("快照版本 = %d, want 2", result.Snapshot.Version)
+	}
+}
+
 func TestComputeVideoBillingRejectsNegativeConfig(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*model.VideoCreditRule, *model.VideoCreditRate)
 	}{
 		{"免费张数为负", func(r *model.VideoCreditRule, _ *model.VideoCreditRate) { r.ImageFreeItems = -1 }},
+		{"基础扣费为负", func(r *model.VideoCreditRule, _ *model.VideoCreditRate) { r.BaseCreditsPerRequest = -0.01 }},
 		{"图片单价为负", func(r *model.VideoCreditRule, _ *model.VideoCreditRate) { r.ImageCreditsPerItem = -0.01 }},
 		{"音频单价为负", func(r *model.VideoCreditRule, _ *model.VideoCreditRate) { r.AudioCreditsPerItem = -0.01 }},
 		{"输入视频单价为负", func(_ *model.VideoCreditRule, rate *model.VideoCreditRate) {
@@ -217,8 +249,9 @@ func TestComputeVideoBillingSnapshotChargesSumToTotal(t *testing.T) {
 		t.Fatalf("计算不应报错: %v", err)
 	}
 
-	sum := result.Snapshot.Charges.Image + result.Snapshot.Charges.Audio +
-		result.Snapshot.Charges.InputVideo + result.Snapshot.Charges.Output
+	sum := result.Snapshot.Charges.Base + result.Snapshot.Charges.Image +
+		result.Snapshot.Charges.Audio + result.Snapshot.Charges.InputVideo +
+		result.Snapshot.Charges.Output
 	if !almostEqual(model.RoundCredits(sum), result.Total) {
 		t.Errorf("分项之和 %.6f 与总额 %.6f 不一致", sum, result.Total)
 	}

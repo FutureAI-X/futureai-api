@@ -139,6 +139,12 @@ function ModelCard({
               {videoRule ? '按秒计费' : perToken ? '按 Token 计费' : '按次计费'}
             </span>
           </div>
+          {videoRule && (videoRule.base_credits_per_request ?? 0) > 0 && (
+            <p className='text-muted-foreground mt-1 text-[11px]'>
+              另收基础扣费 {formatCredits(videoRule.base_credits_per_request)} 积分/次
+              {videoRule.base_credits_description ? `（${videoRule.base_credits_description}）` : ''}
+            </p>
+          )}
         </div>
       )}
 
@@ -572,7 +578,15 @@ export function Pricing() {
                           </td>
                           <td className='px-4 py-3 text-sm'>
                             {model.video_credit_rule ? (
-                              <span className='font-medium'>按秒计费</span>
+                              <>
+                                <span className='font-medium'>按秒计费</span>
+                                {(model.video_credit_rule.base_credits_per_request ?? 0) > 0 && (
+                                  <span className='text-muted-foreground text-xs'>
+                                    {' '}
+                                    · 基础 {formatCredits(model.video_credit_rule.base_credits_per_request)}/次
+                                  </span>
+                                )}
+                              </>
                             ) : model.credit_rule ? (
                               model.credit_rule.rule_type === 'per_token' ? (
                                 <span className='font-medium'>按 Token 计费</span>

@@ -34,6 +34,32 @@ function VideoBillingDetail({ rule }: { rule: VideoCreditRule }) {
   return (
     <>
       <div className='rounded-lg border border-border/60 p-4'>
+        <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-2'>
+          <div className='flex items-center gap-2'>
+            <Coins className='text-muted-foreground size-4' />
+            <h3 className='text-sm font-medium'>基础扣费</h3>
+            <span className='bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-[11px] font-medium'>
+              每次请求
+            </span>
+          </div>
+          <div className='flex flex-wrap items-baseline justify-end gap-x-2 text-right'>
+            {rule.base_credits_description && (
+              <span className='text-muted-foreground text-xs'>{rule.base_credits_description}</span>
+            )}
+            <span>
+              <span className='text-base font-bold tracking-tight'>
+                {formatCredits(rule.base_credits_per_request ?? 0)}
+              </span>
+              <span className='text-muted-foreground text-[11px]'> 积分/次</span>
+            </span>
+            {(rule.base_credits_per_request ?? 0) === 0 && (
+              <span className='text-muted-foreground text-[11px]'>当前不收取</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className='rounded-lg border border-border/60 p-4'>
         <div className='flex items-center justify-between gap-3'>
           <div className='flex items-center gap-2'>
             <Coins className='text-muted-foreground size-4' />
@@ -126,6 +152,11 @@ function VideoBillingDetail({ rule }: { rule: VideoCreditRule }) {
         <h3 className='text-sm font-medium'>计费说明</h3>
         <ul className='text-muted-foreground mt-2 space-y-1.5 text-xs leading-relaxed'>
           <li>
+            每次请求固定收取 {formatCredits(rule.base_credits_per_request ?? 0)} 积分
+            {rule.base_credits_description ? `（${rule.base_credits_description}）` : ''}
+            ；0 表示不收取。
+          </li>
+          <li>
             参考图片按张计费
             {rule.image_free_items > 0 ? `，每个请求前 ${rule.image_free_items} 张免费，超出部分才收费` : ''}
             。
@@ -133,7 +164,7 @@ function VideoBillingDetail({ rule }: { rule: VideoCreditRule }) {
           <li>参考音频按个计费。</li>
           <li>参考视频按秒计费，不同输出分辨率的费率不同。</li>
           <li>输出视频按秒计费；带参考视频和不带参考视频的费率不同。</li>
-          <li>总积分是以上四项相加。参考视频的时长按每个文件向上取整到整秒。</li>
+          <li>总积分是以上各项与每次请求基础扣费之和。参考视频的时长按每个文件向上取整到整秒。</li>
         </ul>
         <p className='text-muted-foreground mt-3 text-xs leading-relaxed'>
           任务失败或取消时，提交时扣除的积分会全额退还。

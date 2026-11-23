@@ -560,8 +560,9 @@ func VideoGenerate(c *gin.Context) {
 		return
 	}
 	common.SysLogf("[VideoGenerate] 计费: model=%s, userID=%d, resolution=%s, hasRefVideo=%v, "+
-		"图=%d(计费%d), 音频=%d, 视频=%d秒, 输出=%d秒, 合计=%.3f",
+		"基础=%.3f, 图=%d(计费%d), 音频=%d, 视频=%d秒, 输出=%d秒, 合计=%.3f",
 		modelName, userID, resolution, billing.Snapshot.HasReferenceVideo,
+		billing.Snapshot.Charges.Base,
 		billing.Snapshot.Units.ImageCount, billing.Snapshot.Units.BillableImageCount,
 		billing.Snapshot.Units.AudioCount, billing.Snapshot.Units.InputVideoSeconds,
 		billing.Snapshot.Units.OutputSeconds, billing.Total)

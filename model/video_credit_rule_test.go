@@ -55,6 +55,9 @@ func TestValidateVideoCreditRuleRejectsInvalid(t *testing.T) {
 			r.Rates[1].Resolution = "1080P"
 		}, "重复"},
 		{"免费张数为负", func(r *VideoCreditRule) { r.ImageFreeItems = -1 }, "负数"},
+		{"基础扣费为负", func(r *VideoCreditRule) { r.BaseCreditsPerRequest = -0.01 }, "负数"},
+		{"基础扣费精度过高", func(r *VideoCreditRule) { r.BaseCreditsPerRequest = 0.0001 }, "小数"},
+		{"基础扣费说明过长", func(r *VideoCreditRule) { r.BaseCreditsDescription = strings.Repeat("超", 256) }, "255"},
 		{"图片单价为负", func(r *VideoCreditRule) { r.ImageCreditsPerItem = -0.01 }, "负数"},
 		{"音频单价为负", func(r *VideoCreditRule) { r.AudioCreditsPerItem = -0.01 }, "负数"},
 		{"图片单价精度过高", func(r *VideoCreditRule) { r.ImageCreditsPerItem = 0.0001 }, "小数"},

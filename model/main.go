@@ -528,6 +528,7 @@ var creditScaleColumns = []struct{ table, column string }{
 	{"credit_rules", "image_input_credits_per_mtok"},
 	{"credit_rules", "image_output_credits_per_mtok"},
 	{"credit_rule_items", "credits"},
+	{"video_credit_rules", "base_credits_per_request"},
 	{"video_credit_rules", "image_credits_per_item"},
 	{"video_credit_rules", "audio_credits_per_item"},
 	{"video_credit_rates", "input_video_credits_per_second"},
@@ -683,6 +684,8 @@ func addTableComments() error {
 		`COMMENT ON COLUMN video_credit_rules.image_credits_per_item IS '每张参考图消耗的积分，0=免费'`,
 		`COMMENT ON COLUMN video_credit_rules.image_free_items IS '每次请求免费的前N张参考图，0=不免费'`,
 		`COMMENT ON COLUMN video_credit_rules.audio_credits_per_item IS '每个参考音频消耗的积分，0=免费'`,
+		`COMMENT ON COLUMN video_credit_rules.base_credits_per_request IS '每次请求固定收取的积分，0=不收取'`,
+		`COMMENT ON COLUMN video_credit_rules.base_credits_description IS '基础扣费说明，展示给用户'`,
 		`COMMENT ON COLUMN video_credit_rules.created_at IS '记录创建时间'`,
 		`COMMENT ON COLUMN video_credit_rules.updated_at IS '记录最后更新时间'`,
 

@@ -49,6 +49,10 @@ export interface VideoCreditRule {
   model_id: number
   description?: string
   status: number
+  /** 每次请求固定收取的积分，0=不收取 */
+  base_credits_per_request: number
+  /** 基础扣费说明，展示给用户 */
+  base_credits_description?: string
   /** 每张参考图积分 */
   image_credits_per_item: number
   /** 每请求免费的前 N 张参考图 */

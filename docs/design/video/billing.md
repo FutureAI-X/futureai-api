@@ -21,6 +21,8 @@
 |---|---|
 | `model_id` | 关联模型，唯一 |
 | `status` | 1 启用 / 2 禁用 |
+| `base_credits_per_request` | 每次请求固定收取的积分，0=不收取（如 H3 Context IR） |
+| `base_credits_description` | 基础扣费说明，展示在模型广场，最长 255 字符 |
 | `image_credits_per_item` | 每张参考图片积分，0=免费 |
 | `image_free_items` | 每请求免费的前 N 张，0=不免费 |
 | `audio_credits_per_item` | 每个参考音频积分，0=免费 |
@@ -47,6 +49,7 @@ resolution = upper(trim(req.resolution))
 若模型没有启用规则            → 503，拒绝请求
 若规则里没有该分辨率档位      → 400，拒绝请求（消息中列出支持档位）
 
+baseCharge        = base_credits_per_request（每次请求固定收取，0=不收取）
 billableImages    = max(0, 去重后的图片数 - image_free_items)
 imageCharge       = billableImages × image_credits_per_item
 audioCharge       = 去重后的音频数 × audio_credits_per_item
@@ -55,8 +58,10 @@ inputVideoCharge  = inputVideoSeconds × input_video_credits_per_second
 hasRefVideo       = 去重后的视频数 > 0
 outputRate        = hasRefVideo ? output_with_ref : output_no_ref
 outputCharge      = 请求的 duration × outputRate
-total             = RoundCredits(imageCharge + audioCharge + inputVideoCharge + outputCharge)
+total             = RoundCredits(baseCharge + imageCharge + audioCharge + inputVideoCharge + outputCharge)
 ```
+
+基础扣费与分辨率档位无关，任何一次视频请求都会收取；用于承接上游按次收取的固定费用（例如 H3 Context IR）。`base_credits_description` 只用于展示与审计，不影响计算。
 
 ### 3.1 取整口径
 
@@ -83,6 +88,7 @@ total             = RoundCredits(imageCharge + audioCharge + inputVideoCharge + 
 
 - 命中的 `rule_id` / `rate_row_id` 与分辨率；
 - 是否含参考视频；
+- 基础扣费的金额与说明；
 - **提交时的费率拷贝**；
 - 各项数量与秒数；
 - 各项金额与总额。
@@ -97,7 +103,7 @@ total             = RoundCredits(imageCharge + audioCharge + inputVideoCharge + 
 | `PUT /api/admin/models/:id/video-credit-rule` | 全量保存规则与档位；仅允许 `type=video` 的模型 |
 | `/api/pricing` | 视频模型附带 `video_credit_rule`，客户端可据此预估价格 |
 
-保存时校验：模型存在且为视频类型、费率非负且不超过业务精度、免费张数非负、至少一个非空且不重复的分辨率档位。
+保存时校验：模型存在且为视频类型、基础扣费与各费率非负且不超过业务精度、基础扣费说明不超过 255 字符、免费张数非负、至少一个非空且不重复的分辨率档位。
 
 ## 7 已知限制
 

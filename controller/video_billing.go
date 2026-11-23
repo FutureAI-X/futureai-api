@@ -27,18 +27,20 @@ type videoBillingInput struct {
 //
 // 费率是提交时的拷贝：管理员之后改价或删除档位，都不影响已建任务的审计口径。
 type videoBillingSnapshot struct {
-	Version           int                 `json:"version"`
-	RuleID            int                 `json:"rule_id"`
-	RateRowID         int                 `json:"rate_row_id"`
-	Resolution        string              `json:"resolution"`
-	HasReferenceVideo bool                `json:"has_ref_video"`
-	Rates             videoBillingRates   `json:"rates"`
-	Units             videoBillingUnits   `json:"units"`
-	Charges           videoBillingCharges `json:"charges"`
-	Total             float64             `json:"total"`
+	Version               int                 `json:"version"`
+	RuleID                int                 `json:"rule_id"`
+	RateRowID             int                 `json:"rate_row_id"`
+	Resolution            string              `json:"resolution"`
+	HasReferenceVideo     bool                `json:"has_ref_video"`
+	BaseCreditsDescription string              `json:"base_credits_description,omitempty"`
+	Rates                 videoBillingRates   `json:"rates"`
+	Units                 videoBillingUnits   `json:"units"`
+	Charges               videoBillingCharges `json:"charges"`
+	Total                 float64             `json:"total"`
 }
 
 type videoBillingRates struct {
+	BaseCreditsPerRequest        float64 `json:"base_credits_per_request"`
 	ImageCreditsPerItem          float64 `json:"image_credits_per_item"`
 	ImageFreeItems               int     `json:"image_free_items"`
 	AudioCreditsPerItem          float64 `json:"audio_credits_per_item"`
@@ -55,6 +57,7 @@ type videoBillingUnits struct {
 }
 
 type videoBillingCharges struct {
+	Base       float64 `json:"base"`
 	Image      float64 `json:"image"`
 	Audio      float64 `json:"audio"`
 	InputVideo float64 `json:"input_video"`
@@ -93,6 +96,7 @@ func computeVideoBilling(rule *model.VideoCreditRule, rate model.VideoCreditRate
 		name  string
 		value float64
 	}{
+		{"每次请求基础积分", rule.BaseCreditsPerRequest},
 		{"每张参考图积分", rule.ImageCreditsPerItem},
 		{"每个参考音频积分", rule.AudioCreditsPerItem},
 		{"参考视频每秒积分", rate.InputVideoCreditsPerSecond},
@@ -114,21 +118,24 @@ func computeVideoBilling(rule *model.VideoCreditRule, rate model.VideoCreditRate
 		outputRate = rate.OutputCreditsPerSecondWithRef
 	}
 
+	baseCharge := model.RoundCredits(rule.BaseCreditsPerRequest)
 	imageCharge := model.RoundCredits(float64(billableImages) * rule.ImageCreditsPerItem)
 	audioCharge := model.RoundCredits(float64(in.AudioCount) * rule.AudioCreditsPerItem)
 	inputVideoCharge := model.RoundCredits(float64(in.InputVideoSeconds) * rate.InputVideoCreditsPerSecond)
 	outputCharge := model.RoundCredits(float64(in.OutputSeconds) * outputRate)
-	total := model.RoundCredits(imageCharge + audioCharge + inputVideoCharge + outputCharge)
+	total := model.RoundCredits(baseCharge + imageCharge + audioCharge + inputVideoCharge + outputCharge)
 
 	return videoBillingResult{
 		Total: total,
 		Snapshot: videoBillingSnapshot{
-			Version:           1,
-			RuleID:            rule.ID,
-			RateRowID:         rate.ID,
-			Resolution:        in.Resolution,
-			HasReferenceVideo: in.HasReferenceVideo,
+			Version:                2,
+			RuleID:                 rule.ID,
+			RateRowID:              rate.ID,
+			Resolution:             in.Resolution,
+			HasReferenceVideo:      in.HasReferenceVideo,
+			BaseCreditsDescription: rule.BaseCreditsDescription,
 			Rates: videoBillingRates{
+				BaseCreditsPerRequest:      rule.BaseCreditsPerRequest,
 				ImageCreditsPerItem:        rule.ImageCreditsPerItem,
 				ImageFreeItems:             rule.ImageFreeItems,
 				AudioCreditsPerItem:        rule.AudioCreditsPerItem,
@@ -143,6 +150,7 @@ func computeVideoBilling(rule *model.VideoCreditRule, rate model.VideoCreditRate
 				OutputSeconds:      in.OutputSeconds,
 			},
 			Charges: videoBillingCharges{
+				Base:       baseCharge,
 				Image:      imageCharge,
 				Audio:      audioCharge,
 				InputVideo: inputVideoCharge,
@@ -156,11 +164,12 @@ func computeVideoBilling(rule *model.VideoCreditRule, rate model.VideoCreditRate
 // videoBillingRemark 生成扣费备注。CreditLog.Remark 是 varchar(255)，
 // 格式固定且短，避免超长在 Postgres 上硬报错。
 func videoBillingRemark(snapshot videoBillingSnapshot) string {
-	return fmt.Sprintf("视频生成任务(%s,图%d/音%d/视频%d秒,输出%d秒)",
+	return fmt.Sprintf("视频生成任务(%s,图%d/音%d/视频%d秒,输出%d秒,基础%.3f)",
 		snapshot.Resolution,
 		snapshot.Units.ImageCount,
 		snapshot.Units.AudioCount,
 		snapshot.Units.InputVideoSeconds,
 		snapshot.Units.OutputSeconds,
+		snapshot.Charges.Base,
 	)
 }

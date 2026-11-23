@@ -50,12 +50,14 @@ type AdminVideoCreditRateRequest struct {
 // 采用全量替换语义：rates 会替换该规则下的全部档位。管理端保存时必须带齐
 // 所有字段，避免「省略即清零」这种难以察觉的配置事故。
 type AdminSaveVideoCreditRuleRequest struct {
-	Description          string                        `json:"description"`
-	Status               int                           `json:"status"`
-	ImageCreditsPerItem  float64                       `json:"image_credits_per_item"`
-	ImageFreeItems       int                           `json:"image_free_items"`
-	AudioCreditsPerItem  float64                       `json:"audio_credits_per_item"`
-	Rates                []AdminVideoCreditRateRequest `json:"rates"`
+	Description            string                        `json:"description"`
+	Status                 int                           `json:"status"`
+	BaseCreditsPerRequest  float64                       `json:"base_credits_per_request"`
+	BaseCreditsDescription string                        `json:"base_credits_description"`
+	ImageCreditsPerItem    float64                       `json:"image_credits_per_item"`
+	ImageFreeItems         int                           `json:"image_free_items"`
+	AudioCreditsPerItem    float64                       `json:"audio_credits_per_item"`
+	Rates                  []AdminVideoCreditRateRequest `json:"rates"`
 }
 
 // AdminSaveVideoCreditRule 保存视频计费规则（创建或全量更新）。
@@ -92,13 +94,15 @@ func AdminSaveVideoCreditRule(c *gin.Context) {
 	}
 
 	rule := &model.VideoCreditRule{
-		ModelID:             modelID,
-		Description:         req.Description,
-		Status:              status,
-		ImageCreditsPerItem: req.ImageCreditsPerItem,
-		ImageFreeItems:      req.ImageFreeItems,
-		AudioCreditsPerItem: req.AudioCreditsPerItem,
-		Rates:               make([]model.VideoCreditRate, len(req.Rates)),
+		ModelID:                modelID,
+		Description:            req.Description,
+		Status:                 status,
+		BaseCreditsPerRequest:  req.BaseCreditsPerRequest,
+		BaseCreditsDescription: strings.TrimSpace(req.BaseCreditsDescription),
+		ImageCreditsPerItem:    req.ImageCreditsPerItem,
+		ImageFreeItems:         req.ImageFreeItems,
+		AudioCreditsPerItem:    req.AudioCreditsPerItem,
+		Rates:                  make([]model.VideoCreditRate, len(req.Rates)),
 	}
 	for i, rate := range req.Rates {
 		rule.Rates[i] = model.VideoCreditRate{

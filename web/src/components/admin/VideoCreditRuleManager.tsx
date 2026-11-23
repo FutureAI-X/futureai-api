@@ -41,6 +41,8 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
 
   const [formDescription, setFormDescription] = useState('')
   const [formStatus, setFormStatus] = useState(1)
+  const [formBaseCredits, setFormBaseCredits] = useState('0')
+  const [formBaseDescription, setFormBaseDescription] = useState('')
   const [formImageCredits, setFormImageCredits] = useState('0')
   const [formImageFree, setFormImageFree] = useState('0')
   const [formAudioCredits, setFormAudioCredits] = useState('0')
@@ -63,6 +65,8 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
         if (!rule) {
           setFormDescription('')
           setFormStatus(1)
+          setFormBaseCredits('0')
+          setFormBaseDescription('')
           setFormImageCredits('0')
           setFormImageFree('0')
           setFormAudioCredits('0')
@@ -71,6 +75,8 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
         }
         setFormDescription(rule.description ?? '')
         setFormStatus(rule.status ?? 1)
+        setFormBaseCredits(formatCredits(rule.base_credits_per_request ?? 0))
+        setFormBaseDescription(rule.base_credits_description ?? '')
         setFormImageCredits(formatCredits(rule.image_credits_per_item ?? 0))
         setFormImageFree(String(rule.image_free_items ?? 0))
         setFormAudioCredits(formatCredits(rule.audio_credits_per_item ?? 0))
@@ -124,8 +130,17 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
   async function handleSave() {
     setError('')
 
+    const baseCredits = parseCredit(formBaseCredits)
     const imageCredits = parseCredit(formImageCredits)
     const audioCredits = parseCredit(formAudioCredits)
+    if (baseCredits === null) {
+      setError('每次请求基础积分格式不正确，最多 3 位小数')
+      return
+    }
+    if (formBaseDescription.trim().length > 255) {
+      setError('基础扣费说明不能超过 255 个字符')
+      return
+    }
     if (imageCredits === null) {
       setError('每张参考图积分格式不正确，最多 3 位小数')
       return
@@ -182,6 +197,8 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
       const res = await saveVideoCreditRule(modelId, {
         description: formDescription.trim(),
         status: formStatus,
+        base_credits_per_request: baseCredits,
+        base_credits_description: formBaseDescription.trim(),
         image_credits_per_item: imageCredits,
         image_free_items: Number(formImageFree.trim()),
         audio_credits_per_item: audioCredits,
@@ -211,7 +228,7 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
             <div>
               <h2 className='text-lg font-semibold'>视频计费规则</h2>
               <p className='text-muted-foreground text-sm'>
-                配置模型 <span className='text-foreground font-medium'>{modelName}</span> 的图片、音频与视频计费
+                配置模型 <span className='text-foreground font-medium'>{modelName}</span> 的基础扣费、图片、音频与视频计费
               </p>
             </div>
           </div>
@@ -228,6 +245,36 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
           ) : (
             <div className='space-y-6'>
               {error && <div className='bg-destructive/10 text-destructive rounded-lg px-4 py-3 text-sm'>{error}</div>}
+
+              <div className='border-border/60 rounded-lg border p-5'>
+                <h3 className='mb-4 text-sm font-medium'>基础扣费</h3>
+                <div className='grid grid-cols-2 gap-6'>
+                  <div className='space-y-2'>
+                    <label className='text-sm font-medium'>每次请求基础积分</label>
+                    <input
+                      type='text'
+                      inputMode='decimal'
+                      value={formBaseCredits}
+                      onChange={(e) => setFormBaseCredits(e.target.value)}
+                      className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                    />
+                  </div>
+                  <div className='space-y-2'>
+                    <label className='text-sm font-medium'>基础扣费说明</label>
+                    <input
+                      type='text'
+                      value={formBaseDescription}
+                      maxLength={255}
+                      onChange={(e) => setFormBaseDescription(e.target.value)}
+                      placeholder='例如：H3 Context IR'
+                      className='border-border/60 bg-background focus-visible:ring-ring flex h-9 w-full rounded-lg border px-3 text-sm focus-visible:ring-2 focus-visible:outline-none'
+                    />
+                  </div>
+                </div>
+                <p className='text-muted-foreground mt-3 text-xs'>
+                  每次请求固定收取，与时长、分辨率、参考素材无关；填 0 表示不收取。说明会展示在模型广场的计费详情里。
+                </p>
+              </div>
 
               <div className='border-border/60 rounded-lg border p-5'>
                 <h3 className='mb-4 text-sm font-medium'>按数量计费</h3>
@@ -274,7 +321,7 @@ export function VideoCreditRuleManager({ open, onOpenChange, modelId, modelName 
                     </select>
                   </div>
                   <div className='col-span-2 space-y-2'>
-                    <label className='text-sm font-medium'>描述</label>
+                    <label className='text-sm font-medium'>规则备注（仅管理端可见）</label>
                     <input
                       type='text'
                       value={formDescription}

@@ -23,6 +23,13 @@ type VideoCreditRule struct {
 	Description string `json:"description,omitempty" gorm:"type:text"`
 	Status      int    `json:"status" gorm:"not null;default:1"`
 
+	// BaseCreditsPerRequest 每次请求固定收取的积分，与时长、分辨率、参考素材无关。
+	// 0 表示不收取。用于上游按次收取的固定费用（如 H3 Context IR）。
+	BaseCreditsPerRequest float64 `json:"base_credits_per_request" gorm:"type:numeric(20,10);not null;default:0"`
+
+	// BaseCreditsDescription 基础扣费说明，展示给用户；为空则不展示。
+	BaseCreditsDescription string `json:"base_credits_description,omitempty" gorm:"size:255;not null;default:''"`
+
 	// ImageCreditsPerItem 每张参考图消耗的积分。0 表示免费。
 	ImageCreditsPerItem float64 `json:"image_credits_per_item" gorm:"type:numeric(20,10);not null;default:0"`
 
@@ -171,10 +178,14 @@ func ValidateVideoCreditRule(rule *VideoCreditRule) error {
 	if rule.ImageFreeItems < 0 {
 		return videoCreditErrorf("图片免费张数不能为负数")
 	}
+	if len([]rune(rule.BaseCreditsDescription)) > 255 {
+		return videoCreditErrorf("基础扣费说明不能超过 255 个字符")
+	}
 	for _, item := range []struct {
 		name  string
 		value float64
 	}{
+		{"每次请求基础积分", rule.BaseCreditsPerRequest},
 		{"每张参考图积分", rule.ImageCreditsPerItem},
 		{"每个参考音频积分", rule.AudioCreditsPerItem},
 	} {
@@ -233,11 +244,13 @@ func SaveVideoCreditRule(rule *VideoCreditRule) error {
 		case err == nil:
 			rule.ID = existing.ID
 			if err := tx.Model(&VideoCreditRule{}).Where("id = ?", existing.ID).Updates(map[string]interface{}{
-				"description":             rule.Description,
-				"status":                  rule.Status,
-				"image_credits_per_item":  rule.ImageCreditsPerItem,
-				"image_free_items":        rule.ImageFreeItems,
-				"audio_credits_per_item":  rule.AudioCreditsPerItem,
+				"description":               rule.Description,
+				"status":                    rule.Status,
+				"base_credits_per_request":  rule.BaseCreditsPerRequest,
+				"base_credits_description":  rule.BaseCreditsDescription,
+				"image_credits_per_item":    rule.ImageCreditsPerItem,
+				"image_free_items":          rule.ImageFreeItems,
+				"audio_credits_per_item":    rule.AudioCreditsPerItem,
 			}).Error; err != nil {
 				return err
 			}
