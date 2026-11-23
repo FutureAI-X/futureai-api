@@ -9,6 +9,7 @@ import { normalizeOwner } from './owner'
 
 const OWNER_LOGOS: Record<string, string> = {
   bytedance: '/logos/bytedance.svg',
+  minimax: '/logos/minimax.svg',
   moss: '/logos/moss.svg',
   openai: '/logos/openai.svg',
 }
