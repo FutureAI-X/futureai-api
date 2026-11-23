@@ -27,25 +27,25 @@ type videoBillingInput struct {
 //
 // 费率是提交时的拷贝：管理员之后改价或删除档位，都不影响已建任务的审计口径。
 type videoBillingSnapshot struct {
-	Version               int                 `json:"version"`
-	RuleID                int                 `json:"rule_id"`
-	RateRowID             int                 `json:"rate_row_id"`
-	Resolution            string              `json:"resolution"`
-	HasReferenceVideo     bool                `json:"has_ref_video"`
+	Version                int                 `json:"version"`
+	RuleID                 int                 `json:"rule_id"`
+	RateRowID              int                 `json:"rate_row_id"`
+	Resolution             string              `json:"resolution"`
+	HasReferenceVideo      bool                `json:"has_ref_video"`
 	BaseCreditsDescription string              `json:"base_credits_description,omitempty"`
-	Rates                 videoBillingRates   `json:"rates"`
-	Units                 videoBillingUnits   `json:"units"`
-	Charges               videoBillingCharges `json:"charges"`
-	Total                 float64             `json:"total"`
+	Rates                  videoBillingRates   `json:"rates"`
+	Units                  videoBillingUnits   `json:"units"`
+	Charges                videoBillingCharges `json:"charges"`
+	Total                  float64             `json:"total"`
 }
 
 type videoBillingRates struct {
-	BaseCreditsPerRequest        float64 `json:"base_credits_per_request"`
-	ImageCreditsPerItem          float64 `json:"image_credits_per_item"`
-	ImageFreeItems               int     `json:"image_free_items"`
-	AudioCreditsPerItem          float64 `json:"audio_credits_per_item"`
-	InputVideoCreditsPerSecond   float64 `json:"input_video_credits_per_second"`
-	OutputCreditsPerSecond       float64 `json:"output_credits_per_second"`
+	BaseCreditsPerRequest      float64 `json:"base_credits_per_request"`
+	ImageCreditsPerItem        float64 `json:"image_credits_per_item"`
+	ImageFreeItems             int     `json:"image_free_items"`
+	AudioCreditsPerItem        float64 `json:"audio_credits_per_item"`
+	InputVideoCreditsPerSecond float64 `json:"input_video_credits_per_second"`
+	OutputCreditsPerSecond     float64 `json:"output_credits_per_second"`
 }
 
 type videoBillingUnits struct {

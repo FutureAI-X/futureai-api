@@ -274,9 +274,74 @@ const imageAccess = (
   </div>
 )
 
+// ── 七、FutureAI Video 下载与接入 ──
+const videoAccess = (
+  <div>
+    <DocH2>下载安装</DocH2>
+    <DocP>
+      FutureAI Video 支持 Windows 和 macOS，任选一个网盘下载安装；如网盘中缺少对应系统版本，可
+      <DocLink to='/docs/contact'>联系我们</DocLink>。
+    </DocP>
+
+    <div className='mt-4 grid gap-3 sm:grid-cols-2'>
+      <NetdiskCard
+        name='百度网盘'
+        url='https://pan.baidu.com/s/16tLpLQUAPKgAWZ7pc2cleA?pwd=qhna'
+        code='qhna'
+      />
+      <NetdiskCard
+        name='夸克网盘'
+        url='https://pan.quark.cn/s/82274440f349?pwd=c1xc'
+        code='c1xc'
+      />
+    </div>
+
+    <DocP>
+      链接已包含提取码；如未自动填入，请复制上方提取码。链接失效可
+      <DocLink to='/docs/contact'>联系我们</DocLink>。
+    </DocP>
+
+    <DocH2>配置 API Key</DocH2>
+    <Steps>
+      <Step n={1} title='创建 API Key'>
+        <p>
+          还没有 API Key？按
+          <DocLink to='/docs/api-key'>《创建 API Key》</DocLink>
+          创建并复制。
+        </p>
+      </Step>
+      <Step n={2} title='填入模型管理'>
+        <p>打开 FutureAI Video 左侧的「模型管理」，把 API Key 填入对应输入框。</p>
+        <DocImage
+          src={image('futureai-video-settings.png')}
+          alt='FutureAI Video 模型管理页面'
+          hint='截图内容：FutureAI Video 模型管理页面，包含 API Key 与 API 域名输入框。'
+        />
+      </Step>
+      <Step n={3} title='填写 API 域名'>
+        <p>
+          API 域名默认为
+          <DocStrong> https://futureaiapi.com</DocStrong>
+          ，一般无需修改；填写域名即可，无需带 /v1。
+        </p>
+        <CodeLine value='https://futureaiapi.com' />
+      </Step>
+    </Steps>
+
+    <DocH2>开始生成视频</DocH2>
+    <DocP>
+      保存配置后，返回「视频生成」页面选择模型，填写视频描述即可提交。
+      分辨率、画面比例、时长以及参考图片 / 视频 / 音频是否可用，由所选模型的规格决定。
+    </DocP>
+    <DocP>
+      任务提交后可在右侧查看进度，完成后视频会自动保存到本地，也可以在「历史记录」中查看。
+    </DocP>
+  </div>
+)
+
 // ── FutureAI 产品 ──
-// Video、Film、无限画布暂未上线，先统一展示占位内容。
-const video = <ComingSoon />
+// Film、无限画布暂未上线，先统一展示占位内容。
+const video = videoAccess
 const film = <ComingSoon />
 const canvas = <ComingSoon />
 
@@ -334,7 +399,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         slug: 'video',
         title: 'FutureAI Video',
-        summary: '即将上线，敬请期待。',
+        summary: '下载安装 FutureAI Video，并把 API Key 和 API 域名填入客户端。',
         icon: Video,
         content: video,
       },

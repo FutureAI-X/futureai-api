@@ -244,13 +244,13 @@ func SaveVideoCreditRule(rule *VideoCreditRule) error {
 		case err == nil:
 			rule.ID = existing.ID
 			if err := tx.Model(&VideoCreditRule{}).Where("id = ?", existing.ID).Updates(map[string]interface{}{
-				"description":               rule.Description,
-				"status":                    rule.Status,
-				"base_credits_per_request":  rule.BaseCreditsPerRequest,
-				"base_credits_description":  rule.BaseCreditsDescription,
-				"image_credits_per_item":    rule.ImageCreditsPerItem,
-				"image_free_items":          rule.ImageFreeItems,
-				"audio_credits_per_item":    rule.AudioCreditsPerItem,
+				"description":              rule.Description,
+				"status":                   rule.Status,
+				"base_credits_per_request": rule.BaseCreditsPerRequest,
+				"base_credits_description": rule.BaseCreditsDescription,
+				"image_credits_per_item":   rule.ImageCreditsPerItem,
+				"image_free_items":         rule.ImageFreeItems,
+				"audio_credits_per_item":   rule.AudioCreditsPerItem,
 			}).Error; err != nil {
 				return err
 			}
