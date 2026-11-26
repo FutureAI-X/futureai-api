@@ -17,7 +17,7 @@
 | 计费计算 | 按数量/秒数与分辨率档位计算积分并生成快照 | `controller/video_billing.go` |
 | 视频计费规则 | 规则与分辨率价目表、校验、读写 | `model/video_credit_rule.go` |
 | 供应商接口 | 定义 `VideoGenerate`、`TaskQuery` | `supplier/supplier.go` |
-| 供应商实现 | 把平台字段翻译成上游 `content` 结构 | `supplier/metaso.go` |
+| 供应商实现 | 把平台字段翻译成上游请求体 | `supplier/metaso.go`、`supplier/apimart.go` |
 | 任务模型 | 任务状态、对账查询 | `model/task.go` |
 | 出站客户端 | 共享连接池、SSRF 防护、超时策略 | `common/outbound.go` |
 
@@ -65,6 +65,8 @@
 
 ## 5 供应商适配
 
+### 5.1 Metaso
+
 Metaso 的请求体使用 `content` 数组。`buildVideoRequest` 按以下顺序组装：
 
 1. `text`：调用方提示词；
@@ -74,14 +76,19 @@ Metaso 的请求体使用 `content` 数组。`buildVideoRequest` 按以下顺序
 
 `fast_mode` 固定为 `false`，不是公开字段。`model` 使用管理端配置的供应商模型 ID。
 
+### 5.2 APIMart
+
+APIMart 使用平铺字段。`buildAPIMartVideoRequest` 把平台字段翻译为 `prompt`、`duration`、`aspect_ratio`、`image_urls`、`video_urls`、`audio_urls`，并显式写死 `resolution=1080p`、`generate_audio=true`、`nsfw_check=false`、`seed=-1`；带参考素材时固定 `omni_reference_task_type=reference`。所有带默认值的上游字段都由代码显式下发，不依赖上游默认行为。详见 [magi-2.md](magi-2.md)。
+
 ## 6 任务状态与对账
 
 视频任务与图像任务共用同一套状态机。上游状态按以下规则映射。
 
 | 上游状态 | 平台状态 |
 |---|---|
-| `queued` / `running` | `processing` |
-| `succeeded` | `completed` |
+| `queued` / `running`（Metaso） | `processing` |
+| `pending` / `processing`（APIMart） | `processing` |
+| `succeeded` / `completed` | `completed` |
 | `failed` / `cancelled` | `failed` |
 | 查询失败或未知状态 | 保持 `processing` |
 
@@ -99,7 +106,7 @@ Metaso 的请求体使用 `content` 数组。`buildVideoRequest` 按以下顺序
 
 ## 8 失败性质与结果
 
-Metaso 提交接口的失败性质如下。
+Metaso 与 APIMart 提交接口的失败性质如下。
 
 | 场景 | 失败性质 | 处理 |
 |---|---|---|
@@ -117,6 +124,7 @@ Metaso 提交接口的失败性质如下。
 | 模型 | 文档 |
 |---|---|
 | `MiniMax-H3` | [minimax-h3.md](minimax-h3.md) |
+| `MAGI-2` | [magi-2.md](magi-2.md) |
 
 ## 10 新增模型检查清单
 

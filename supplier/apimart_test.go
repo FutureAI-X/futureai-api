@@ -859,3 +859,334 @@ func TestTaskQueryCarriesFailureReasonAndRawError(t *testing.T) {
 		t.Errorf("Data.reason = %v, want content_policy_violation", resp.Data["reason"])
 	}
 }
+
+// ── APIMart 视频（MAGI-2）──
+
+func testVideoReq() VideoGenerateRequest {
+	return VideoGenerateRequest{
+		Model:         "MAGI-2",
+		Prompt:        "a cat walking in the rain",
+		Duration:      5,
+		Resolution:    "1080P",
+		Ratio:         "16:9",
+		VendorModelID: "magi-2",
+	}
+}
+
+// 有默认值的上游字段必须全部显式下发：上游改默认行为时，平台输出与计费不受影响。
+func TestBuildAPIMartVideoRequestWritesFixedFields(t *testing.T) {
+	req := testVideoReq()
+	req.ImageURLs = []string{"https://a.png"}
+	req.VideoURLs = []string{"https://a.mp4"}
+	req.AudioURLs = []string{"https://a.mp3"}
+
+	body, err := buildAPIMartVideoRequest(req)
+	if err != nil {
+		t.Fatalf("buildAPIMartVideoRequest() error = %v", err)
+	}
+
+	wants := map[string]interface{}{
+		"model":                    "magi-2",
+		"prompt":                   req.Prompt,
+		"duration":                 5,
+		"resolution":               "1080p", // 上游文档使用小写
+		"aspect_ratio":             "16:9",
+		"generate_audio":           true,
+		"nsfw_check":               false,
+		"seed":                     -1,
+		"omni_reference_task_type": "reference",
+	}
+	for k, want := range wants {
+		if got := body[k]; got != want {
+			t.Errorf("%s = %v, want %v（请求体=%v）", k, got, want, body)
+		}
+	}
+
+	for key, want := range map[string][]string{
+		"image_urls": req.ImageURLs,
+		"video_urls": req.VideoURLs,
+		"audio_urls": req.AudioURLs,
+	} {
+		got, ok := body[key].([]string)
+		if !ok || len(got) != len(want) || got[0] != want[0] {
+			t.Errorf("%s = %#v, want %#v", key, body[key], want)
+		}
+	}
+
+	// 固定字段 + 三个媒体数组，不应夹带 aliases（seconds/audio）等未约定字段。
+	if len(body) != len(wants)+3 {
+		t.Errorf("请求体字段数 = %d, want %d（存在未预期字段）: %v", len(body), len(wants)+3, body)
+	}
+}
+
+// 纯文生时不传媒体数组，但 omni_reference_task_type 仍要显式下发 auto。
+func TestBuildAPIMartVideoRequestTextOnlyUsesAutoMode(t *testing.T) {
+	body, err := buildAPIMartVideoRequest(testVideoReq())
+	if err != nil {
+		t.Fatalf("buildAPIMartVideoRequest() error = %v", err)
+	}
+
+	if got := body["omni_reference_task_type"]; got != "auto" {
+		t.Errorf("omni_reference_task_type = %v, want auto", got)
+	}
+	for _, key := range []string{"image_urls", "video_urls", "audio_urls"} {
+		if _, ok := body[key]; ok {
+			t.Errorf("没有输入时不该写入 %s: %v", key, body)
+		}
+	}
+}
+
+func TestBuildAPIMartVideoRequestRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*VideoGenerateRequest)
+		wantErr bool
+	}{
+		{"合法请求", func(*VideoGenerateRequest) {}, false},
+		// 平台模型名是对外别名，可自由配置；识别上游行为只看供应商模型 ID。
+		{"平台模型名可自由配置", func(r *VideoGenerateRequest) { r.Model = "MAGI-2 参考生视频" }, false},
+		{"未登记的供应商模型 ID", func(r *VideoGenerateRequest) { r.VendorModelID = "magi-3" }, true},
+		{"resolution 非 1080P", func(r *VideoGenerateRequest) { r.Resolution = "720P" }, true},
+		{"adaptive 不开放", func(r *VideoGenerateRequest) { r.Ratio = "adaptive" }, true},
+		{"空 ratio", func(r *VideoGenerateRequest) { r.Ratio = "  " }, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := testVideoReq()
+			tt.mutate(&req)
+			if _, err := buildAPIMartVideoRequest(req); (err != nil) != tt.wantErr {
+				t.Fatalf("buildAPIMartVideoRequest() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// 端到端：路径、鉴权头、固定字段与失败语义都要锁住。
+func TestAPIMartVideoGenerateSendsFixedFields(t *testing.T) {
+	var received map[string]interface{}
+	var gotPath, gotAuth, gotVersion, gotIdempotency string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotVersion = r.Header.Get("X-APIMart-Response-Version")
+		gotIdempotency = r.Header.Get("Idempotency-Key")
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("解析上游收到的请求体失败: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":200,"data":[{"status":"submitted","task_id":"task_v1"}]}`)
+	}))
+	defer srv.Close()
+
+	common.SetOutboundClientForTest(srv.Client())
+	defer common.SetOutboundClientForTest(nil)
+
+	a := &apimart{cfg: Config{BaseURL: srv.URL, APIKey: "test-key"}}
+	req := testVideoReq()
+	req.AudioURLs = []string{"https://a.mp3"}
+
+	resp := a.VideoGenerate(context.Background(), req)
+
+	if resp.Code != "success" {
+		t.Fatalf("Code = %q, want success (kind %q)", resp.Code, resp.FailureKind)
+	}
+	if resp.Data["taskId"] != "task_v1" {
+		t.Errorf("taskId = %v, want task_v1", resp.Data["taskId"])
+	}
+	if resp.Data["kind"] != ResultKindVideo {
+		t.Errorf("kind = %v, want %q（对账循环据此跳过转存）", resp.Data["kind"], ResultKindVideo)
+	}
+	if gotPath != "/v1/videos/generations" {
+		t.Errorf("请求路径 = %q, want /v1/videos/generations", gotPath)
+	}
+	if gotAuth != "Bearer test-key" {
+		t.Errorf("Authorization = %q, want Bearer test-key", gotAuth)
+	}
+	if gotVersion != "" || gotIdempotency != "" {
+		t.Errorf("不应发送版本/幂等头: version=%q idempotency=%q", gotVersion, gotIdempotency)
+	}
+	if got := received["resolution"]; got != "1080p" {
+		t.Errorf("上游收到的 resolution = %v, want 1080p", got)
+	}
+	if got := received["duration"]; got != float64(5) {
+		t.Errorf("上游收到的 duration = %v, want 5", got)
+	}
+	if got := received["generate_audio"]; got != true {
+		t.Errorf("上游收到的 generate_audio = %v, want true", got)
+	}
+	if got := received["nsfw_check"]; got != false {
+		t.Errorf("上游收到的 nsfw_check = %v, want false", got)
+	}
+	if got := received["seed"]; got != float64(-1) {
+		t.Errorf("上游收到的 seed = %v, want -1", got)
+	}
+	if got := received["omni_reference_task_type"]; got != "reference" {
+		t.Errorf("上游收到的 omni_reference_task_type = %v, want reference", got)
+	}
+}
+
+func TestAPIMartVideoGenerateFailureKinds(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"4xx 明确拒绝", http.StatusBadRequest, `{"error":{"message":"bad request"}}`, FailureRejected},
+		{"5xx 结果不确定", http.StatusInternalServerError, `{"error":"boom"}`, FailureUnknown},
+		{"业务失败码明确拒绝", http.StatusOK, `{"code":400,"data":null}`, FailureRejected},
+		{"缺少任务ID结果不确定", http.StatusOK, `{"code":200,"data":[]}`, FailureUnknown},
+		{"意外的 202 结果不确定", http.StatusAccepted, `{"code":202,"data":{"id":"task_202"}}`, FailureUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				fmt.Fprint(w, tt.body)
+			})
+			defer cleanup()
+
+			resp := a.VideoGenerate(context.Background(), testVideoReq())
+
+			if resp.Code != "fail" {
+				t.Fatalf("Code = %q, want fail", resp.Code)
+			}
+			if resp.FailureKind != tt.want {
+				t.Errorf("FailureKind = %q, want %q", resp.FailureKind, tt.want)
+			}
+		})
+	}
+}
+
+func TestAPIMartVideoGenerateTimeoutIsUnknown(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	})
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+
+	resp := a.VideoGenerate(ctx, testVideoReq())
+
+	if resp.FailureKind != FailureUnknown {
+		t.Errorf("超时必须归类为 %q（上游可能已受理，不能退款），实际 %q",
+			FailureUnknown, resp.FailureKind)
+	}
+}
+
+// videos[].url 可能是数组也可能是字符串；两种形态都要能取到成片地址。
+func TestVideoTaskQueryCompletedURLShapes(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantURL string
+	}{
+		{
+			"url 数组",
+			`{"code":200,"data":{"id":"task_v","status":"completed","result":{"videos":[{"url":["https://v/1.mp4"]}]}}}`,
+			"https://v/1.mp4",
+		},
+		{
+			"url 字符串",
+			`{"code":200,"data":{"id":"task_v","status":"completed","result":{"videos":[{"url":"https://v/2.mp4"}]}}}`,
+			"https://v/2.mp4",
+		},
+		{
+			"结果为空",
+			`{"code":200,"data":{"id":"task_v","status":"completed","result":{"videos":[]}}}`,
+			"",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, tt.raw)
+			})
+			defer cleanup()
+
+			resp := a.TaskQuery(context.Background(), `{"taskId":"task_v","kind":"video"}`)
+
+			if resp.Status != "completed" {
+				t.Fatalf("status = %q, want completed", resp.Status)
+			}
+			if resp.Kind != ResultKindVideo {
+				t.Errorf("Kind = %q, want %q", resp.Kind, ResultKindVideo)
+			}
+			if resp.Data["url"] != tt.wantURL {
+				t.Errorf("url = %v, want %q", resp.Data["url"], tt.wantURL)
+			}
+		})
+	}
+}
+
+func TestVideoTaskQueryFailedCarriesReasonAndKind(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":200,"data":{"id":"task_v","status":"failed","error":{"message":"duration must be between 4 and 30 whole seconds","reason":"invalid_parameter"}}}`)
+	})
+	defer cleanup()
+
+	resp := a.TaskQuery(context.Background(), `{"taskId":"task_v","kind":"video"}`)
+
+	if resp.Status != "failed" {
+		t.Fatalf("status = %q, want failed", resp.Status)
+	}
+	if resp.Kind != ResultKindVideo {
+		t.Errorf("Kind = %q, want %q", resp.Kind, ResultKindVideo)
+	}
+	if resp.FailureReason != FailureReasonInvalidParameter {
+		t.Errorf("FailureReason = %q, want %q", resp.FailureReason, FailureReasonInvalidParameter)
+	}
+	if resp.Data["error"] != "duration must be between 4 and 30 whole seconds" {
+		t.Errorf("Data.error = %v", resp.Data["error"])
+	}
+}
+
+func TestVideoTaskQueryPendingKeepsKind(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":200,"data":{"id":"task_v","status":"processing","progress":40}}`)
+	})
+	defer cleanup()
+
+	resp := a.TaskQuery(context.Background(), `{"taskId":"task_v","kind":"video"}`)
+
+	if resp.Status != "processing" {
+		t.Errorf("status = %q, want processing", resp.Status)
+	}
+	if resp.Kind != ResultKindVideo {
+		t.Errorf("Kind = %q, want %q", resp.Kind, ResultKindVideo)
+	}
+}
+
+// 图像任务没有 kind 标记，Kind 必须保持空串（控制器按 image 处理并转存）。
+func TestImageTaskQueryKindRemainsEmpty(t *testing.T) {
+	a, cleanup := newTestAPIMart(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":200,"data":{"id":"task_i","status":"completed","result":{"images":[{"url":["https://img/1.png"]}]}}}`)
+	})
+	defer cleanup()
+
+	resp := a.TaskQuery(context.Background(), `{"taskId":"task_i"}`)
+
+	if resp.Status != "completed" {
+		t.Fatalf("status = %q, want completed", resp.Status)
+	}
+	if resp.Kind != "" {
+		t.Errorf("Kind = %q, want 空串", resp.Kind)
+	}
+	if resp.Data["url"] != "https://img/1.png" {
+		t.Errorf("url = %v, want https://img/1.png", resp.Data["url"])
+	}
+}
+
+func TestNewVideoSupplierRegistersAPIMart(t *testing.T) {
+	s := NewVideoSupplier("APIMart", Config{})
+	if s == nil {
+		t.Fatal("NewVideoSupplier(apimart) = nil，视频供应商未注册")
+	}
+	if _, ok := s.(*apimart); !ok {
+		t.Fatalf("NewVideoSupplier(apimart) 类型 = %T, want *apimart", s)
+	}
+}

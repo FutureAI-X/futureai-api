@@ -495,6 +495,193 @@ func apimartTaskID(data json.RawMessage) (string, error) {
 	return "", fmt.Errorf("data 中缺少任务 ID")
 }
 
+// ── APIMart 视频生成（MAGI-2）──
+
+// apimartVideoModelSpec 单个平台视频模型在 APIMart 侧的固定参数。
+//
+// 分辨率、声音、审核、种子与参考模式全部由代码显式写入请求体，不依赖上游默认值：
+// 上游调整默认行为时，平台的输出规格与计费口径都不受影响。
+// 规格按供应商模型 ID 登记：平台模型名是管理端自由配置的对外别名，
+// 真正决定上游行为的是供应商模型 ID。未登记的供应商模型在提交时拒绝（fail-closed）。
+type apimartVideoModelSpec struct {
+	// upstreamResolution 上游要求的固定输出分辨率写法。MAGI-2 文档使用小写 1080p。
+	upstreamResolution string
+	// platformResolution 平台侧唯一允许的分辨率档位。
+	// 校验它是为了防止管理端规格配错后「按 720P 计费、实际出 1080p」的错配。
+	platformResolution string
+	// generateAudio / nsfwCheck 是写死值，不开放给调用方。
+	generateAudio bool
+	nsfwCheck     bool
+	// referenceMode 为 true 时，带参考素材的请求固定按参考模式提交。
+	referenceMode bool
+}
+
+// apimartVideoModels 供应商模型 ID → APIMart 视频规格。
+//
+// 平台模型名可以自由配置（例如「MAGI-2」「MAGI-2 参考生视频」），
+// 只要管理端把供应商模型 ID 映射到 `magi-2`，就会命中这份规格。
+//
+// MAGI-2 只开放参考生视频：图片一律是参考图，不做首帧/尾帧；
+// 视频与音频参考也按同一模式提交。
+var apimartVideoModels = map[string]apimartVideoModelSpec{
+	"magi-2": {
+		upstreamResolution: "1080p",
+		platformResolution: "1080P",
+		generateAudio:      true,
+		nsfwCheck:          false,
+		referenceMode:      true,
+	},
+}
+
+// apimartVideoSpecFor 按供应商模型 ID 查找 APIMart 视频规格。
+func apimartVideoSpecFor(vendorModelID string) (apimartVideoModelSpec, bool) {
+	spec, ok := apimartVideoModels[strings.TrimSpace(vendorModelID)]
+	return spec, ok
+}
+
+// buildAPIMartVideoRequest 把平台字段翻译成 MAGI-2 的线上请求体。
+//
+// 所有带默认值的上游字段都显式写入（resolution / generate_audio / nsfw_check /
+// seed / omni_reference_task_type），避免上游改默认值后平台行为漂移。
+// 参考素材数组为空时不写入：它表示「没有该输入」，不是一个有默认值的参数。
+func buildAPIMartVideoRequest(req VideoGenerateRequest) (map[string]interface{}, error) {
+	spec, ok := apimartVideoSpecFor(req.VendorModelID)
+	if !ok {
+		return nil, fmt.Errorf("供应商模型 %s 未配置 APIMart 视频规格", strings.TrimSpace(req.VendorModelID))
+	}
+	if !strings.EqualFold(strings.TrimSpace(req.Resolution), spec.platformResolution) {
+		return nil, fmt.Errorf("resolution 只支持 %s", spec.platformResolution)
+	}
+
+	ratio := strings.TrimSpace(req.Ratio)
+	// 参考生视频没有可跟随的首帧，adaptive 在上游没有确定语义，平台不开放。
+	if ratio == "" || strings.EqualFold(ratio, "adaptive") {
+		return nil, fmt.Errorf("ratio 必须是固定比例，不支持 adaptive")
+	}
+
+	body := map[string]interface{}{
+		"model":                    req.VendorModelID,
+		"prompt":                   req.Prompt,
+		"duration":                 req.Duration,
+		"resolution":               spec.upstreamResolution,
+		"aspect_ratio":             ratio,
+		"generate_audio":           spec.generateAudio,
+		"nsfw_check":               spec.nsfwCheck,
+		"seed":                     -1,
+		"omni_reference_task_type": "auto",
+	}
+
+	// 有任意参考素材时固定参考模式：只有图片时，这是让上游把图片当参考图
+	// （而不是首帧）的必要条件；带视频/音频时上游本来也会进入参考模式。
+	if spec.referenceMode && (len(req.ImageURLs) > 0 || len(req.VideoURLs) > 0 || len(req.AudioURLs) > 0) {
+		body["omni_reference_task_type"] = "reference"
+	}
+
+	if len(req.ImageURLs) > 0 {
+		body["image_urls"] = req.ImageURLs
+	}
+	if len(req.VideoURLs) > 0 {
+		body["video_urls"] = req.VideoURLs
+	}
+	if len(req.AudioURLs) > 0 {
+		body["audio_urls"] = req.AudioURLs
+	}
+
+	return body, nil
+}
+
+// VideoGenerate 调用 APIMart 视频生成 API（MAGI-2）。
+//
+// 失败性质与图像提交一致：4xx、业务 code 非 200、请求未发出 → rejected（可退款）；
+// 超时、连接中断、响应读不完整或解析失败、缺少任务 ID → unknown（不得退款）。
+func (a *apimart) VideoGenerate(ctx context.Context, req VideoGenerateRequest) VideoGenerateResponse {
+	failRejected := VideoGenerateResponse{Code: "fail", FailureKind: FailureRejected}
+	failUnknown := VideoGenerateResponse{Code: "fail", FailureKind: FailureUnknown}
+
+	body, err := buildAPIMartVideoRequest(req)
+	if err != nil {
+		// 参数不合法，请求尚未发出
+		common.SysErrorf("[APIMart] 视频请求参数无效: %v", err)
+		return failRejected
+	}
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		// 本地序列化失败，请求尚未发出
+		common.SysErrorf("[APIMart] 视频请求体序列化失败: %v", err)
+		return failRejected
+	}
+
+	url := fmt.Sprintf("%s/v1/videos/generations", a.cfg.BaseURL)
+	common.SysLogf("[APIMart] 发起视频生成请求: POST %s", url)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		common.SysErrorf("[APIMart] 构建视频请求失败: %v", err)
+		return failRejected
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", a.cfg.APIKey))
+	// 与图像提交一致：不传 Idempotency-Key 与 X-APIMart-Response-Version，
+	// 保持 HTTP 200 + data[].task_id 的返回格式。
+
+	resp, err := common.OutboundHTTPClient().Do(httpReq)
+	if err != nil {
+		// 超时或连接中断：请求可能已经送达并被受理，绝不能当成「没接单」
+		common.SysErrorf("[APIMart] 视频请求发送失败(结果不确定，不得退款): %v", err)
+		return failUnknown
+	}
+	defer resp.Body.Close()
+
+	common.SysLogf("[APIMart] 视频提交响应: HTTP %d", resp.StatusCode)
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, common.MaxOutboundBodySize))
+	if err != nil {
+		common.SysErrorf("[APIMart] 读取视频响应体失败(结果不确定，不得退款): %v", err)
+		return failUnknown
+	}
+
+	// 不传响应版本头时，成功固定返回 HTTP 200。4xx 是上游明确拒绝；
+	// 5xx、意外的 202 等可能来自上游前面的网关，请求或许已经建了任务 → 不确定。
+	if resp.StatusCode != http.StatusOK {
+		common.SysErrorf("[APIMart] 视频提交HTTP状态异常: %d, 响应: %s", resp.StatusCode, truncate(string(respBody), 500))
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return failRejected
+		}
+		return failUnknown
+	}
+
+	var apiResp apimartResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		common.SysErrorf("[APIMart] 视频响应JSON解析失败(结果不确定，不得退款): %v, 原始响应: %s", err, truncate(string(respBody), 500))
+		return failUnknown
+	}
+
+	if apiResp.Code != http.StatusOK {
+		common.SysErrorf("[APIMart] 视频业务code异常: %d, 响应: %s", apiResp.Code, truncate(string(respBody), 500))
+		return failRejected
+	}
+
+	taskID, err := apimartTaskID(apiResp.Data)
+	if err != nil {
+		common.SysErrorf("[APIMart] 视频响应中缺少任务ID(结果不确定，不得退款): %v, data: %s", err, truncate(string(apiResp.Data), 500))
+		return failUnknown
+	}
+
+	common.SysLogf("[APIMart] 视频生成提交成功, taskId: %s", taskID)
+
+	return VideoGenerateResponse{
+		Code: "success",
+		Data: map[string]interface{}{
+			"taskId": taskID,
+			// 对账循环按它判断结果类型：视频不转存，也不登记结果文件。
+			"kind": ResultKindVideo,
+		},
+	}
+}
+
+// ── APIMart 任务查询 ──
+
 // apimartTaskQueryResponse APIMart 任务查询响应结构
 type apimartTaskQueryResponse struct {
 	Code int                  `json:"code"`
@@ -511,11 +698,39 @@ type apimartTaskQueryData struct {
 
 type apimartTaskResult struct {
 	Images []apimartTaskImage `json:"images"`
+	Videos []apimartTaskVideo `json:"videos"`
 }
 
 type apimartTaskImage struct {
-	URL     []string `json:"url"`
-	B64JSON string   `json:"b64_json"`
+	URL     apimartURLList `json:"url"`
+	B64JSON string         `json:"b64_json"`
+}
+
+type apimartTaskVideo struct {
+	URL apimartURLList `json:"url"`
+}
+
+// apimartURLList 兼容上游 URL 字段的两种形态：字符串与字符串数组。
+// 图像接口返回数组；视频接口文档示例没有写死类型，两种都要能解析，
+// 否则一次格式差异就会把「任务已完成」误判成「查询失败」。
+type apimartURLList []string
+
+func (l *apimartURLList) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "null" {
+		*l = nil
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*l = apimartURLList{single}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err != nil {
+		return err
+	}
+	*l = apimartURLList(list)
+	return nil
 }
 
 // apimartTaskError 失败任务的上游错误。reason 是机器可读的分类，
@@ -554,6 +769,9 @@ var apimartTaskIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // TaskQuery 查询 APIMart 任务状态
 // vendorResponse 为提交任务时供应商返回的原始 JSON，APIMart 从中提取 taskId
+//
+// 图像与视频共用本方法：视频提交会在 vendor_response 中写 kind=video，
+// 这里据此决定解析 videos 还是 images，并把 Kind 一路带到控制器。
 func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQueryResponse {
 	// 从 vendorResponse 中提取 taskId
 	var respData map[string]interface{}
@@ -561,19 +779,27 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 		common.SysErrorf("[APIMart] vendorResponse 解析失败: %v", err)
 		return TaskQueryResponse{Status: "call_fail"}
 	}
+
+	// 旧图像任务的 vendor_response 没有 kind，保持空串（控制器按 image 处理）。
+	kind, _ := respData["kind"].(string)
+	responseKind := ""
+	if kind == ResultKindVideo {
+		responseKind = ResultKindVideo
+	}
+
 	taskID, _ := respData["taskId"].(string)
 	if taskID == "" {
 		common.SysErrorf("[APIMart] vendorResponse 中缺少 taskId")
-		return TaskQueryResponse{Status: "call_fail"}
+		return TaskQueryResponse{Status: "call_fail", Kind: responseKind}
 	}
 	if !apimartTaskIDPattern.MatchString(taskID) {
 		common.SysErrorf("[APIMart] taskId 形态非法，拒绝拼接查询 URL: %q", truncate(taskID, 64))
-		return TaskQueryResponse{Status: "call_fail"}
+		return TaskQueryResponse{Status: "call_fail", Kind: responseKind}
 	}
 
 	// 查询失败一律是 call_fail（= 状态未知），控制器不会据此退款，
 	// 因此这里所有错误路径共用同一个返回值。
-	failResp := TaskQueryResponse{TaskID: taskID, Status: "call_fail"}
+	failResp := TaskQueryResponse{TaskID: taskID, Status: "call_fail", Kind: responseKind}
 
 	// 构建请求
 	url := fmt.Sprintf("%s/v1/tasks/%s?language=zh", a.cfg.BaseURL, taskID)
@@ -630,8 +856,24 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 		result := TaskQueryResponse{
 			TaskID: taskID,
 			Status: "completed",
-			Data:   map[string]interface{}{"url": "", "b64_json": ""},
+			Kind:   responseKind,
 		}
+
+		// 视频结果只取 data.result.videos[0].url；Kind=video 让控制器跳过转存。
+		if responseKind == ResultKindVideo {
+			result.Data = map[string]interface{}{"url": ""}
+			if len(taskData.Result.Videos) > 0 {
+				for _, u := range taskData.Result.Videos[0].URL {
+					if u = strings.TrimSpace(u); u != "" {
+						result.Data["url"] = u
+						break
+					}
+				}
+			}
+			return result
+		}
+
+		result.Data = map[string]interface{}{"url": "", "b64_json": ""}
 		if len(taskData.Result.Images) > 0 {
 			img := taskData.Result.Images[0]
 			if len(img.URL) > 0 {
@@ -644,7 +886,7 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 
 	// 终态：failed / cancelled
 	if taskData.Status == "failed" || taskData.Status == "cancelled" {
-		result := TaskQueryResponse{TaskID: taskID, Status: taskData.Status}
+		result := TaskQueryResponse{TaskID: taskID, Status: taskData.Status, Kind: responseKind}
 		if taskData.Error != nil {
 			result.FailureReason = apimartFailureReason(taskData.Error.Reason)
 			// 原始错误只放进 Data，由控制器落到 query_response 供排查；
@@ -658,7 +900,7 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 	}
 
 	// 中间态：pending / processing
-	return TaskQueryResponse{TaskID: taskID, Status: taskData.Status}
+	return TaskQueryResponse{TaskID: taskID, Status: taskData.Status, Kind: responseKind}
 }
 
 // truncate 截断字符串到指定长度

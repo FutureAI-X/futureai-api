@@ -123,5 +123,6 @@
 | 模型 | 文档 |
 |---|---|
 | `MiniMax-H3` | [minimax-h3.md](minimax-h3.md) |
+| `MAGI-2` | [magi-2.md](magi-2.md) |
 
 模型以管理端实际配置为准。

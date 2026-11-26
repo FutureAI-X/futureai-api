@@ -402,6 +402,8 @@ func NewVideoSupplier(vendorName string, cfg Config) VideoSupplier {
 	switch strings.ToLower(strings.TrimSpace(vendorName)) {
 	case "metaso":
 		return newMetaso(cfg)
+	case "apimart":
+		return newAPIMart(cfg)
 	default:
 		return nil
 	}

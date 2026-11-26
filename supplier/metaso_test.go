@@ -536,8 +536,8 @@ func TestVideoSupplierFactory(t *testing.T) {
 	if NewVideoSupplier(" metaso ", Config{}) == nil {
 		t.Error("供应商名称应忽略大小写与首尾空白")
 	}
-	if NewVideoSupplier("apimart", Config{}) != nil {
-		t.Error("APIMart 当前不是视频供应商")
+	if NewVideoSupplier("apimart", Config{}) == nil {
+		t.Error("APIMart 应被识别为视频供应商")
 	}
 	if NewVideoSupplier("unknown", Config{}) != nil {
 		t.Error("未知供应商应返回 nil")
