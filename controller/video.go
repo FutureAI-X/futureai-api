@@ -598,8 +598,10 @@ func VideoGenerate(c *gin.Context) {
 		ModelID:        m.ID,
 		EndpointID:     endpoint.ID,
 		Status:         model.StatusProcessing,
+		Kind:           model.TaskKindVideo,
 		SubmitDeadline: &submitDeadline,
 		DeadlineAt:     &deadlineAt,
+		NextPollAt:     &now,
 		// 视频的数量在提交时全部已知，预扣即终值，因此直接标记为已结算。
 		CreditsSettled: true,
 		SettledCredits: billing.Total,

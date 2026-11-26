@@ -275,6 +275,9 @@ type TaskQueryResponse struct {
 	TaskID string                 `json:"task_id"`
 	Status string                 `json:"status"`         // completed, failed, cancelled, pending, processing, call_fail
 	Data   map[string]interface{} `json:"data,omitempty"` // completed 时为结果；failed / cancelled 时可带上游错误
+	// Progress 上游返回的进度（0-100）。只有部分供应商提供；为 0 时客户端
+	// 使用估算进度。控制器把它落库，并通过任务查询接口对外展示。
+	Progress int `json:"progress,omitempty"`
 	// Kind 结果类型：image / video。空串按 image 处理（兼容旧供应商实现）。
 	// 控制器据此决定是否把完成结果转存到对象存储——视频只返回上游 URL，不转存。
 	Kind string `json:"kind,omitempty"`

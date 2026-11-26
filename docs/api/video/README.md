@@ -76,12 +76,13 @@
 }
 ```
 
-任务完成后，视频任务只返回 `taskId`、`status` 与 `data.url`：
+任务完成后，视频任务只返回 `taskId`、`status`、`kind` 与 `data.url`：
 
 ```json
 {
   "taskId": "task_e629c5e8a37a614cf2289f650585aae4",
   "status": "completed",
+  "kind": "video",
   "data": {
     "url": "https://files.metaso.cn/api/minimax/v2/video_generation/..."
   }

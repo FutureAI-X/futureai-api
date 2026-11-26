@@ -144,7 +144,7 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些�
 
 ## 7 任务状态与对账
 
-对账循环查询 `/v1/tasks/{task_id}?language=zh`。上游 `completed` 映射为 `completed`，`failed` / `cancelled` 映射为 `failed`；查询失败或未识别状态时保持 `processing`。图片任务创建后 15 分钟仍未完成时转 `failed` 并退款。
+对账循环查询 `/v1/tasks/{task_id}?language=zh`。上游 `completed` 映射为 `completed`，`failed` / `cancelled` 映射为 `failed`；查询失败或未识别状态时保持 `processing`。图片任务创建后 60 分钟仍未完成时转 `failed` 并退款。
 
 失败任务会读取 `data.error.reason` 并归一化为平台失败原因，控制器据此生成用户可见的错误码与文案：
 

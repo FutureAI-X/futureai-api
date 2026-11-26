@@ -28,6 +28,15 @@ const (
 	StatusFailed     = "failed"
 )
 
+// 任务类型（kind）。建任务时从模型/端点快照，决定默认截止时间、轮询节奏
+// 与结果处理方式（图片/音频转存，视频只返回上游 URL）。
+const (
+	TaskKindImage = "image"
+	TaskKindVideo = "video"
+	TaskKindAudio = "audio"
+	TaskKindText  = "text"
+)
+
 // terminalStatuses 终态列表：进入这些状态后任务不再被轮询，且不会再被改动。
 var terminalStatuses = []string{StatusCompleted, StatusFailed}
 
@@ -59,6 +68,18 @@ type Task struct {
 	// Status 上建索引：对账循环每隔几十秒就要按状态筛一次，
 	// 没有索引的话每次都是对最大表的顺序扫描。
 	Status string `json:"status" gorm:"index;size:32;not null;default:'processing'"`
+
+	// Kind 任务类型快照（image / video / audio / text）。
+	// 用于决定截止时间、轮询节奏与结果处理，避免每次按端点路径反推。
+	Kind string `json:"kind" gorm:"size:16;not null;default:'image'"`
+
+	// NextPollAt 下一次允许查询上游的时间。对账循环按它取到期任务，
+	// 不再每轮全量扫描，也让长任务之间的调度保持公平。
+	NextPollAt *time.Time `json:"next_poll_at,omitempty" gorm:"index"`
+	// PollFailures 连续查询失败次数，用于指数退避。
+	PollFailures int `json:"poll_failures,omitempty" gorm:"not null;default:0"`
+	// Progress 上游返回的进度（0-100），仅用于展示。
+	Progress int `json:"progress,omitempty" gorm:"not null;default:0"`
 
 	// SubmitDeadline 超过这个时间仍没有 vendor_response，判定提交未成功。
 	SubmitDeadline *time.Time `json:"submit_deadline,omitempty" gorm:"index"`
@@ -285,18 +306,61 @@ func FailStaleSubmitTask(taskID, errorCode, errorMessage string) error {
 	})
 }
 
-// GetTasksAwaitingPoll 取出需要轮询的任务：非终态、且已经记下了供应商响应。
+// GetTasksAwaitingPoll 取出需要轮询的任务：非终态、已记下供应商响应、且已到期。
 //
-// 刻意带 LIMIT：tasks 是留存量最大的表且带三个 TEXT 列，
+// 按 next_poll_at 排序而不是 id：长任务不会长期占住前排，避免后面的任务
+// 直到自己的截止时间都没被查过一次。deadline_at 已到的任务也纳入到期集合，
+// 让它们在失败退款前仍能做最后一次查询。
+//
+// 刻意带 LIMIT：tasks 是留存量最大的表且带多个 TEXT 列，
 // 无上限的 Find 会在异常堆积时把整表读进内存。
-func GetTasksAwaitingPoll(limit int) ([]Task, error) {
+func GetTasksAwaitingPoll(now time.Time, limit int) ([]Task, error) {
 	var tasks []Task
 	// vendor_response 必须显式排除 NULL：该列可空，历史行或人工插入的行可能是
 	// NULL 而不是空串，而 `NULL <> ''` 在 SQL 里求值为 NULL（非真）——
 	// 只写 <> '' 的话这类行会被静默漏掉。
-	err := DB.Where("status = ? AND vendor_response IS NOT NULL AND vendor_response <> ''", StatusProcessing).
-		Order("id ASC").Limit(limit).Find(&tasks).Error
+	err := DB.Where(
+		"status = ? AND vendor_response IS NOT NULL AND vendor_response <> '' "+
+			"AND (next_poll_at IS NULL OR next_poll_at <= ? OR (deadline_at IS NOT NULL AND deadline_at <= ?))",
+		StatusProcessing, now, now).
+		// 已到截止时间的任务优先做最后一次查询，其余按到期时间排序。
+		Order("CASE WHEN deadline_at IS NOT NULL AND deadline_at <= NOW() THEN 0 ELSE 1 END ASC, " +
+			"COALESCE(next_poll_at, created_at) ASC").
+		Limit(limit).Find(&tasks).Error
 	return tasks, err
+}
+
+// ClaimTaskForPoll 为一次上游查询抢占任务。
+//
+// 把 next_poll_at 推到租约到期时间，同一任务在租约内不会被本进程或其它实例
+// 重复查询；查询完成后由 SetTaskPollState 写入真正的下一次时间。
+// 返回 false 表示任务已被其它执行者抢走或已不在 processing。
+func ClaimTaskForPoll(taskID string, lease time.Duration) (bool, error) {
+	now := time.Now()
+	res := DB.Model(&Task{}).
+		Where("task_id = ? AND status = ? AND (next_poll_at IS NULL OR next_poll_at <= ? OR (deadline_at IS NOT NULL AND deadline_at <= ?))",
+			taskID, StatusProcessing, now, now).
+		Update("next_poll_at", now.Add(lease))
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// SetTaskPollState 记录一次查询后的调度状态。
+// progress 传 0 表示上游未提供进度，保留原值。
+func SetTaskPollState(taskID string, nextPollAt time.Time, failures int, progress int) error {
+	updates := map[string]interface{}{
+		"next_poll_at":  nextPollAt,
+		"poll_failures": failures,
+	}
+	if progress > 0 {
+		if progress > 100 {
+			progress = 100
+		}
+		updates["progress"] = progress
+	}
+	return DB.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates).Error
 }
 
 // GetStaleSubmitTasks 取出提交阶段超时、仍没有供应商响应的任务。

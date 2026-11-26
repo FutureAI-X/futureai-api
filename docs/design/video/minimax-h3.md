@@ -71,7 +71,7 @@ METASO 使用异步任务接口。平台提交后拿到上游 `task_id`，再由
 | `queued` / `running` | `processing` |
 | 未知状态 | 保持 `processing` |
 
-查询失败、HTTP 非 200、响应解析失败时任务保持 `processing`，控制器不会据此退款；超过 30 分钟截止时间仍无法确认时，统一转 `failed` 并写入 `error_code=query_timeout`。
+查询失败、HTTP 非 200、响应解析失败时任务保持 `processing`，控制器不会据此退款；超过 180 分钟截止时间仍无法确认时，统一转 `failed` 并写入 `error_code=query_timeout`。
 
 ## 8 结果转存
 

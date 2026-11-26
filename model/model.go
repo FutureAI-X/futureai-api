@@ -15,6 +15,7 @@ type ModelType string
 const (
 	ModelTypeImage ModelType = "image" // 图像生成
 	ModelTypeVideo ModelType = "video" // 视频生成
+	ModelTypeAudio ModelType = "audio" // 语音/音频生成（TTS 等），预留
 	ModelTypeText  ModelType = "text"  // 文本生成
 	ModelTypeMusic ModelType = "music" // 音乐生成
 	ModelTypeOther ModelType = "other" // 其他
@@ -24,6 +25,7 @@ const (
 var AllModelTypes = []ModelType{
 	ModelTypeImage,
 	ModelTypeVideo,
+	ModelTypeAudio,
 	ModelTypeText,
 	ModelTypeMusic,
 	ModelTypeOther,

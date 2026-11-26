@@ -157,7 +157,7 @@ APIMart 通过 `ImageRequestValidator` 在扣费前校验以下约束。这些�
 
 `task_id` 来自上游响应，拼接查询 URL 前必须通过字符集校验。校验失败按查询失败处理，不拼接 URL。
 
-图片任务的结果确认截止时间为创建后 15 分钟；超过后仍未完成，转 `failed` 并写入 `error_code=query_timeout`。
+图片任务的结果确认截止时间为创建后 60 分钟；超过后仍未完成，转 `failed` 并写入 `error_code=query_timeout`。
 
 ## 8 结果转存
 
@@ -167,7 +167,7 @@ APIMart 不声明 `RequireResultFetch`，因此转存失败只记录日志，任
 
 ## 9 失败性质与退款
 
-任务只有 `processing` / `completed` / `failed` 三种状态。`failed` 表示已退款，失败原因写入 `error_code` / `error_message`。图片任务创建后 15 分钟仍未完成时，对账循环转 `failed` 并退款，同时记录 `[需人工对账]` 日志。
+任务只有 `processing` / `completed` / `failed` 三种状态。`failed` 表示已退款，失败原因写入 `error_code` / `error_message`。图片任务创建后 60 分钟仍未完成时，对账循环转 `failed` 并退款，同时记录 `[需人工对账]` 日志。
 
 ## 10 配置
 

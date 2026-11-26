@@ -110,7 +110,7 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 ## 7 任务状态与对账
 
-与 flare 版本相同。对账循环查询 `/v1/tasks/{task_id}?language=zh`，把上游 `completed` 映射为 `completed`，把 `failed` / `cancelled` 映射为 `failed`。查询失败或未识别状态时任务保持 `processing`，下一轮继续查询；超过创建后 15 分钟仍未完成则转 `failed` 并退款。
+与 flare 版本相同。对账循环查询 `/v1/tasks/{task_id}?language=zh`，把上游 `completed` 映射为 `completed`，把 `failed` / `cancelled` 映射为 `failed`。查询失败或未识别状态时任务保持 `processing`，下一轮继续查询；超过创建后 60 分钟仍未完成则转 `failed` 并退款。
 
 ## 8 结果转存
 

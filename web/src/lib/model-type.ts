@@ -9,6 +9,7 @@
 export const MODEL_TYPE_OPTIONS = [
   { value: 'image', label: '图像生成' },
   { value: 'video', label: '视频生成' },
+  { value: 'audio', label: '语音生成' },
   { value: 'text', label: '文本生成' },
   { value: 'music', label: '音乐生成' },
   { value: 'other', label: '其他' },

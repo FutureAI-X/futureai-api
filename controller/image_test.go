@@ -476,19 +476,54 @@ func TestParseIdempotencyKey(t *testing.T) {
 
 func strPtr(s string) *string { return &s }
 
-// 新 SLA：图片 15 分钟、视频 30 分钟；提交确认窗口必须小于结果截止时间。
+// SLA：图片 60 分钟、视频 180 分钟；提交确认窗口必须小于结果截止时间。
 func TestTaskDeadlines(t *testing.T) {
-	if imageResultDeadline != 15*time.Minute {
-		t.Errorf("imageResultDeadline = %s, want 15m", imageResultDeadline)
+	if imageResultDeadline != 60*time.Minute {
+		t.Errorf("imageResultDeadline = %s, want 60m", imageResultDeadline)
 	}
-	if videoResultDeadline != 30*time.Minute {
-		t.Errorf("videoResultDeadline = %s, want 30m", videoResultDeadline)
+	if videoResultDeadline != 180*time.Minute {
+		t.Errorf("videoResultDeadline = %s, want 180m", videoResultDeadline)
 	}
 	if asyncSubmitConfirmWindow <= 0 || asyncSubmitConfirmWindow >= imageResultDeadline {
 		t.Errorf("asyncSubmitConfirmWindow = %s，必须大于 0 且小于图片截止时间", asyncSubmitConfirmWindow)
 	}
 	if backgroundSubmitWindow < 15*time.Minute {
 		t.Errorf("backgroundSubmitWindow = %s，不能小于 MOSS 的 15 分钟上游超时", backgroundSubmitWindow)
+	}
+}
+
+// 轮询节奏按类型与任务年龄分档。
+func TestTaskPollInterval(t *testing.T) {
+	cases := []struct {
+		kind string
+		age  time.Duration
+		want time.Duration
+	}{
+		{model.TaskKindImage, 0, 5 * time.Second},
+		{model.TaskKindImage, 3 * time.Minute, 10 * time.Second},
+		{model.TaskKindImage, 10 * time.Minute, 15 * time.Second},
+		{model.TaskKindVideo, 0, 10 * time.Second},
+		{model.TaskKindVideo, 3 * time.Minute, 20 * time.Second},
+		{model.TaskKindVideo, 10 * time.Minute, 30 * time.Second},
+		{model.TaskKindAudio, 0, 2 * time.Second},
+		{model.TaskKindAudio, time.Minute, 5 * time.Second},
+		{model.TaskKindAudio, 5 * time.Minute, 15 * time.Second},
+	}
+	for _, tc := range cases {
+		if got := taskPollInterval(tc.kind, tc.age); got != tc.want {
+			t.Errorf("taskPollInterval(%s, %s) = %s, want %s", tc.kind, tc.age, got, tc.want)
+		}
+	}
+}
+
+// 抖动只改变 ±10%，不会把间隔拉到另一个档位。
+func TestJitterInterval(t *testing.T) {
+	base := 10 * time.Second
+	for i := 0; i < 100; i++ {
+		got := jitterInterval(base)
+		if got < 9*time.Second || got > 11*time.Second {
+			t.Fatalf("jitterInterval(%s) = %s，超出 ±10%%", base, got)
+		}
 	}
 }
 

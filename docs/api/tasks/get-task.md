@@ -2,7 +2,7 @@
 
 `GET /v1/tasks/:task_id`
 
-查询本人提交的图像或视频任务。请求需要 `Authorization: Bearer sk-...`，只能查询当前 API Key 所属用户的任务。查询他人任务返回 `403`。
+查询本人提交的图像、视频或音频任务。请求需要 `Authorization: Bearer sk-...`，只能查询当前 API Key 所属用户的任务。查询他人任务返回 `403`。
 
 ## 1 响应
 
@@ -12,6 +12,7 @@
 {
   "taskId": "task_e629c5e8a37a614cf2289f650585aae4",
   "status": "completed",
+  "kind": "image",
   "file_id": "file_6d41e4bf9a4bfac7b1ff97d7.png",
   "data": {
     "url": "https://futureaiapi.com/v1/images/get/file_6d41e4bf9a4bfac7b1ff97d7.png",
@@ -28,6 +29,7 @@
 {
   "taskId": "task_e629c5e8a37a614cf2289f650585aae4",
   "status": "completed",
+  "kind": "video",
   "data": {
     "url": "https://files.metaso.cn/api/minimax/v2/video_generation/..."
   },
@@ -41,6 +43,7 @@
 {
   "taskId": "task_e629c5e8a37a614cf2289f650585aae4",
   "status": "failed",
+  "kind": "image",
   "data": null,
   "error": {
     "code": "vendor_rejected",
@@ -61,9 +64,37 @@
 | `completed` | 是 | 生成完成，结果在 `data` 里 | 已扣 |
 | `failed` | 是 | 失败，已退款；原因在 `error` 里 | 已退 |
 
-只有 `completed` 时 `data` 才有值。`processing` 表示任务仍在推进，应继续轮询，建议间隔 5 秒左右。视频任务按提交时计算的积分扣费，失败或取消时全额退款。
+只有 `completed` 时 `data` 才有值。`processing` 表示任务仍在推进，应按响应里的 `poll_after_ms` 继续轮询；不要自己按固定时长判断任务失败。视频任务按提交时计算的积分扣费，失败或取消时全额退款。
 
 MOSS 是同步接口，由平台后台提交，任务在生成期间显示为 `processing`。任何失败都会直接转为 `failed` 并退款。
+
+### 2.1 轮询提示字段
+
+`processing` 响应额外返回：
+
+| 字段 | 说明 |
+|---|---|
+| `kind` | 任务类型：`image` / `video` / `audio` / `text` |
+| `poll_after_ms` | 建议的下次轮询间隔（毫秒）；按任务类型与已用时长计算 |
+| `deadline_at` | 平台放弃并退款的时间（RFC3339） |
+| `progress` | 上游进度 0–100；部分供应商不提供，省略 |
+
+示例：
+
+```json
+{
+  "taskId": "task_...",
+  "status": "processing",
+  "kind": "video",
+  "progress": 35,
+  "poll_after_ms": 10000,
+  "deadline_at": "2026-11-27T12:00:00Z",
+  "data": null,
+  "error": null
+}
+```
+
+`completed` / `failed` 也返回 `kind`，但不返回轮询提示。
 
 ## 3 结果字段
 
@@ -87,9 +118,9 @@ MOSS 是同步接口，由平台后台提交，任务在生成期间显示为 `p
 | 场景 | 时限 |
 |---|---|
 | 异步提交确认 | 创建后 60 秒 |
-| 图片结果确认 | 创建后 15 分钟 |
+| 图片结果确认 | 创建后 60 分钟 |
 | MOSS 同步生成 | 创建后 15 分钟 |
-| 视频结果确认 | 创建后 30 分钟 |
+| 视频结果确认 | 创建后 180 分钟 |
 
 到达截止时间仍未完成的任务会转为 `failed` 并退款。`error.code` 取值如下。
 

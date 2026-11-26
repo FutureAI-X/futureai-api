@@ -103,7 +103,7 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 失败任务读取 `data.error.reason`，沿用 `supplier/apimart.go` 中的 `apimartFailureReasons`（与图像侧同一张表）：`content_policy_violation`、`invalid_parameter`、`unsupported_option`、`invalid_media`、`media_unreachable`、`generation_timeout`、`service_unavailable` 等。上游原文只写入 `query_response`，不透传给调用方。
 
-任务超过 30 分钟仍未确认完成时，统一转 `failed` 并写入 `error_code=query_timeout`。
+任务超过 180 分钟仍未确认完成时，统一转 `failed` 并写入 `error_code=query_timeout`。轮询节奏为 0–3 分钟每 10 秒、3–10 分钟每 20 秒、10 分钟以后每 30 秒（±10% 抖动），由服务端按 `next_poll_at` 调度，并通过任务查询接口下发 `poll_after_ms`。
 
 ## 8 结果转存
 

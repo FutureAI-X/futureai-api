@@ -900,7 +900,12 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 	}
 
 	// 中间态：pending / processing
-	return TaskQueryResponse{TaskID: taskID, Status: taskData.Status, Kind: responseKind}
+	return TaskQueryResponse{
+		TaskID:   taskID,
+		Status:   taskData.Status,
+		Kind:     responseKind,
+		Progress: taskData.Progress,
+	}
 }
 
 // truncate 截断字符串到指定长度

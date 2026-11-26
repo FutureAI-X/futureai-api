@@ -92,7 +92,9 @@ APIMart 使用平铺字段。`buildAPIMartVideoRequest` 把平台字段翻译为
 | `failed` / `cancelled` | `failed` |
 | 查询失败或未知状态 | 保持 `processing` |
 
-查询失败表示查询本身失败，不是任务失败。对账循环不会据此退款，任务保持 `processing` 等待下一轮；超过 30 分钟截止时间仍无法确认时，统一转 `failed` 并写入 `error_code=query_timeout`。
+查询失败表示查询本身失败，不是任务失败。对账循环不会据此退款，任务保持 `processing` 并按指数退避重试；超过 180 分钟截止时间仍无法确认时，统一转 `failed` 并写入 `error_code=query_timeout`。
+
+对账循环按任务的 `next_poll_at` 取到期任务，不再每轮全量扫描。视频的轮询节奏为：0–3 分钟每 10 秒、3–10 分钟每 20 秒、10 分钟以后每 30 秒，并加 ±10% 抖动。任务查询接口把同一节奏作为 `poll_after_ms` 下发给客户端。
 
 ## 7 计费
 

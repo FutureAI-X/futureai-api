@@ -339,6 +339,11 @@ func migrateDB() error {
 		return err
 	}
 
+	// 回填任务类型（历史视频任务）与调度时间。
+	if err := migrateTaskKindAndPolling(); err != nil {
+		return err
+	}
+
 	// 旧 pixel_size 规格里的 preset label 不再支持，清理后再进入严格解析。
 	if err := migrateParamSpecPresetLabels(); err != nil {
 		return err

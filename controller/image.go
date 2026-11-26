@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -338,14 +339,16 @@ func ImageGenerate(c *gin.Context) {
 		deadlineAt = now.Add(backgroundSubmitWindow)
 	}
 	task := model.Task{
-		TaskID:         model.GenerateTaskID(),
-		UserID:         userID,
-		VendorID:       vendor.ID,
-		ModelID:        m.ID,
-		EndpointID:     endpoint.ID,
+		TaskID:          model.GenerateTaskID(),
+		UserID:          userID,
+		VendorID:        vendor.ID,
+		ModelID:         m.ID,
+		EndpointID:      endpoint.ID,
 		Status:          model.StatusProcessing,
+		Kind:            model.TaskKindImage,
 		SubmitDeadline:  &submitDeadline,
 		DeadlineAt:      &deadlineAt,
+		NextPollAt:      &now,
 		Credits:         credits.Total,
 		PreauthCredits:  credits.Total,
 		SettledCredits:  settledCredits,
@@ -1068,14 +1071,25 @@ func GetTask(c *gin.Context) {
 		return
 	}
 
-	// processing：结果区不返回任何数据。
+	kind := taskKind(task)
+
+	// processing：结果区不返回任何数据，但下发轮询提示。
 	if task.Status == model.StatusProcessing {
-		c.JSON(http.StatusOK, gin.H{
-			"taskId": task.TaskID,
-			"status": model.StatusProcessing,
-			"data":   nil,
-			"error":  nil,
-		})
+		payload := gin.H{
+			"taskId":        task.TaskID,
+			"status":        model.StatusProcessing,
+			"kind":          kind,
+			"data":          nil,
+			"error":         nil,
+			"poll_after_ms": taskPollAfterMS(task),
+		}
+		if task.DeadlineAt != nil {
+			payload["deadline_at"] = task.DeadlineAt.UTC().Format(time.RFC3339)
+		}
+		if task.Progress > 0 {
+			payload["progress"] = task.Progress
+		}
+		c.JSON(http.StatusOK, payload)
 		return
 	}
 
@@ -1084,6 +1098,7 @@ func GetTask(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"taskId": task.TaskID,
 			"status": model.StatusFailed,
+			"kind":   kind,
 			"data":   nil,
 			"error":  taskErrorPayload(task),
 		})
@@ -1093,10 +1108,12 @@ func GetTask(c *gin.Context) {
 	// 未迁移的旧状态按 processing 返回，避免把未知状态当成终态。
 	if task.Status != model.StatusCompleted {
 		c.JSON(http.StatusOK, gin.H{
-			"taskId": task.TaskID,
-			"status": model.StatusProcessing,
-			"data":   nil,
-			"error":  nil,
+			"taskId":        task.TaskID,
+			"status":        model.StatusProcessing,
+			"kind":          kind,
+			"data":          nil,
+			"error":         nil,
+			"poll_after_ms": taskPollAfterMS(task),
 		})
 		return
 	}
@@ -1107,6 +1124,7 @@ func GetTask(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"taskId": task.TaskID,
 			"status": model.StatusCompleted,
+			"kind":   kind,
 			"data":   videoTaskData(task.QueryResponse),
 			"error":  nil,
 		})
@@ -1130,6 +1148,7 @@ func GetTask(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"taskId":  task.TaskID,
 		"status":  model.StatusCompleted,
+		"kind":    kind,
 		"file_id": task.FileID,
 		"data":    data,
 		"error":   nil,
@@ -1166,7 +1185,15 @@ func videoTaskData(queryResponse string) interface{} {
 // 因此 GetTask 不能套用图片的 applyPublicFileURL。
 // 端点仍被模型引用时不允许删除（见 DeleteEndpoint），正常情况下查得到。
 func isVideoTask(task *model.Task) bool {
-	if task == nil || task.EndpointID <= 0 {
+	if task == nil {
+		return false
+	}
+	// 新任务直接看 kind，不再每次查端点表。
+	if task.Kind != "" {
+		return task.Kind == model.TaskKindVideo
+	}
+	// 兜底：历史行未回填 kind 时仍按端点路径推断。
+	if task.EndpointID <= 0 {
 		return false
 	}
 	ep, err := model.GetEndpointByID(task.EndpointID)
@@ -1237,21 +1264,16 @@ func applyPublicFileURL(data map[string]interface{}, fileID string) map[string]i
 // 非终态，既不退款也不丢弃。goroutine 数量也不再随任务数增长。
 
 const (
-	// reconcileInterval 对账间隔，同时也是同一任务两次上游查询之间的间隔
-	reconcileInterval = 5 * time.Second
-
-	// reconcileBatchSize 单轮最多处理的任务数（防止异常堆积时一次性读满内存）
-	reconcileBatchSize = 500
-
-	// maxConcurrentQueries 同时在飞的上游查询数
-	maxConcurrentQueries = 50
+	// reconcileInterval 对账间隔；必须不大于最小轮询档位
+	// （音频 0-1 分钟档是 2 秒）。每轮只取到期任务，代价与任务数无关。
+	reconcileInterval = 2 * time.Second
 
 	// asyncSubmitConfirmWindow 异步提交的快速确认窗口。
 	// 超过这个时间仍没有 vendor_response，判定提交未成功并退款。
 	asyncSubmitConfirmWindow = 60 * time.Second
 
 	// imageResultDeadline 图片任务的结果确认截止时间。
-	imageResultDeadline = 15 * time.Minute
+	imageResultDeadline = 60 * time.Minute
 
 	// backgroundSubmitWindow 后台同步生成（MOSS）的截止时间。
 	// 上游同步调用本身最长 15 分钟，留 30 秒内部余量避免和写入结果竞争。
@@ -1259,7 +1281,11 @@ const (
 
 	// videoSubmitConfirmWindow / videoResultDeadline 视频任务的时间上限。
 	videoSubmitConfirmWindow = 60 * time.Second
-	videoResultDeadline      = 30 * time.Minute
+	videoResultDeadline      = 180 * time.Minute
+
+	// pollLease 一次上游查询的租约：查询超时 + 余量。
+	// 查询期间 next_poll_at 被推到租约到期，其它实例不会重复查同一任务。
+	pollLease = supplier.QueryTimeout + 10*time.Second
 
 	// 上游查询状态。任务状态只有 processing/completed/failed，
 	// 这些常量只用于解析供应商返回的原始状态。
@@ -1269,8 +1295,146 @@ const (
 	upstreamStatusCallFail  = "call_fail"
 )
 
+// reconcileBatchSize / maxConcurrentQueries / maxVendorConcurrentQueries 是
+// 服务端安全阀，可通过环境变量调整。都在 RunTaskReconciler 启动时读取一次，
+// 避免包初始化早于 .env 加载。
+var (
+	reconcileBatchSize         = 1000
+	maxConcurrentQueries       = 100
+	maxVendorConcurrentQueries = 30
+)
+
 // querySem 限制同时在飞的上游查询数
 var querySem = make(chan struct{}, maxConcurrentQueries)
+
+// vendorQuerySems 每个供应商的并发查询上限，避免一个上游被打爆。
+var (
+	vendorQuerySemMu sync.Mutex
+	vendorQuerySems  = map[int]chan struct{}{}
+)
+
+// loadReconcileConfig 读取对账容量配置。
+// getenv 在启动时调用，此时 .env 已由 main 加载。
+func loadReconcileConfig() {
+	reconcileBatchSize = common.GetEnvOrDefault("RECONCILE_BATCH_SIZE", reconcileBatchSize)
+	maxConcurrentQueries = common.GetEnvOrDefault("MAX_CONCURRENT_QUERIES", maxConcurrentQueries)
+	maxVendorConcurrentQueries = common.GetEnvOrDefault("MAX_VENDOR_CONCURRENT_QUERIES", maxVendorConcurrentQueries)
+	if maxConcurrentQueries <= 0 {
+		maxConcurrentQueries = 100
+	}
+	if maxVendorConcurrentQueries <= 0 {
+		maxVendorConcurrentQueries = 30
+	}
+	if reconcileBatchSize < maxConcurrentQueries {
+		reconcileBatchSize = maxConcurrentQueries
+	}
+	querySem = make(chan struct{}, maxConcurrentQueries)
+	vendorQuerySemMu.Lock()
+	vendorQuerySems = map[int]chan struct{}{}
+	vendorQuerySemMu.Unlock()
+	common.SysLogf("[Reconcile] 容量配置: batch=%d, 全局并发=%d, 单供应商并发=%d",
+		reconcileBatchSize, maxConcurrentQueries, maxVendorConcurrentQueries)
+}
+
+// acquireVendorSlot 获取一个供应商查询位；满时返回 false，由下一轮继续。
+func acquireVendorSlot(vendorID int) (func(), bool) {
+	vendorQuerySemMu.Lock()
+	sem, ok := vendorQuerySems[vendorID]
+	if !ok {
+		sem = make(chan struct{}, maxVendorConcurrentQueries)
+		vendorQuerySems[vendorID] = sem
+	}
+	vendorQuerySemMu.Unlock()
+
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, true
+	default:
+		return nil, false
+	}
+}
+
+// taskKind 返回任务类型；历史行未回填时按图片处理。
+func taskKind(task *model.Task) string {
+	if task == nil || strings.TrimSpace(task.Kind) == "" {
+		return model.TaskKindImage
+	}
+	return task.Kind
+}
+
+// taskPollInterval 按任务类型与年龄返回轮询间隔（未加抖动）。
+//
+// 图片：0-3m 5s，3-10m 10s，>10m 15s
+// 视频：0-3m 10s，3-10m 20s，>10m 30s
+// 音频：0-1m 2s，1-5m 5s，>5m 15s
+func taskPollInterval(kind string, age time.Duration) time.Duration {
+	switch kind {
+	case model.TaskKindVideo:
+		switch {
+		case age < 3*time.Minute:
+			return 10 * time.Second
+		case age < 10*time.Minute:
+			return 20 * time.Second
+		default:
+			return 30 * time.Second
+		}
+	case model.TaskKindAudio:
+		switch {
+		case age < time.Minute:
+			return 2 * time.Second
+		case age < 5*time.Minute:
+			return 5 * time.Second
+		default:
+			return 15 * time.Second
+		}
+	default:
+		switch {
+		case age < 3*time.Minute:
+			return 5 * time.Second
+		case age < 10*time.Minute:
+			return 10 * time.Second
+		default:
+			return 15 * time.Second
+		}
+	}
+}
+
+// jitterInterval 加 ±10% 抖动，避免大量任务在同一秒集中查询上游。
+func jitterInterval(interval time.Duration) time.Duration {
+	return time.Duration(float64(interval) * (0.9 + rand.Float64()*0.2))
+}
+
+// scheduleNextPoll 记录一次正常查询后的下一次轮询时间。
+func scheduleNextPoll(task model.Task, progress int) {
+	age := time.Since(task.CreatedAt)
+	next := time.Now().Add(jitterInterval(taskPollInterval(taskKind(&task), age)))
+	if err := model.SetTaskPollState(task.TaskID, next, 0, progress); err != nil {
+		common.SysErrorf("[Reconcile] 更新下次轮询时间失败: taskID=%s, err=%v", task.TaskID, err)
+	}
+}
+
+// scheduleRetryAfterFailure 查询失败后指数退避，上限 60 秒。
+// 查询失败不代表任务失败，只影响下次查询时间。
+func scheduleRetryAfterFailure(task model.Task) {
+	failures := task.PollFailures + 1
+	if failures > 3 {
+		failures = 3
+	}
+	base := taskPollInterval(taskKind(&task), time.Since(task.CreatedAt))
+	delay := base * time.Duration(1<<uint(failures))
+	if delay > 60*time.Second {
+		delay = 60 * time.Second
+	}
+	next := time.Now().Add(jitterInterval(delay))
+	if err := model.SetTaskPollState(task.TaskID, next, failures, 0); err != nil {
+		common.SysErrorf("[Reconcile] 更新失败退避时间失败: taskID=%s, err=%v", task.TaskID, err)
+	}
+}
+
+// taskPollAfterMS 返回对外下发的轮询间隔（毫秒，未加抖动）。
+func taskPollAfterMS(task *model.Task) int64 {
+	return int64(taskPollInterval(taskKind(task), time.Since(task.CreatedAt)) / time.Millisecond)
+}
 
 // inFlightPolls 本进程正在查询的任务，避免同一任务被并发查询
 var inFlightPolls sync.Map
@@ -1318,12 +1482,36 @@ func ScheduleTaskPoll(taskID string) {
 		return // 并发位已满，交给对账循环
 	}
 
+	releaseVendor, ok := acquireVendorSlot(task.VendorID)
+	if !ok {
+		<-querySem
+		return // 该供应商并发已满，交给对账循环
+	}
+
 	if !claimPoll(taskID) {
+		releaseVendor()
 		<-querySem
 		return
 	}
 
+	// 数据库租约：多实例部署时同一任务只会被一个实例查询。
+	claimed, err := model.ClaimTaskForPoll(taskID, pollLease)
+	if err != nil {
+		common.SysErrorf("[Reconcile] 抢占任务失败，交由下一轮对账: taskID=%s, err=%v", taskID, err)
+		releaseVendor()
+		<-querySem
+		releasePoll(taskID)
+		return
+	}
+	if !claimed {
+		releaseVendor()
+		<-querySem
+		releasePoll(taskID)
+		return
+	}
+
 	go func() {
+		defer releaseVendor()
 		defer func() { <-querySem }()
 		defer releasePoll(taskID)
 		defer recoverPollPanic(taskID)
@@ -1337,6 +1525,9 @@ func ScheduleTaskPoll(taskID string) {
 // 原实现只在进程启动时扫一次，处理函数在扣费与安排轮询之间 panic，
 // 任务就会永远停在非终态、积分挂着不退；定时循环没有这个盲区。
 func RunTaskReconciler(ctx context.Context) {
+	// 容量配置在启动时读取一次：包初始化早于 .env 加载，不能写成包级表达式。
+	loadReconcileConfig()
+
 	common.SysLogf("[Reconcile] 任务对账循环已启动（间隔 %s，并发 %d）",
 		reconcileInterval, maxConcurrentQueries)
 
@@ -1376,7 +1567,7 @@ func reconcileOnce() {
 
 	// 2) 有 vendor_response 的任务：查一次上游。截止时间已到的任务也在这里
 	//    做最后一次查询，避免“刚完成却被直接判失败”的竞态。
-	tasks, err := model.GetTasksAwaitingPoll(reconcileBatchSize)
+	tasks, err := model.GetTasksAwaitingPoll(now, reconcileBatchSize)
 	if err != nil {
 		common.SysErrorf("[Reconcile] 查询待轮询任务失败: %v", err)
 	} else {
@@ -1397,9 +1588,35 @@ func reconcileOnce() {
 				break loop
 			}
 
+			// 单供应商并发上限：满了就跳过该任务，下一轮继续，
+			// 不阻塞其它供应商的查询。
+			releaseVendor, vendorOK := acquireVendorSlot(t.VendorID)
+			if !vendorOK {
+				<-querySem
+				releasePoll(t.TaskID)
+				continue
+			}
+
+			// 数据库租约：多实例部署时不重复查询同一任务。
+			claimed, claimErr := model.ClaimTaskForPoll(t.TaskID, pollLease)
+			if claimErr != nil {
+				common.SysErrorf("[Reconcile] 抢占任务失败: taskID=%s, err=%v", t.TaskID, claimErr)
+				releaseVendor()
+				<-querySem
+				releasePoll(t.TaskID)
+				continue
+			}
+			if !claimed {
+				releaseVendor()
+				<-querySem
+				releasePoll(t.TaskID)
+				continue
+			}
+
 			wg.Add(1)
 			go func(t model.Task) {
 				defer wg.Done()
+				defer releaseVendor()
 				defer func() { <-querySem }()
 				defer releasePoll(t.TaskID)
 				defer recoverPollPanic(t.TaskID)
@@ -1643,11 +1860,14 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 
 	case upstreamStatusCallFail:
 		// 查询本身失败，任务状态仍然未知——不得退款，等下一轮重试；
+		// 用指数退避而不是按固定节奏继续打上游，避免上游故障时形成重试风暴。
 		// 如果已经超过 deadline_at，本轮末尾的 expired 清扫会统一处理。
 		common.SysErrorf("[Reconcile] 查询失败，任务保持 processing 待下一轮: taskID=%s", task.TaskID)
+		scheduleRetryAfterFailure(task)
 
 	default:
-		// 上游仍在生成
+		// 上游仍在生成：按任务类型与年龄安排下一次查询。
+		scheduleNextPoll(task, result.Progress)
 	}
 }
 
