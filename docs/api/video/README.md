@@ -89,7 +89,7 @@
 }
 ```
 
-`data.url` 是上游的限时下载地址，平台不转存到对象存储。URL 过期后需要重新生成任务，也没有 `url_vendor`。失败或取消时 `data` 为 `{ "error": { "code": ..., "message": ... } }`，非终态时 `data` 为 `null`。
+`data.url` 的形态取决于模型：未转存的模型（如 MiniMax-H3）返回上游限时地址，没有 `file_id` 与 `url_vendor`，过期后需要重新生成；转存的模型（如 MAGI-2）返回平台对象存储的签名地址，同时提供 `file_id`、`data.url_vendor`（上游原始地址）和 `data.url_expires_at`，过期后重新查询任务即可获取新签名。失败或取消时 `data` 为 `{ "error": { "code": ..., "message": ... } }`，非终态时 `data` 为 `null`。
 
 任务状态与退款规则见 [任务查询](../tasks/get-task.md#2-任务状态)。
 

@@ -117,7 +117,7 @@ Metaso 与 APIMart 提交接口的失败性质如下。
 
 失败或取消时按任务预扣的 `credits` 全额退款；退款金额与提交时扣费一致。
 
-任务完成后只返回 `taskId`、`status` 与 `data.url`。视频结果不转存到对象存储，`data.url` 是上游的限时下载地址，没有 `file_id` 与 `url_vendor`。
+任务完成后返回 `taskId`、`status`、`kind` 与 `data.url`。视频结果默认不转存，`data.url` 是上游的限时下载地址；供应商声明 `PersistResult` 时（当前为 APIMart）转存到对象存储，转存成功时 `data.url` 变为平台签名地址，并返回 `file_id`、`data.url_vendor` 与 `data.url_expires_at`；转存失败时任务仍按完成处理，回落到上游原始地址。
 
 ## 9 模型设计文档
 

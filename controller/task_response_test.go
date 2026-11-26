@@ -210,11 +210,9 @@ func TestVideoTaskDataOnlyExposesURL(t *testing.T) {
 		"model": "MiniMax-H3"
 	}`
 
-	got := videoTaskData(queryResponse)
-
-	data, ok := got.(map[string]interface{})
-	if !ok {
-		t.Fatalf("data = %v, want map", got)
+	data := videoTaskDataMap(queryResponse)
+	if data == nil {
+		t.Fatal("data = nil, want map")
 	}
 	if len(data) != 1 {
 		t.Errorf("data 只应包含 url，实际 %v", data)
@@ -231,11 +229,9 @@ func TestVideoTaskDataOnlyExposesURL(t *testing.T) {
 
 // 失败任务保留上游错误，便于调用方判断原因。
 func TestVideoTaskDataFailedCarriesError(t *testing.T) {
-	got := videoTaskData(`{"error":{"code":"1026","message":"sensitive content"}}`)
-
-	data, ok := got.(map[string]interface{})
-	if !ok {
-		t.Fatalf("data = %v, want map", got)
+	data := videoTaskDataMap(`{"error":{"code":"1026","message":"sensitive content"}}`)
+	if data == nil {
+		t.Fatal("data = nil, want map")
 	}
 	errInfo, ok := data["error"].(map[string]interface{})
 	if !ok {
@@ -259,8 +255,8 @@ func TestVideoTaskDataEmptyOrInvalid(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := videoTaskData(tc.input); got != nil {
-				t.Errorf("videoTaskData(%q) = %v, want nil", tc.input, got)
+			if got := videoTaskDataMap(tc.input); got != nil {
+				t.Errorf("videoTaskDataMap(%q) = %v, want nil", tc.input, got)
 			}
 		})
 	}
@@ -268,11 +264,9 @@ func TestVideoTaskDataEmptyOrInvalid(t *testing.T) {
 
 // 同时存在 url 与 error 时以 url 为准（正常情况下不会同时出现）。
 func TestVideoTaskDataPrefersURL(t *testing.T) {
-	got := videoTaskData(`{"url":"https://x/v.mp4","error":"old"}`)
-
-	data, ok := got.(map[string]interface{})
-	if !ok {
-		t.Fatalf("data = %v, want map", got)
+	data := videoTaskDataMap(`{"url":"https://x/v.mp4","error":"old"}`)
+	if data == nil {
+		t.Fatal("data = nil, want map")
 	}
 	if _, exists := data["error"]; exists {
 		t.Errorf("有 url 时不应再返回 error: %v", data)

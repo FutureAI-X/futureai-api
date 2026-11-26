@@ -33,12 +33,25 @@ const (
 	// ttlEnv 文件有效期（秒）
 	ttlEnv = "FILE_TTL_SECONDS"
 
-	// defaultMaxBytes 单个文件下载上限。
+	// defaultMaxBytes 单个图片文件下载上限。
 	// 成图通常远小于这个值，上限只用于防住被控上游用无限流打爆内存。
 	defaultMaxBytes int64 = 32 << 20
 
-	// defaultTimeout 单次转存（下载 + 上传）的总超时
+	// defaultVideoMaxBytes 单个视频文件下载上限。
+	// 该值只防住异常大文件；正常 1080p、30 秒的成片远小于它。
+	defaultVideoMaxBytes int64 = 500 << 20
+
+	// defaultTimeout 单次图片转存（下载 + 上传）的总超时
 	defaultTimeout = 90 * time.Second
+
+	// defaultVideoTimeout 单次视频转存的总超时。
+	// 视频体积大、跨境链路可能很慢，90 秒经常不够。
+	defaultVideoTimeout = 10 * time.Minute
+
+	// maxConcurrentVideoPersist 同时进行的视频转存数默认值。
+	// 视频会整段读进内存，并发过高时大文件可能同时占用数 GB；
+	// 可用 FILE_VIDEO_PERSIST_CONCURRENCY 调整。
+	maxConcurrentVideoPersist = 2
 
 	// fileIDRandomBytes 随机部分的字节数（12 字节 = 24 位十六进制 = 96 位熵）
 	fileIDRandomBytes = 12
@@ -58,12 +71,43 @@ const (
 // 不应把一次已经成功的生成判成失败。
 var ErrSourceUnavailable = errors.New("结果资产不可用")
 
+// ErrPersistBusy 表示视频转存并发已满。
+// 这不是结果资产不可用：调用方应稍后重试，而不是把任务判为失败。
+var ErrPersistBusy = errors.New("视频转存并发已满，稍后重试")
+
+// videoPersistSem 限制同时进行的视频转存；容量在首次使用时按环境变量初始化。
+var (
+	videoPersistSemOnce sync.Once
+	videoPersistSem     chan struct{}
+)
+
+// acquireVideoPersistSlot 尝试占用一个视频转存位。
+// 并发满时返回 false，调用方应稍后重试；不阻塞轮询 goroutine。
+func acquireVideoPersistSlot() (func(), bool) {
+	videoPersistSemOnce.Do(func() {
+		n := common.GetEnvOrDefault("FILE_VIDEO_PERSIST_CONCURRENCY", maxConcurrentVideoPersist)
+		if n <= 0 {
+			n = maxConcurrentVideoPersist
+		}
+		videoPersistSem = make(chan struct{}, n)
+	})
+
+	select {
+	case videoPersistSem <- struct{}{}:
+		return func() { <-videoPersistSem }, true
+	default:
+		return nil, false
+	}
+}
+
 // Config 转存配置
 type Config struct {
-	ServiceType string
-	TTL         time.Duration
-	MaxBytes    int64
-	Timeout     time.Duration
+	ServiceType   string
+	TTL           time.Duration
+	MaxBytes      int64
+	Timeout       time.Duration
+	VideoMaxBytes int64
+	VideoTimeout  time.Duration
 }
 
 // LoadConfig 从环境变量读取配置。
@@ -71,24 +115,32 @@ type Config struct {
 // 成图转存是尽力而为的附加能力，不该因为一次笔误让整个服务起不来。
 func LoadConfig() Config {
 	cfg := Config{
-		ServiceType: storage.ServiceTencentCOS,
-		TTL:         DefaultTTL,
-		MaxBytes:    defaultMaxBytes,
-		Timeout:     defaultTimeout,
+		ServiceType:   storage.ServiceTencentCOS,
+		TTL:           DefaultTTL,
+		MaxBytes:      defaultMaxBytes,
+		Timeout:       defaultTimeout,
+		VideoMaxBytes: defaultVideoMaxBytes,
+		VideoTimeout:  defaultVideoTimeout,
 	}
 
 	raw := strings.TrimSpace(os.Getenv(ttlEnv))
-	if raw == "" {
-		return cfg
+	if raw != "" {
+		seconds, err := strconv.Atoi(raw)
+		if err != nil || seconds <= 0 {
+			common.SysErrorf("[FileStore] %s 配置无效(%q)，按默认 %d 秒处理",
+				ttlEnv, raw, int64(DefaultTTL/time.Second))
+		} else {
+			cfg.TTL = time.Duration(seconds) * time.Second
+		}
 	}
 
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds <= 0 {
-		common.SysErrorf("[FileStore] %s 配置无效(%q)，按默认 %d 秒处理",
-			ttlEnv, raw, int64(DefaultTTL/time.Second))
-		return cfg
+	// 视频转存的上限与超时允许运维调整：不同上游的码率与跨境链路差异很大。
+	if mb := common.GetEnvOrDefault("FILE_VIDEO_MAX_MB", 0); mb > 0 {
+		cfg.VideoMaxBytes = int64(mb) << 20
 	}
-	cfg.TTL = time.Duration(seconds) * time.Second
+	if seconds := common.GetEnvOrDefault("FILE_VIDEO_TIMEOUT_SECONDS", 0); seconds > 0 {
+		cfg.VideoTimeout = time.Duration(seconds) * time.Second
+	}
 	return cfg
 }
 
@@ -159,7 +211,7 @@ func (p *Persister) PersistURLForUser(ctx context.Context, rawURL string, userID
 	ctx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
 	defer cancel()
 
-	data, err := p.download(ctx, target)
+	data, err := p.download(ctx, target, p.cfg.MaxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSourceUnavailable, err)
 	}
@@ -169,7 +221,53 @@ func (p *Persister) PersistURLForUser(ctx context.Context, rawURL string, userID
 		return nil, fmt.Errorf("%w: 仅支持 JPEG/PNG/WebP/GIF 图片", ErrSourceUnavailable)
 	}
 
-	return p.persistBytes(ctx, data, ext, contentType, resultKeyPrefix, model.FilePurposeResult, userID)
+	return p.persistBytes(ctx, data, ext, contentType, resultKeyPrefix,
+		model.FilePurposeResult, userID, model.FileMediaTypeImage)
+}
+
+// PersistVideoURLForUser 下载视频并转存到对象存储。
+//
+// 与图片的区别：体积上限更大、超时更长，并按内容识别 MP4 / MOV / WebM。
+// 视频会整段读进内存，因此用 videoPersistSem 限制并发；并发满时返回
+// ErrPersistBusy，调用方应稍后重试，而不是把任务判为失败。
+func (p *Persister) PersistVideoURLForUser(ctx context.Context, rawURL string, userID int) (*model.File, error) {
+	release, ok := acquireVideoPersistSlot()
+	if !ok {
+		return nil, ErrPersistBusy
+	}
+	defer release()
+
+	target, err := parseSourceURL(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSourceUnavailable, err)
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := p.cfg.VideoTimeout
+	if timeout <= 0 {
+		timeout = defaultVideoTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	maxBytes := p.cfg.VideoMaxBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultVideoMaxBytes
+	}
+	data, err := p.download(ctx, target, maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSourceUnavailable, err)
+	}
+
+	ext, contentType, ok := detectVideoExt(data)
+	if !ok {
+		return nil, fmt.Errorf("%w: 仅支持 MP4/MOV/WebM 视频", ErrSourceUnavailable)
+	}
+
+	return p.persistBytes(ctx, data, ext, contentType, videoResultKeyPrefix,
+		model.FilePurposeResult, userID, model.FileMediaTypeVideo)
 }
 
 // PersistBytes 把已经在内存中的图片转存到对象存储并登记 files 表。
@@ -184,18 +282,22 @@ func (p *Persister) PersistBytes(ctx context.Context, data []byte) (*model.File,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return p.persistBytes(ctx, data, ext, contentType, "", model.FilePurposeUpload, 0)
+	return p.persistBytes(ctx, data, ext, contentType, "",
+		model.FilePurposeUpload, 0, model.FileMediaTypeImage)
 }
 
-// resultKeyPrefix 生成结果在对象存储中的前缀。
-// 旧结果文件仍保留在 png/、jpg/ 等扩展名前缀下，新结果统一走 result/image/。
-const resultKeyPrefix = "result/image/"
+// 生成结果在对象存储中的前缀。
+// 旧结果文件仍保留在 png/、jpg/ 等扩展名前缀下，新结果统一走 result/<media>/。
+const (
+	resultKeyPrefix      = "result/image/"
+	videoResultKeyPrefix = "result/video/"
+)
 
 // persistBytes 执行「上传对象 + 登记记录」。
 // 调用方负责确定扩展名与 Content-Type，并控制 context 的时限。
 // keyPrefix 为空时沿用 <ext>/<file_id> 的旧布局（图片上传）；非空时使用
 // <keyPrefix><file_id>（生成结果）。userID 为 0 表示无归属的历史/公开上传。
-func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentType, keyPrefix, purpose string, userID int) (*model.File, error) {
+func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentType, keyPrefix, purpose string, userID int, mediaType string) (*model.File, error) {
 	store, err := p.newStore(p.cfg.ServiceType, "")
 	if err != nil {
 		return nil, err
@@ -228,7 +330,7 @@ func (p *Persister) persistBytes(ctx context.Context, data []byte, ext, contentT
 			CreatedAt:      now,
 			ExpiresAt:      &expiresAt,
 			UserID:         userID,
-			MediaType:      model.FileMediaTypeImage,
+			MediaType:      mediaType,
 			Purpose:        purpose,
 			ContentType:    contentType,
 			Bytes:          int64(len(data)),
@@ -279,7 +381,7 @@ func (p *Persister) cleanupAfterCreateFailure(store storage.Store, fileID, key s
 }
 
 // download 下载源文件并施加体积上限。
-func (p *Persister) download(ctx context.Context, target *url.URL) ([]byte, error) {
+func (p *Persister) download(ctx context.Context, target *url.URL, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造下载请求失败: %w", err)
@@ -296,17 +398,20 @@ func (p *Persister) download(ctx context.Context, target *url.URL) ([]byte, erro
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("下载文件返回 HTTP %d", resp.StatusCode)
 	}
-	if resp.ContentLength > p.cfg.MaxBytes {
-		return nil, fmt.Errorf("文件超过 %d 字节上限", p.cfg.MaxBytes)
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxBytes
+	}
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("文件超过 %d 字节上限", maxBytes)
 	}
 
 	// 多读 1 字节用于判断是否超限：只信任 Content-Length 会放过分块传输
-	data, err := io.ReadAll(io.LimitReader(resp.Body, p.cfg.MaxBytes+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}
-	if int64(len(data)) > p.cfg.MaxBytes {
-		return nil, fmt.Errorf("文件超过 %d 字节上限", p.cfg.MaxBytes)
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("文件超过 %d 字节上限", maxBytes)
 	}
 	return data, nil
 }
@@ -348,6 +453,24 @@ func detectImageExt(data []byte) (string, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+// detectVideoExt 按文件头识别视频类型，返回扩展名与标准 Content-Type。
+//
+// 只认 MP4/MOV/WebM：APIMart 固定输出 1080p，实际常见为 MP4；
+// 以内容为准而不是 URL 后缀，避免上游不带后缀或后缀与实际不符。
+func detectVideoExt(data []byte) (string, string, bool) {
+	if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+		// MOV 的 major brand 是 "qt  "；其余 ftyp 容器按 MP4 处理。
+		if string(data[8:12]) == "qt  " {
+			return "mov", "video/quicktime", true
+		}
+		return "mp4", "video/mp4", true
+	}
+	if len(data) >= 4 && data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3 {
+		return "webm", "video/webm", true
+	}
+	return "", "", false
 }
 
 // generateFileID 生成随机不可猜的文件 ID，形如 file_<24位hex>.png。

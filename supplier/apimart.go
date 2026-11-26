@@ -859,7 +859,8 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 			Kind:   responseKind,
 		}
 
-		// 视频结果只取 data.result.videos[0].url；Kind=video 让控制器跳过转存。
+		// 视频结果优先转存到平台对象存储：APIMart 的成片地址在国内可能不可达。
+		// 转存失败时任务仍按完成处理，回落到 APIMart 原始地址。
 		if responseKind == ResultKindVideo {
 			result.Data = map[string]interface{}{"url": ""}
 			if len(taskData.Result.Videos) > 0 {
@@ -870,6 +871,7 @@ func (a *apimart) TaskQuery(ctx context.Context, vendorResponse string) TaskQuer
 					}
 				}
 			}
+			result.PersistResult = true
 			return result
 		}
 

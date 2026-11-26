@@ -109,7 +109,10 @@ MOSS 是同步接口，由平台后台提交，任务在生成期间显示为 `p
 
 签名地址不可用时会回落到应用代理地址 `{PUBLIC_BASE_URL}/v1/images/get/{file_id}`。若 `PUBLIC_BASE_URL` 未配置或非法，则回落到上游原始地址。
 
-视频结果不转存到对象存储，`data.url` 是上游的限时下载地址，没有 `file_id` 与 `url_vendor`。URL 过期后需要重新生成任务。
+视频结果分两种：
+
+- 转存的模型（如 MAGI-2）：转存成功时 `data.url` 是平台对象存储签名地址，`data.url_vendor` 是上游原始地址，`data.url_expires_at` 是签名失效时间；过期后重新查询任务即可获取新签名。转存失败时任务仍按完成处理，`data.url` 回落到上游原始地址，此时没有 `file_id`；
+- 未转存的模型（如 MiniMax-H3）：`data.url` 是上游限时下载地址，没有 `file_id` 与 `url_vendor`，过期后需要重新生成任务。
 
 ## 4 超时与失败原因
 

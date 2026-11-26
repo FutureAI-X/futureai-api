@@ -107,7 +107,12 @@ APIMart 使用异步任务接口。平台提交后拿到上游 `task_id`，再�
 
 ## 8 结果转存
 
-视频结果不转存到对象存储。`Kind=video` 让控制器跳过图片转存逻辑，任务完成时直接把上游成片地址作为 `data.url` 返回。没有 `file_id` 与 `url_vendor`。
+APIMart 的成片地址在国内可能不可达，因此视频结果会优先转存到平台对象存储：
+
+- 控制器下载上游视频，按内容识别 MP4/MOV/WebM，写入 `files` 表（`media_type=video`、`purpose=result`）；
+- 转存成功时，`data.url` 是对象存储的签名地址，`data.url_vendor` 保留 APIMart 原始地址，`file_id` 指向结果文件；URL 过期后重新查询任务即可获取新签名；
+- 转存失败时任务仍按完成处理，`data.url` 回落到 APIMart 原始地址，不影响任务完成与计费；
+- 单文件上限 500MB；转存并发与单次超时可通过 `FILE_VIDEO_PERSIST_CONCURRENCY` / `FILE_VIDEO_TIMEOUT_SECONDS` 调整。
 
 ## 9 计费
 

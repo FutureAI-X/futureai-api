@@ -297,6 +297,11 @@ type TaskQueryResponse struct {
 	// 且不需要占用平台对象存储的供应商（当前为 MiniMax-H3-Image）。
 	SkipResultPersist bool `json:"skip_result_persist,omitempty"`
 
+	// PersistResult 为 true 时，视频结果也转存到对象存储。
+	// 图片/音频默认转存；视频默认不转存，由供应商显式声明需要转存。
+	// 转存失败时任务仍按完成处理，并回落到上游原始地址。
+	PersistResult bool `json:"persist_result,omitempty"`
+
 	// Usage 为上游返回的 token 用量；per_token 结算依赖它。
 	Usage *TokenUsage `json:"usage,omitempty"`
 }

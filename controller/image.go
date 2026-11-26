@@ -1119,14 +1119,30 @@ func GetTask(c *gin.Context) {
 	}
 
 	if isVideoTask(task) {
-		// 视频任务对外只暴露 taskId / status / data.url；
-		// 不返回 file_id 与其余元数据，完整结果仍保留在 query_response 中。
+		// 视频结果优先返回平台对象存储的签名地址；未转存（或转存失败但
+		// 供应商不要求强制转存）时回落到上游地址。
+		data := videoTaskDataMap(task.QueryResponse)
+		if data == nil {
+			data = map[string]interface{}{}
+		}
+		if task.FileID != "" {
+			if signedURL, expiresAt, ok := signedResultFileURL(c.Request.Context(), task.FileID); ok {
+				data = applyResultFileURL(data, signedURL, expiresAt)
+			} else {
+				data = applyPublicFileURL(data, task.FileID)
+			}
+		}
+		var payload interface{}
+		if len(data) > 0 {
+			payload = data
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"taskId": task.TaskID,
-			"status": model.StatusCompleted,
-			"kind":   kind,
-			"data":   videoTaskData(task.QueryResponse),
-			"error":  nil,
+			"taskId":  task.TaskID,
+			"status":  model.StatusCompleted,
+			"kind":    kind,
+			"file_id": task.FileID,
+			"data":    payload,
+			"error":   nil,
 		})
 		return
 	}
@@ -1155,12 +1171,12 @@ func GetTask(c *gin.Context) {
 	})
 }
 
-// videoTaskData 从视频任务的 query_response 中提取对外可见的最小结果。
+// videoTaskDataMap 从视频任务的 query_response 中提取对外可见的最小结果。
 //
-// 完成时只返回 url；失败/取消时返回上游错误。resolution、duration、usage
-// 等元数据刻意不对外返回——它们只留在 query_response 里供管理端排查。
-// 没有可返回内容时返回 nil（JSON null），与图片任务非终态的 data 口径一致。
-func videoTaskData(queryResponse string) interface{} {
+// 完成时返回 url（由调用方替换为对象存储签名地址）；失败/取消时返回上游错误。
+// resolution、duration、usage 等元数据刻意不对外返回——它们只留在
+// query_response 里供管理端排查。没有可返回内容时返回 nil。
+func videoTaskDataMap(queryResponse string) map[string]interface{} {
 	if queryResponse == "" {
 		return nil
 	}
@@ -1181,8 +1197,8 @@ func videoTaskData(queryResponse string) interface{} {
 
 // isVideoTask 判断任务是否属于视频生成端点。
 //
-// 视频产物是上游的限时下载地址：不转存、也没有 file_id，
-// 因此 GetTask 不能套用图片的 applyPublicFileURL。
+// 视频结果可能已转存到对象存储（APIMart），也可能是上游的限时地址
+// （Metaso 等未声明 PersistResult 的供应商）；GetTask 两者都要兼容。
 // 端点仍被模型引用时不允许删除（见 DeleteEndpoint），正常情况下查得到。
 func isVideoTask(task *model.Task) bool {
 	if task == nil {
@@ -1675,14 +1691,15 @@ func hasDeliverableResult(data map[string]interface{}) bool {
 	return false
 }
 
-// persistCompletedImage 把上游成图转存到对象存储，返回 files.file_id。
+// persistCompletedAsset 把上游结果转存到对象存储，返回 files.file_id。
 //
 // userID 用于登记结果归属，使生成结果可以作为后续视频生成的参考输入复用。
+// 图片与视频走不同的体积上限与内容识别；kind 为空按图片处理。
 //
 // 返回错误由调用方决定后果：普通供应商失败只记日志、任务照常完成
 // （原始上游 URL 仍保留在 query_response 的 data.url 中）；MOSS 这类
-// 要求结果资产必须可下载的供应商则按失败退款。
-func persistCompletedImage(taskID string, userID int, data map[string]interface{}) (string, error) {
+// 要求结果资产必须可下载的供应商则按失败退款；APIMart 视频要求必须转存成功。
+func persistCompletedAsset(taskID string, userID int, kind string, data map[string]interface{}) (string, error) {
 	rawURL, _ := data["url"].(string)
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -1690,13 +1707,19 @@ func persistCompletedImage(taskID string, userID int, data map[string]interface{
 		return "", nil
 	}
 
-	file, err := filestore.Default().PersistURLForUser(context.Background(), rawURL, userID)
+	var file *model.File
+	var err error
+	if kind == supplier.ResultKindVideo {
+		file, err = filestore.Default().PersistVideoURLForUser(context.Background(), rawURL, userID)
+	} else {
+		file, err = filestore.Default().PersistURLForUser(context.Background(), rawURL, userID)
+	}
 	if err != nil {
-		common.SysErrorf("[Reconcile] 成图转存失败: taskID=%s, err=%v", taskID, err)
+		common.SysErrorf("[Reconcile] 结果转存失败: taskID=%s, kind=%s, err=%v", taskID, kind, err)
 		return "", err
 	}
 
-	common.SysLogf("[Reconcile] 成图已转存: taskID=%s, fileID=%s", taskID, file.FileID)
+	common.SysLogf("[Reconcile] 结果已转存: taskID=%s, kind=%s, fileID=%s", taskID, kind, file.FileID)
 	return file.FileID, nil
 }
 
@@ -1759,20 +1782,21 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 		}
 
 		// 图片结果转存是尽力而为：失败只记日志，任务照常完成。
-		// 原始上游 URL 仍在 data.url 中，用户不会因为存储侧故障拿不到图。
-		// 视频结果不转存，直接使用上游的限时下载地址。
-		// SkipResultPersist 的供应商（MiniMax H3）同样直接返回上游 URL。
+		// 视频默认不转存；供应商显式声明 PersistResult 时转存（APIMart）。
+		// SkipResultPersist 的供应商（MiniMax H3）直接返回上游 URL。
 		fileID := ""
-		if result.Kind != supplier.ResultKindVideo && !result.SkipResultPersist {
+		shouldPersist := !result.SkipResultPersist &&
+			(result.Kind != supplier.ResultKindVideo || result.PersistResult)
+		if shouldPersist {
 			var persistErr error
-			fileID, persistErr = persistCompletedImage(task.TaskID, task.UserID, result.Data)
+			fileID, persistErr = persistCompletedAsset(task.TaskID, task.UserID, result.Kind, result.Data)
 			// 要求结果资产必须可下载的供应商（MOSS）先重试两次：
 			// CDN 瞬时抖动不该直接变成一次退款。404 这类确定性失败重试也无妨，
 			// 最多多花约 3 秒。
 			if result.RequireResultFetch && errors.Is(persistErr, filestore.ErrSourceUnavailable) {
 				for attempt := 1; attempt <= 2 && errors.Is(persistErr, filestore.ErrSourceUnavailable); attempt++ {
 					time.Sleep(time.Duration(attempt) * time.Second)
-					fileID, persistErr = persistCompletedImage(task.TaskID, task.UserID, result.Data)
+					fileID, persistErr = persistCompletedAsset(task.TaskID, task.UserID, result.Kind, result.Data)
 				}
 			}
 			if persistErr != nil {
@@ -1785,8 +1809,9 @@ func pollOnce(task model.Task, creds *vendorCredentialCache) {
 					}
 					break
 				}
-				// 存储侧故障：不影响任务完成，原始上游 URL 仍在 data.url 中。
-				common.SysErrorf("[Reconcile] 成图转存失败，任务仍按完成处理: taskID=%s, err=%v", task.TaskID, persistErr)
+				// 存储侧故障或视频转存失败：任务仍按完成处理，原始上游 URL
+				// 仍在 data.url 中（视频会回落到 APIMart 地址）。
+				common.SysErrorf("[Reconcile] 转存失败，任务仍按完成处理: taskID=%s, err=%v", task.TaskID, persistErr)
 			}
 		}
 

@@ -66,6 +66,14 @@ func pngBytes() []byte {
 	return []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4}
 }
 
+// mp4Bytes 构造带 ftyp box 的最小 MP4 文件头。
+func mp4Bytes() []byte {
+	data := make([]byte, 32)
+	copy(data[4:8], "ftyp")
+	copy(data[8:12], "isom")
+	return data
+}
+
 func newTestPersister(t *testing.T, handler http.HandlerFunc) (*Persister, *fakeStore, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -87,6 +95,45 @@ func newTestPersister(t *testing.T, handler http.HandlerFunc) (*Persister, *fake
 		newFileID:  generateFileID,
 	}
 	return persister, store, srv
+}
+
+func TestPersistVideoURLSuccess(t *testing.T) {
+	video := mp4Bytes()
+	persister, store, srv := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(video)
+	})
+
+	file, err := persister.PersistVideoURLForUser(context.Background(), srv.URL+"/source.mp4", 42)
+	if err != nil {
+		t.Fatalf("视频转存失败: %v", err)
+	}
+
+	if !regexp.MustCompile(`^file_[0-9a-f]{24}\.mp4$`).MatchString(file.FileID) {
+		t.Errorf("file_id 形态异常: %q", file.FileID)
+	}
+	if wantKey := "result/video/" + file.FileID; file.FileKey != wantKey {
+		t.Errorf("FileKey = %q, want %q", file.FileKey, wantKey)
+	}
+	if file.MediaType != model.FileMediaTypeVideo || file.ContentType != "video/mp4" {
+		t.Errorf("媒体信息 = (%q, %q)", file.MediaType, file.ContentType)
+	}
+	if file.Purpose != model.FilePurposeResult || file.UserID != 42 {
+		t.Errorf("Purpose/UserID = (%q, %d)", file.Purpose, file.UserID)
+	}
+	if len(store.uploads) != 1 || store.uploads[0].contentType != "video/mp4" {
+		t.Errorf("上传记录 = %#v", store.uploads)
+	}
+}
+
+func TestPersistVideoRejectsUnknownFormat(t *testing.T) {
+	persister, _, srv := newTestPersister(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not a video"))
+	})
+
+	if _, err := persister.PersistVideoURLForUser(context.Background(), srv.URL+"/x", 1); !errors.Is(err, ErrSourceUnavailable) {
+		t.Fatalf("未知格式应返回 ErrSourceUnavailable，实际 %v", err)
+	}
 }
 
 func TestPersistURLSuccess(t *testing.T) {
